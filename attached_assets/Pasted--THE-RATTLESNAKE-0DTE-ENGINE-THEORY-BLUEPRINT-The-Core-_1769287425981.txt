@@ -1,0 +1,608 @@
+
+
+THE RATTLESNAKE 0DTE ENGINE (THEORY BLUEPRINT)
+
+The Core Idea
+
+A 0DTE lotto-style payoff happens when convexity + timing + positioning align.
+
+On paper, the system’s job is to detect “convexity moments”:
+	•	Time is collapsing (minutes left)
+	•	Gamma exposure is high (near-ATM 0DTE is thick)
+	•	Flow hits the tape (volume accelerates)
+	•	Price breaks structure (key level + follow-through)
+	•	Volatility expands (IV/realized vol upticks)
+	•	Catalyst or crowd ignition may amplify it
+
+The engine is designed to answer:
+
+“Is the market entering a regime where small spot movement produces outsized option delta/gamma response fast enough to matter before close?”
+
+⸻
+
+1) SYSTEM SHAPE (Bird’s Eye)
+
+A) Sensors (raw inputs)
+	•	Market microstructure stream: trades + quotes + bars (1s/5s/1m/5m)
+	•	Options chain snapshots: greeks, IV, OI, volume, bid/ask by strike for 0DTE
+	•	Options trades/prints (optional): if you have it, this is gold
+	•	News stream: fast headlines with tickers
+	•	Crowd stream: WSB/social mention velocity
+	•	Calendar: macro + earnings + scheduled events
+	•	Chart state generator: auto-computed levels & regimes
+
+B) Feature Lab (turns raw into signals)
+	•	microstructure features
+	•	options pressure features
+	•	regime features
+	•	catalyst features
+	•	cross-asset context features
+
+C) Decision Stack (multi-layer gating)
+	•	strict gating rules to avoid noise
+	•	probabilistic reach estimates
+	•	scenario simulator
+	•	paper execution + outcome tracking
+
+D) Output Bus
+	•	Telegram alerts
+	•	internal ledger (for learning)
+	•	daily report
+
+⸻
+
+2) THE “STATE MACHINE” (how it behaves over time)
+
+The engine is not always in “attack mode.” It has states.
+
+State 0 — LURK
+	•	all sensors running
+	•	compute heat maps
+	•	no alerts except heartbeat
+
+State 1 — COILED
+
+Triggered when:
+	•	options chain indicates heavy same-day concentration near spot
+	•	market is compressing (low ATR) into a level
+	•	time window is approaching (post-lunch / power hour)
+
+In COILED, the engine raises sensitivity.
+
+State 2 — RATTLE
+
+Triggered when:
+	•	microstructure ignition starts (range + volume expands)
+	•	headline/crowd ignition appears
+	•	strike clustering begins pulling
+
+In RATTLE, the engine begins publishing “watch” events (still no paper strike).
+
+State 3 — STRIKE
+
+Triggered only when:
+	•	price confirms structure break/reclaim
+	•	options pressure confirms directional bias
+	•	regime filter allows
+	•	probability clears threshold
+
+In STRIKE, the engine triggers a paper execution simulation (and alert).
+
+State 4 — CONSTRICT
+
+Post-strike management:
+	•	monitor follow-through
+	•	update trailing invalidation logic
+	•	enforce time stop
+
+State 5 — VENOM REPORT
+
+End-of-day postmortem:
+	•	what fired, what worked, what was fake
+	•	weight updates for future
+
+⸻
+
+3) DATA OBJECTS (what it “knows”)
+
+This system works by building structured “objects” in memory.
+
+A) MarketSnapshot(ticker, t)
+
+Includes:
+	•	last price
+	•	returns across windows (1m/5m/15m)
+	•	volume across windows
+	•	spread proxy (bid/ask)
+	•	VWAP position
+	•	distance to key levels
+
+B) ChainSnapshot(ticker, expiry=0DTE, t)
+
+For each strike:
+	•	bid/ask
+	•	last
+	•	volume
+	•	OI
+	•	IV
+	•	delta/gamma/theta/vega
+	•	implied move and skew
+
+C) LevelMap(ticker, t)
+	•	day high/low
+	•	premarket high/low
+	•	prior day high/low
+	•	VWAP
+	•	anchored VWAP(s)
+	•	round numbers / pivots
+	•	“liquidity pools” (auto-detected)
+
+D) FlowPulse(ticker, t)
+	•	rate of change of options volume near ATM
+	•	strike clustering score
+	•	call vs put pressure near ATM
+	•	“magnet gradient” score (pull toward strike)
+	•	“chase risk” score (already moved too far too fast?)
+
+E) CatalystEvent(ticker, t)
+	•	headline text
+	•	classification: ticker-specific / macro / market-wide
+	•	severity score
+	•	credibility score (source weighting)
+
+F) CrowdHeat(ticker, t)
+	•	mention velocity
+	•	sentiment & intent (0DTE language)
+	•	uniqueness score (pump detection)
+	•	momentum score
+
+G) RegimeState(market, t)
+	•	trend vs chop
+	•	volatility regime
+	•	risk-on/off
+	•	time-of-day behavioral baseline
+
+H) SetupCandidate(ticker, t)
+	•	setup family tag (e.g., VWAP reclaim + call pressure)
+	•	directional bias (conditional)
+	•	score breakdown
+	•	probability estimates
+	•	“kill reasons” list (what could invalidate)
+
+⸻
+
+4) FEATURE ENGINE (the juice)
+
+A) Microstructure features (spot behavior)
+	•	Range Expansion Ratio:
+	•	RER = current_5m_range / median_5m_range_last_20
+	•	Volume Acceleration Ratio:
+	•	VAR = current_5m_vol / avg_5m_vol_last_20
+	•	VWAP Interaction:
+	•	above/below, reclaim/lose, time held
+	•	Break + Follow-through:
+	•	did it close beyond a level, then hold for N bars?
+	•	Spread/Liquidity Penalty:
+	•	wide spreads reduce confidence
+
+Goal: Confirm “real movement,” not noise.
+
+⸻
+
+B) Options pressure features (0DTE mechanics)
+
+This is where “$800 → $40k” moments live.
+
+Key features:
+
+1) Strike Clustering Score
+
+Measures whether volume/OI is concentrated near spot.
+	•	High clustering = potential “magnet zone”
+
+2) Near-ATM Imbalance
+	•	Compare call vs put volume near ATM strikes
+	•	Compare delta-weighted exposure
+
+3) IV Expansion Rate
+	•	How quickly IV is rising
+	•	Rising IV can mean “market pricing urgency”
+
+4) Gamma Proxy / Sensitivity
+
+Even if you don’t have full dealer GEX, you can approximate:
+	•	Is gamma high near ATM (greeks indicate responsiveness)?
+	•	Is time-to-expiry low enough that gamma is extreme?
+
+5) Late-Day Burst Detector
+
+Detects sudden surges in same-day option volume after 2pm ET.
+This is where “last-minute” moves often begin.
+
+⸻
+
+C) Probability engine (the math layer)
+
+You compute:
+
+Probability of tagging a level before close
+
+Inputs:
+	•	time remaining (minutes)
+	•	implied volatility (or IV proxy)
+	•	realized volatility (short window)
+	•	distance to target level/strike
+	•	regime multiplier
+
+Output:
+	•	P(hit target by close)
+	•	expected move band
+	•	confidence tier
+
+This doesn’t guarantee anything; it measures how plausible the tag is.
+
+⸻
+
+D) Regime awareness (when the market lies)
+
+A lot of 0DTE traders die in chop because signals “look real.”
+
+Regime engine outputs:
+	•	CHOP / TREND / PANIC / EUPHORIA
+Rules:
+	•	In CHOP: require stricter confirmation to strike
+	•	In TREND: allow earlier strikes
+	•	In PANIC: widen risk penalties
+
+⸻
+
+5) DECISION STACK (how it decides to “strike”)
+
+This is multi-layer because 0DTE is pure deception.
+
+Layer 1: Candidate eligibility
+	•	in allowed tickers
+	•	in allowed time window (or allowed special case)
+
+Layer 2: Microstructure ignition gate
+	•	RER and VAR above thresholds
+	•	structure break/reclaim confirmed
+
+Layer 3: Options confirmation gate
+	•	clustering high
+	•	near-ATM imbalance confirms bias
+	•	late-day burst present (if late-day strike)
+
+Layer 4: Probability gate
+	•	probability above threshold OR probability rising quickly
+
+Layer 5: Risk gate
+	•	not in dead chop
+	•	not illiquid
+	•	no “chase” (already moved too far)
+
+If all pass → STRIKE EVENT
+
+⸻
+
+6) PAPER EXECUTION SIMULATION (lab conditions)
+
+Each STRIKE creates a standardized paper “trade plan” object:
+	•	entry trigger (conditional)
+	•	option selection rule (nearest ATM 0DTE)
+	•	paper risk unit (fixed budget)
+	•	invalidation rule (VWAP / level failure)
+	•	targets (R-based + level-based)
+	•	time stop (very important for 0DTE)
+	•	exit at end-of-day regardless
+
+The point is not to win every time.
+It’s to measure whether the setup family produces positive expectancy.
+
+⸻
+
+7) LEARNING LOOP (where it becomes supernatural)
+
+Every day the engine updates:
+	•	which features correlated with success
+	•	which setup families are real
+	•	which time windows produce convexity
+	•	how thresholds should adapt by regime
+
+It becomes a market-specific hunter tuned to:
+	•	power hour behavior
+	•	specific tickers
+	•	volatility regime changes
+
+⸻
+
+8) ADD
+
+A) Cross-asset radar
+	•	watch ES/NQ futures movement vs SPY/QQQ
+	•	watch VIX spikes vs IV changes
+	•	watch DXY / rates moves for macro shock
+
+B) Liquidity sweep detection
+	•	detect stop runs near highs/lows
+	•	detect rapid mean reversion traps
+
+C) Vision-based chart reading
+	•	feed chart images
+	•	extract pattern + levels + “setup grade”
+This adds human-like reasoning.
+
+D) Multi-agent orchestration (LangGraph)
+
+Agents:
+	•	Flow agent
+	•	Microstructure agent
+	•	News agent
+	•	Regime agent
+	•	Scenario simulator agent
+	•	Paper execution agent
+	•	Learning agent
+
+The final “strike decision” is a consensus artifact.  0DTE “RATTLESNAKE” PROBABILITY ENGINE (THEORY, SAVAGE MODE)
+
+What it must do
+
+Every minute (or every 10–30 seconds), the engine estimates:
+	1.	Probability the underlying tags a target level/strike before close
+	2.	Expected time-to-tag distribution (not a single time; a curve)
+	3.	Optimal entry window when convexity is best given current state
+	4.	Invalidation logic (when the setup is statistically dead)
+	5.	Exit logic (time stop + structure stop + target stop)
+
+This produces a SetupPlaybook artifact that your paper simulator can act on.
+
+⸻
+
+1) The Targeting Problem: “Tag by Close”
+
+You choose a target L (a level or strike).
+You have time remaining \tau (minutes to close).
+
+The core question:
+
+What’s the probability the underlying S hits L within \tau minutes?
+
+⸻
+
+2) The Base Model: Drifted Brownian + Regime Scaling (Practical)
+
+Inputs (state)
+
+At time t:
+	•	Spot price S_t
+	•	Time remaining \tau (in years or minutes)
+	•	Intraday realized volatility estimate \sigma_{real}
+	•	Implied volatility estimate from 0DTE chain \sigma_{imp}
+	•	Drift proxy \mu (intraday directional pressure)
+	•	Regime scalar \kappa (trend vs chop vs panic)
+	•	Microstructure “impulse” scalar \iota
+	•	Options pressure scalar \gamma^\* (gamma-like proxy)
+
+Construct an “effective volatility”
+
+You do not trust either IV or realized alone; you blend them:
+
+\sigma_{eff} = w_1 \sigma_{imp} + w_2 \sigma_{real}
+
+Then scale it by regime:
+
+\sigma_{eff}' = \sigma_{eff} \cdot \kappa \cdot (1 + \iota) \cdot (1 + \gamma^\*)
+	•	In chop, \kappa < 1
+	•	In trend/power hour, \kappa > 1
+	•	If options pressure is clustered near spot, \gamma^\* increases (more “snap” potential)
+
+Distance to target
+
+d = L - S_t
+Use normalized distance:
+z = \frac{d}{S_t \cdot \sigma_{eff}' \sqrt{\tau}}
+
+Now you can approximate:
+	•	Probability of reaching L by time \tau
+	•	Expected time-to-hit distribution
+
+⸻
+
+3) “Probability of Hit” (Barrier Hitting Approx)
+
+For a basic diffusion model, the probability of hitting a barrier has known approximations. In practice, you don’t need perfect closed form; you need consistent ranking.
+
+Practical approximation (directional):
+	•	If you’re “aiming up” (bull case), you require drift confirmation.
+	•	If drift is positive, probability increases materially.
+
+Define drift proxy from features:
+
+\mu^\* = a \cdot \text{VWAP\_state} + b \cdot \text{trend} + c \cdot \text{volume\_accel}
+
+Then:
+
+P(\text{hit by close}) \approx \Phi\left( -z + \mu^\* \sqrt{\tau} \right)
+
+Where \Phi is the normal CDF.
+The engine treats this as a scoreable probability, not truth.
+
+⸻
+
+4) “Time-to-Hit” Distribution (This is the SAVAGE part)
+
+Instead of one “time to enter,” the engine produces a hazard curve:
+the probability the hit occurs in the next \Delta t minutes given it hasn’t yet.
+
+Define discrete buckets:
+	•	next 5 min
+	•	next 10 min
+	•	next 20 min
+	•	by close
+
+Compute per-bucket probabilities:
+
+P_{0-5}, P_{5-10}, P_{10-20}, P_{20-\tau}
+
+How? You recompute P(\text{hit by } t+\Delta) minus P(\text{hit by } t), corrected by survival probability.
+
+This yields a “heat map” that says:
+	•	when the move is statistically likely
+	•	and when it is no longer worth the theta bleed
+
+Interpretation:
+	•	If P_{0-10} spikes while options pressure increases → “convexity moment”
+	•	If probability is only meaningful “by close” but not soon → bad 0DTE entry (theta bleed)
+
+⸻
+
+5) Option Selection Model (0DTE Contract Choice)
+
+The engine chooses a paper contract by rule, not discretion:
+	•	Primary: nearest ATM
+	•	Alternative: 1 strike OTM if probability is high and momentum strong
+	•	Avoid far OTM unless probability curve is steep and pressure clustering supports it (lotto zone)
+
+Compute a “contract survivability score”:
+
+SV = \frac{\text{ExpectedMove}}{\text{ThetaBurnRate}} \times \text{LiquidityScore}
+
+Even in savage mode, you don’t want garbage spreads.
+
+⸻
+
+6) The Entry Window Logic (this is what you really want)
+
+The engine does NOT say “enter now.”
+
+It defines a paper entry window [t_0, t_1] where:
+	•	hazard curve is high (time-to-hit soon)
+	•	microstructure is confirming
+	•	options pressure is rising
+	•	invalidation level is close (good risk:reward)
+
+Entry trigger set (all must hold)
+	•	Price is above/below VWAP and held for N minutes
+	•	5-min volume acceleration above threshold
+	•	0DTE near-ATM volume burst detected
+	•	Strike clustering score above threshold
+	•	Regime not chop OR additional confirmations present
+
+Entry “price zone”
+
+The model specifies a zone around a level (like VWAP, reclaim level, breakout retest zone). Example definition:
+	•	Entry zone = reclaim level ± spread-adjusted buffer
+	•	Must occur within t_0 \to t_1 minutes
+
+Why this works
+
+The best 0DTE entries happen when:
+	•	the move begins,
+	•	the option still has survivable premium,
+	•	and invalidation is tight.
+
+This produces repeatable paper trades.
+
+⸻
+
+7) Exit Logic (Paper) — Three independent exits
+
+Your exit isn’t one number; it’s a set of death conditions.
+
+Exit A — Target hit
+	•	Underlying hits L (level/strike magnet)
+	•	Or probability collapses after reaching “partial target”
+
+Exit B — Invalidation
+	•	Loss of VWAP / structure break
+	•	Options pressure flips (call cluster fades, put cluster rises)
+
+Exit C — Time stop
+	•	If move doesn’t progress in X minutes, theta wins, you exit.
+
+The time stop is derived from the hazard curve:
+	•	if P_{0-10} is low after entry, you’re dead—exit.
+
+⸻
+
+8) The “Gamma-Magnet” Proxy (the signature weapon)
+
+Real dealer gamma exposure is hard without specialized data, but you can approximate magnet behavior using:
+	•	strike clustering score near spot:
+CL = \sum_{k \in nearATM} \frac{Vol_k + OI_k}{1 + |Strike_k - S|}
+	•	gradient of clustering above vs below spot:
+GR = CL_{above} - CL_{below}
+
+If GR is strongly positive, you expect upward pull; negative, downward pull.
+
+This gets integrated into \gamma^\* and shifts \sigma_{eff}' and drift proxy.
+
+⸻
+
+9) The “Chop Kill” Regime Filter (prevents fake strikes)
+
+Chop detection in theory:
+	•	low range expansion
+	•	mean reversion frequency high
+	•	price repeatedly crosses VWAP (whipsaw)
+	•	implied vol not expanding
+
+Define a chop score:
+
+CHOP = \text{VWAP\_crossings} + \text{range\_compression} - \text{trend\_strength}
+
+If CHOP high → block strikes unless options pressure and hazard curve are extreme.
+
+⸻
+
+10) The Artifact the Engine Produces (the Telegram payload, on paper)
+
+SetupPlaybook JSON (conceptual)
+	•	ticker
+	•	directional_bias (conditional)
+	•	time_remaining
+	•	targets (levels + strikes)
+	•	probabilities (hit by 5/10/20/close)
+	•	hazard_curve buckets
+	•	entry_window (t0–t1)
+	•	entry_zone (price band)
+	•	paper_contract_rule (ATM or ATM+1)
+	•	invalidation_level
+	•	time_stop_minutes
+	•	exit_conditions
+	•	options_pressure_snapshot (top strikes)
+	•	news_flags
+	•	regime_state
+	•	confidence_score
+	•	reasons (short list)
+
+Telegram displays this in a human readable, punchy format.
+
+⸻
+
+11) The Savage Part: “Confidence Escalation Ladder”
+
+This is how it feels like a predator:
+
+The engine doesn’t suddenly strike.
+It escalates states:
+	•	COILED: conditions building, probability rising
+	•	RATTLE: hazard curve spikes + pressure clustering appears
+	•	STRIKE: microstructure confirms + probability threshold passes
+	•	CONSTRICT: manage and log outcome
+
+This makes it fast and controlled.
+
+⸻
+
+12) How it would actually find “$800 → $40k” moments (theory)
+
+Those outcomes generally require:
+	•	entering near a critical inflection
+	•	underlying moves quickly
+	•	contract is near ATM (or slightly OTM)
+	•	theta doesn’t kill you before move
+	•	late-day acceleration (power hour)
+	•	strike magnet/pin behavior or rapid breakout
+
+Your model’s job is not to promise that outcome, but to identify the rare conditions where the hazard curve and pressure are steep enough that convexity events happen.
