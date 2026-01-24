@@ -1,35 +1,34 @@
 """
-Engine 2: 0DTE Pressure Engine
+Engine 2: Enhanced 0DTE Pressure Engine
 
 Monitors options flow and unusual activity for 0DTE contracts.
-Detects put/call pressure, strike clustering, and gamma walls.
-
-Note: Full functionality requires Polygon.io paid plan for options data.
-Falls back to stock-based momentum when options data unavailable.
+Now enhanced with full technical analysis using Polygon basic plan:
+- RSI, SMA, EMA, MACD indicators
+- Strike structure analysis from options contracts
+- Market regime detection
+- Intraday momentum signals
 """
 
-import requests
-from datetime import datetime, date
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
-from wsb_snake.config import (
-    POLYGON_API_KEY, POLYGON_BASE_URL,
-    ZERO_DTE_UNIVERSE
-)
-from wsb_snake.collectors.polygon_options import polygon_options
+from wsb_snake.config import ZERO_DTE_UNIVERSE
+from wsb_snake.collectors.polygon_enhanced import polygon_enhanced, get_full_analysis
 from wsb_snake.utils.logger import log
 from wsb_snake.utils.session_regime import get_session_info
 
 
 class PressureType(Enum):
-    """Types of options pressure."""
-    CALL_WALL = "call_wall"          # Heavy call OI at strike
-    PUT_WALL = "put_wall"            # Heavy put OI at strike
-    GAMMA_SQUEEZE = "gamma_squeeze"  # Dealers hedging drives momentum
-    IV_SPIKE = "iv_spike"            # Volatility explosion
-    FLOW_IMBALANCE = "flow_imbalance"  # Heavy directional flow
+    """Types of pressure signals."""
+    CALL_WALL = "call_wall"              # Heavy call strikes above
+    PUT_WALL = "put_wall"                # Heavy put strikes below
+    TECHNICAL_BULLISH = "tech_bullish"   # Technical indicators bullish
+    TECHNICAL_BEARISH = "tech_bearish"   # Technical indicators bearish
+    MOMENTUM_SURGE = "momentum_surge"    # Momentum accelerating
+    RSI_EXTREME = "rsi_extreme"          # RSI overbought/oversold
+    BREAKOUT = "breakout"                # Breaking key levels
 
 
 @dataclass
@@ -41,17 +40,21 @@ class PressureSignal:
     
     # Market context
     spot_price: float
-    atm_strike: float
+    change_pct: float
     
-    # Options metrics (when available)
-    call_put_ratio: float
-    total_volume: int
-    avg_iv: float
+    # Technical indicators
+    rsi: float
+    sma_20: float
+    ema_9: float
     
-    # Key levels
-    resistance_strike: float
-    support_strike: float
-    max_pain: float
+    # Options structure (when available)
+    support_level: float
+    resistance_level: float
+    put_call_contract_ratio: float
+    
+    # Signals detected
+    signals: List[tuple]  # (name, strength)
+    direction: str  # LONG, SHORT, NEUTRAL
     
     # Evidence
     evidence: List[str]
@@ -65,13 +68,15 @@ class PressureSignal:
             "pressure_type": self.pressure_type.value,
             "score": self.score,
             "spot_price": self.spot_price,
-            "atm_strike": self.atm_strike,
-            "call_put_ratio": self.call_put_ratio,
-            "total_volume": self.total_volume,
-            "avg_iv": self.avg_iv,
-            "resistance_strike": self.resistance_strike,
-            "support_strike": self.support_strike,
-            "max_pain": self.max_pain,
+            "change_pct": self.change_pct,
+            "rsi": self.rsi,
+            "sma_20": self.sma_20,
+            "ema_9": self.ema_9,
+            "support_level": self.support_level,
+            "resistance_level": self.resistance_level,
+            "put_call_contract_ratio": self.put_call_contract_ratio,
+            "signals": self.signals,
+            "direction": self.direction,
             "evidence": self.evidence,
             "detected_at": self.detected_at.isoformat(),
         }
@@ -79,33 +84,29 @@ class PressureSignal:
 
 class PressureEngine:
     """
-    Engine 2: 0DTE Pressure Engine
+    Engine 2: Enhanced 0DTE Pressure Engine
     
-    Analyzes options flow for unusual activity that could drive 0DTE moves.
+    Uses all available Polygon basic plan data:
+    - Technical indicators (RSI, SMA, EMA, MACD)
+    - Strike structure from options contracts
+    - Intraday momentum analysis
+    - Market regime context
     """
     
     # Thresholds
-    CALL_PUT_RATIO_BULLISH = 1.5   # Bullish above this
-    CALL_PUT_RATIO_BEARISH = 0.67  # Bearish below this
-    IV_SPIKE_THRESHOLD = 1.3       # 30% above average IV
-    MIN_SCORE_TO_SIGNAL = 40
+    RSI_OVERBOUGHT = 70
+    RSI_OVERSOLD = 30
+    RSI_EXTREME_HIGH = 80
+    RSI_EXTREME_LOW = 20
+    MIN_SCORE_TO_SIGNAL = 35
     
     def __init__(self):
-        self.polygon_key = POLYGON_API_KEY
-        self.options_available = self._check_options_access()
+        self._market_regime = None
+        self._regime_updated = None
         
-    def _check_options_access(self) -> bool:
-        """Check if we have options data access."""
-        # Try a simple options request
-        try:
-            chain = polygon_options.get_options_chain("SPY", limit=1)
-            return len(chain) > 0
-        except:
-            return False
-    
     def scan_universe(self) -> List[PressureSignal]:
         """
-        Scan the 0DTE universe for options pressure.
+        Scan the 0DTE universe for pressure signals.
         
         Returns:
             List of PressureSignal objects
@@ -113,12 +114,16 @@ class PressureEngine:
         signals = []
         session_info = get_session_info()
         
-        log.info(f"Pressure scan starting | Options access: {self.options_available}")
+        # Update market regime (cache for 5 minutes)
+        self._update_market_regime()
+        
+        log.info(f"Pressure scan starting | Regime: {self._market_regime.get('regime', 'unknown') if self._market_regime else 'unknown'}")
         
         for ticker in ZERO_DTE_UNIVERSE:
             try:
                 signal = self._analyze_ticker(ticker)
                 if signal and signal.score >= self.MIN_SCORE_TO_SIGNAL:
+                    # Apply session multiplier
                     signal.score *= session_info["signal_quality_multiplier"]
                     signals.append(signal)
                     log.info(f"Pressure detected: {ticker} | Score: {signal.score:.0f} | Type: {signal.pressure_type.value}")
@@ -130,254 +135,169 @@ class PressureEngine:
         
         return signals
     
+    def _update_market_regime(self):
+        """Update market regime with caching."""
+        now = datetime.now()
+        if self._regime_updated and (now - self._regime_updated).seconds < 300:
+            return  # Use cached
+        
+        try:
+            self._market_regime = polygon_enhanced.get_market_regime()
+            self._regime_updated = now
+        except Exception as e:
+            log.warning(f"Failed to get market regime: {e}")
+            self._market_regime = {"regime": "unknown", "score": 0}
+    
     def _analyze_ticker(self, ticker: str) -> Optional[PressureSignal]:
-        """Analyze a single ticker for options pressure."""
+        """Analyze a single ticker using all available data."""
         
-        # Get spot price first
-        quote = self._get_spot_price(ticker)
-        if not quote:
+        # Get comprehensive analysis
+        analysis = get_full_analysis(ticker)
+        
+        if not analysis.get("price"):
             return None
         
-        spot_price = quote["price"]
+        price = analysis["price"]
+        technicals = analysis.get("technicals", {})
+        momentum = analysis.get("momentum", {})
+        options = analysis.get("options_structure", {})
+        all_signals = analysis.get("all_signals", [])
         
-        if self.options_available:
-            # Full analysis with options data
-            return self._analyze_with_options(ticker, spot_price)
-        else:
-            # Fallback: infer pressure from price action
-            return self._analyze_without_options(ticker, quote)
-    
-    def _analyze_with_options(self, ticker: str, spot_price: float) -> Optional[PressureSignal]:
-        """Full analysis with options data."""
-        chain = polygon_options.get_0dte_chain(ticker, spot_price, strike_range=10)
-        
-        if not chain or not chain.get("metrics"):
-            return None
-        
-        metrics = chain["metrics"]
-        
-        # Calculate pressure score
-        score, pressure_type, evidence = self._score_pressure(
-            call_put_volume_ratio=metrics.get("call_put_volume_ratio", 1),
-            call_put_oi_ratio=metrics.get("call_put_oi_ratio", 1),
-            avg_iv=metrics.get("avg_iv", 0),
-            top_volume_strikes=metrics.get("top_volume_strikes", []),
-            spot_price=spot_price,
-            atm_strike=chain.get("atm_strike", spot_price),
+        # Calculate score from signals
+        score, pressure_type, evidence = self._score_signals(
+            all_signals,
+            technicals,
+            momentum,
+            options,
+            price
         )
         
         if score < self.MIN_SCORE_TO_SIGNAL:
             return None
         
-        # Find key levels
-        resistance_strike, support_strike = self._find_key_levels(
-            chain.get("calls", []),
-            chain.get("puts", []),
-            spot_price
-        )
-        
-        return PressureSignal(
-            ticker=ticker,
-            pressure_type=pressure_type,
-            score=score,
-            spot_price=spot_price,
-            atm_strike=chain.get("atm_strike", spot_price),
-            call_put_ratio=metrics.get("call_put_volume_ratio", 1),
-            total_volume=metrics.get("total_call_volume", 0) + metrics.get("total_put_volume", 0),
-            avg_iv=metrics.get("avg_iv", 0),
-            resistance_strike=resistance_strike,
-            support_strike=support_strike,
-            max_pain=self._calculate_max_pain(chain.get("calls", []), chain.get("puts", [])),
-            evidence=evidence,
-            detected_at=datetime.utcnow(),
-        )
-    
-    def _analyze_without_options(self, ticker: str, quote: Dict) -> Optional[PressureSignal]:
-        """Fallback analysis using price action as options proxy."""
-        
-        # Use price momentum as proxy for options pressure
-        change_pct = quote.get("change_pct", 0) * 100
-        volume = quote.get("volume", 0)
-        
-        # Simple heuristic: big moves with high volume suggest options activity
-        score = 0
-        evidence = []
-        pressure_type = PressureType.FLOW_IMBALANCE
-        
-        if abs(change_pct) >= 2.0:
-            score += min(40, abs(change_pct) * 10)
-            direction = "bullish" if change_pct > 0 else "bearish"
-            evidence.append(f"Strong {direction} move ({change_pct:+.1f}%)")
+        # Apply market regime modifier
+        if self._market_regime:
+            regime_score = self._market_regime.get("score", 0)
+            direction = analysis.get("direction", "NEUTRAL")
             
-            if change_pct > 0:
-                pressure_type = PressureType.CALL_WALL
-            else:
-                pressure_type = PressureType.PUT_WALL
+            # Boost score if aligned with regime
+            if (direction == "LONG" and regime_score > 5) or \
+               (direction == "SHORT" and regime_score < -5):
+                score *= 1.2
+                evidence.append(f"Aligned with market regime: {self._market_regime.get('regime', 'unknown')}")
         
-        if volume > 0:
-            evidence.append(f"Volume: {volume:,.0f}")
-            score += 10
-        
-        if score < self.MIN_SCORE_TO_SIGNAL:
-            return None
-        
-        spot_price = quote.get("price", 0)
+        # Extract indicator values
+        rsi_data = technicals.get("rsi", {})
+        sma_data = technicals.get("sma_20", {})
+        ema_data = technicals.get("ema_9", {})
+        snapshot = technicals.get("snapshot", {})
         
         return PressureSignal(
             ticker=ticker,
             pressure_type=pressure_type,
-            score=score,
-            spot_price=spot_price,
-            atm_strike=spot_price,  # Approximate
-            call_put_ratio=1.0,  # Unknown
-            total_volume=0,  # Unknown
-            avg_iv=0,  # Unknown
-            resistance_strike=spot_price * 1.02,  # 2% above
-            support_strike=spot_price * 0.98,  # 2% below
-            max_pain=spot_price,
-            evidence=evidence + ["⚠️ Limited data - options access needed"],
-            detected_at=datetime.utcnow(),
+            score=min(100, score),
+            spot_price=price,
+            change_pct=snapshot.get("change_pct", 0),
+            rsi=rsi_data.get("current", 50) if rsi_data else 50,
+            sma_20=sma_data.get("current", 0) if sma_data else 0,
+            ema_9=ema_data.get("current", 0) if ema_data else 0,
+            support_level=options.get("support_levels", [0])[0] if options.get("support_levels") else 0,
+            resistance_level=options.get("resistance_levels", [0])[0] if options.get("resistance_levels") else 0,
+            put_call_contract_ratio=options.get("put_call_ratio", 1),
+            signals=all_signals,
+            direction=analysis.get("direction", "NEUTRAL"),
+            evidence=evidence,
+            detected_at=datetime.now(),
         )
     
-    def _score_pressure(
+    def _score_signals(
         self,
-        call_put_volume_ratio: float,
-        call_put_oi_ratio: float,
-        avg_iv: float,
-        top_volume_strikes: List[Dict],
-        spot_price: float,
-        atm_strike: float,
+        signals: List[tuple],
+        technicals: Dict,
+        momentum: Dict,
+        options: Dict,
+        price: float
     ) -> tuple:
-        """Score options pressure."""
+        """Score all signals and determine pressure type."""
         score = 0
         evidence = []
-        pressure_type = PressureType.FLOW_IMBALANCE
+        pressure_type = PressureType.TECHNICAL_BULLISH
         
-        # Call/Put ratio imbalance (0-30 points)
-        if call_put_volume_ratio >= self.CALL_PUT_RATIO_BULLISH:
-            ratio_score = min(30, (call_put_volume_ratio - 1) * 15)
-            score += ratio_score
-            evidence.append(f"Call/Put ratio: {call_put_volume_ratio:.2f}x (bullish)")
-            pressure_type = PressureType.CALL_WALL
-        elif call_put_volume_ratio <= self.CALL_PUT_RATIO_BEARISH:
-            ratio_score = min(30, (1 - call_put_volume_ratio) * 30)
-            score += ratio_score
-            evidence.append(f"Call/Put ratio: {call_put_volume_ratio:.2f}x (bearish)")
-            pressure_type = PressureType.PUT_WALL
+        # Sum up signal scores (each signal is (name, strength))
+        net_direction = 0
+        for name, strength in signals:
+            score += abs(strength) * 10  # Convert to 0-100 scale
+            net_direction += strength
+            evidence.append(f"{name}: {'+' if strength > 0 else ''}{strength:.1f}")
         
-        # IV spike (0-25 points)
-        if avg_iv >= 0.5:  # 50%+ IV is elevated
-            iv_score = min(25, avg_iv * 25)
-            score += iv_score
-            evidence.append(f"IV: {avg_iv*100:.0f}%")
-            if avg_iv >= 0.8:
-                pressure_type = PressureType.IV_SPIKE
+        # Determine pressure type based on signals
+        rsi = technicals.get("rsi", {})
+        if rsi:
+            rsi_val = rsi.get("current", 50)
+            if rsi_val >= self.RSI_EXTREME_HIGH or rsi_val <= self.RSI_EXTREME_LOW:
+                pressure_type = PressureType.RSI_EXTREME
+                score += 15
+                evidence.append(f"RSI extreme: {rsi_val:.0f}")
         
-        # Strike clustering - high volume near ATM (0-25 points)
-        atm_volume = 0
-        for s in top_volume_strikes:
-            if abs(s.get("strike", 0) - atm_strike) <= 2:
-                atm_volume += s.get("volume", 0)
+        # Check for breakout
+        snapshot = technicals.get("snapshot", {})
+        if snapshot:
+            high = snapshot.get("today_high", 0)
+            low = snapshot.get("today_low", 0)
+            if high and low:
+                range_pct = (high - low) / low * 100 if low else 0
+                if range_pct > 2:  # 2% range is significant
+                    score += 10
+                    evidence.append(f"Wide range: {range_pct:.1f}%")
+                    pressure_type = PressureType.BREAKOUT
         
-        if atm_volume > 10000:
-            cluster_score = min(25, atm_volume / 1000)
-            score += cluster_score
-            evidence.append(f"ATM volume clustering: {atm_volume:,.0f}")
-            pressure_type = PressureType.GAMMA_SQUEEZE
+        # Momentum surge detection
+        if momentum.get("volume_ratio", 1) > 1.5:
+            score += 15
+            evidence.append(f"Volume surge: {momentum['volume_ratio']:.1f}x")
+            pressure_type = PressureType.MOMENTUM_SURGE
         
-        # Bonus for OI imbalance matching volume imbalance (0-20 points)
-        if (call_put_volume_ratio > 1 and call_put_oi_ratio > 1) or \
-           (call_put_volume_ratio < 1 and call_put_oi_ratio < 1):
-            score += 20
-            evidence.append("Volume/OI direction aligned")
+        # Options structure analysis
+        if options.get("available"):
+            pc_ratio = options.get("put_call_ratio", 1)
+            if pc_ratio > 1.3:
+                score += 10
+                evidence.append(f"More puts than calls: {pc_ratio:.2f} P/C")
+                pressure_type = PressureType.PUT_WALL
+            elif pc_ratio < 0.7:
+                score += 10
+                evidence.append(f"More calls than puts: {pc_ratio:.2f} P/C")
+                pressure_type = PressureType.CALL_WALL
+            
+            # Support/resistance proximity
+            if options.get("resistance_levels"):
+                nearest_resistance = options["resistance_levels"][0]
+                dist_to_resistance = (nearest_resistance - price) / price * 100
+                if 0 < dist_to_resistance < 1:  # Within 1% of resistance
+                    score += 10
+                    evidence.append(f"Near resistance: ${nearest_resistance}")
+            
+            if options.get("support_levels"):
+                nearest_support = options["support_levels"][0]
+                dist_to_support = (price - nearest_support) / price * 100
+                if 0 < dist_to_support < 1:  # Within 1% of support
+                    score += 10
+                    evidence.append(f"Near support: ${nearest_support}")
+        
+        # Final direction determination
+        if net_direction > 2:
+            if pressure_type not in [PressureType.RSI_EXTREME, PressureType.BREAKOUT]:
+                pressure_type = PressureType.TECHNICAL_BULLISH
+        elif net_direction < -2:
+            if pressure_type not in [PressureType.RSI_EXTREME, PressureType.BREAKOUT]:
+                pressure_type = PressureType.TECHNICAL_BEARISH
         
         return score, pressure_type, evidence
     
-    def _find_key_levels(self, calls: List[Dict], puts: List[Dict], spot: float) -> tuple:
-        """Find resistance (call wall) and support (put wall) levels."""
-        
-        # Find highest call OI above spot (resistance)
-        resistance = spot * 1.05  # Default 5% above
-        calls_above = [c for c in calls if c.get("strike", 0) > spot]
-        if calls_above:
-            max_call = max(calls_above, key=lambda c: c.get("open_interest", 0))
-            resistance = max_call.get("strike", resistance)
-        
-        # Find highest put OI below spot (support)
-        support = spot * 0.95  # Default 5% below
-        puts_below = [p for p in puts if p.get("strike", 0) < spot]
-        if puts_below:
-            max_put = max(puts_below, key=lambda p: p.get("open_interest", 0))
-            support = max_put.get("strike", support)
-        
-        return resistance, support
-    
-    def _calculate_max_pain(self, calls: List[Dict], puts: List[Dict]) -> float:
-        """Calculate max pain strike."""
-        if not calls and not puts:
-            return 0
-        
-        # Get unique strikes
-        all_strikes = set()
-        for c in calls:
-            all_strikes.add(c.get("strike", 0))
-        for p in puts:
-            all_strikes.add(p.get("strike", 0))
-        
-        if not all_strikes:
-            return 0
-        
-        # For each strike, calculate total pain (ITM OI value)
-        min_pain = float('inf')
-        max_pain_strike = 0
-        
-        for strike in sorted(all_strikes):
-            pain = 0
-            
-            # Pain from calls: calls with strike < test_strike are ITM
-            for c in calls:
-                if c.get("strike", 0) < strike:
-                    pain += c.get("open_interest", 0) * (strike - c["strike"])
-            
-            # Pain from puts: puts with strike > test_strike are ITM
-            for p in puts:
-                if p.get("strike", 0) > strike:
-                    pain += p.get("open_interest", 0) * (p["strike"] - strike)
-            
-            if pain < min_pain:
-                min_pain = pain
-                max_pain_strike = strike
-        
-        return max_pain_strike
-    
-    def _get_spot_price(self, ticker: str) -> Optional[Dict]:
-        """Get current spot price."""
-        quote = polygon_options.get_quote(ticker)
-        if quote:
-            return quote
-        
-        # Fallback to aggregates
-        if not self.polygon_key:
-            return None
-        
-        url = f"{POLYGON_BASE_URL}/v2/aggs/ticker/{ticker}/prev"
-        params = {"apiKey": self.polygon_key}
-        
-        try:
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("results"):
-                    r = data["results"][0]
-                    return {
-                        "price": r.get("c", 0),
-                        "volume": r.get("v", 0),
-                        "change_pct": 0,  # Can't calculate without current day
-                    }
-        except Exception as e:
-            log.warning(f"Failed to get spot for {ticker}: {e}")
-        
-        return None
+    def get_market_context(self) -> Dict:
+        """Get current market regime context."""
+        self._update_market_regime()
+        return self._market_regime or {"regime": "unknown", "score": 0}
 
 
 # Global instance
@@ -388,3 +308,8 @@ def run_pressure_scan() -> List[Dict]:
     """Run pressure scan and return signals as dicts."""
     signals = pressure_engine.scan_universe()
     return [s.to_dict() for s in signals]
+
+
+def get_market_regime() -> Dict:
+    """Get current market regime."""
+    return pressure_engine.get_market_context()
