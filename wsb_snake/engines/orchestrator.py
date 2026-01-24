@@ -269,7 +269,17 @@ class SnakeOrchestrator:
                     pressure = next((s for s in results["pressure_signals"] if s.get("ticker") == ticker), None)
                     prob = next((p for p in results["probabilities"] if p.get("ticker") == ticker), None)
                     
-                    current_price = prob.get("entry_price", 0) if prob else 0
+                    current_price = 0.0
+                    if prob and prob.get("entry_price"):
+                        current_price = float(prob.get("entry_price", 0))
+                    elif pressure and pressure.get("price"):
+                        current_price = float(pressure.get("price", 0))
+                    elif ignition and ignition.get("price"):
+                        current_price = float(ignition.get("price", 0))
+                    
+                    if current_price <= 0:
+                        levels = get_target_levels(ticker)
+                        current_price = float(levels.get("current_price", 0) or 0)
                     
                     if current_price <= 0:
                         continue
@@ -436,7 +446,9 @@ class SnakeOrchestrator:
     
     def _send_alert(self, prob: Dict, tier: str, session_info: Dict) -> None:
         """Send Telegram alert for high-conviction signal."""
-        ticker = prob.get("ticker")
+        ticker = prob.get("ticker", "")
+        if not ticker:
+            return
         score = prob.get("combined_score", 0)
         action = prob.get("action", "WATCH")
         direction = prob.get("direction", "neutral")
@@ -520,6 +532,7 @@ State: {inception_state.instability_state.value.upper()}
 • Liquidity Fragility: {inception_state.liquidity_elasticity.fragility_score:.2f}
 • Temporal Distortion: {inception_state.temporal_anomaly.time_distortion_score:.2f}
 • Attention Surge: {inception_state.attention_surge.attention_acceleration:.2f}
+• Options Pressure: {inception_state.options_pressure:.2f}
 
 ⚠️ **Signals**"""
         

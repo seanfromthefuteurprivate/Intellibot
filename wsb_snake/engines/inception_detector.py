@@ -97,6 +97,8 @@ class InceptionState:
     temporal_anomaly: TemporalAnomaly
     attention_surge: AttentionSurge
     
+    options_pressure: float = 0.0
+    
     instability_index: float = 0.0
     instability_state: InstabilityState = InstabilityState.STABLE
     
@@ -117,6 +119,7 @@ class InceptionState:
             "correlation_fracture_score": round(self.correlation_fracture.fracture_score, 3),
             "liquidity_fragility": round(self.liquidity_elasticity.fragility_score, 3),
             "temporal_distortion": round(self.temporal_anomaly.time_distortion_score, 3),
+            "options_pressure": round(self.options_pressure, 3),
             "attention_acceleration": round(self.attention_surge.attention_acceleration, 3),
             "signals": self.signals,
         }
@@ -263,6 +266,7 @@ class InceptionDetector:
     
     def detect_correlation_fracture(
         self,
+        ticker: str,
         ticker_prices: Dict[str, float],
         ticker_changes: Dict[str, float],
         options_data: Optional[Dict] = None,
@@ -295,7 +299,7 @@ class InceptionDetector:
         
         if options_data:
             iv = options_data.get("iv_surface", {}).get("atm_iv", 0)
-            price_change = abs(ticker_changes.get(options_data.get("ticker", ""), 0))
+            price_change = abs(ticker_changes.get(ticker, 0))
             
             if iv > 0.4 and price_change < 0.002:
                 fracture.iv_price_disconnect = True
@@ -550,7 +554,7 @@ class InceptionDetector:
             all_changes[t] = c
         
         correlation_fracture = self.detect_correlation_fracture(
-            {ticker: current_price}, all_changes, options_data
+            ticker, {ticker: current_price}, all_changes, options_data
         )
         
         liquidity_elasticity = self.detect_liquidity_elasticity(
@@ -616,6 +620,7 @@ class InceptionDetector:
             liquidity_elasticity=liquidity_elasticity,
             temporal_anomaly=temporal_anomaly,
             attention_surge=attention_surge,
+            options_pressure=options_pressure,
             instability_index=instability_index,
             instability_state=instability_state,
             inception_detected=inception_detected,
