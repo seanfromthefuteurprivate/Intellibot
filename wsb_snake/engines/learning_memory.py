@@ -297,6 +297,32 @@ class LearningMemory:
         
         log.info("Applied daily weight decay")
     
+    def update_weight(self, feature_name: str, new_weight: float, reason: str = "manual") -> None:
+        """
+        Directly update a feature weight.
+        
+        Used by historical training to set weights based on analysis.
+        
+        Args:
+            feature_name: Name of the feature to update
+            new_weight: New weight value
+            reason: Reason for the update
+        """
+        new_weight = max(self.MIN_WEIGHT, min(self.MAX_WEIGHT, new_weight))
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO model_weights (feature_name, weight, last_updated)
+            VALUES (?, ?, ?)
+        """, (feature_name, new_weight, datetime.utcnow().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        
+        log.info(f"Weight updated: {feature_name} -> {new_weight:.3f} ({reason})")
+    
     def get_learning_summary(self) -> Dict:
         """Get summary of learning performance."""
         stats = self.get_feature_stats()

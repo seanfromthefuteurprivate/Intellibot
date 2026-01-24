@@ -20,7 +20,7 @@ from wsb_snake.utils.session_regime import (
 )
 from wsb_snake.db.database import init_database
 
-from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary
+from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary, run_startup_training
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.chart_brain import get_chart_brain
 
@@ -102,7 +102,12 @@ def main():
     log.info("Starting ChartBrain AI background analysis...")
     chart_brain = get_chart_brain()
     chart_brain.start()
-    log.info("🧠 ChartBrain active - studying charts in real-time")
+    log.info("ChartBrain active - studying charts in real-time")
+    
+    # Run historical training to calibrate engine weights
+    log.info("Running historical training (6 weeks)...")
+    training_summary = run_startup_training(weeks=6)
+    log.info(f"Training complete: {training_summary.get('total_events', 0)} events analyzed")
     
     # Send startup ping
     send_startup_ping()

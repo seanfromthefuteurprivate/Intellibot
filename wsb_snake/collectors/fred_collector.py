@@ -256,4 +256,94 @@ class FREDCollector:
         }
 
 
+    def get_cpi_release_dates(self, months: int = 3) -> List[str]:
+        """
+        Get recent CPI release dates.
+        
+        Args:
+            months: Number of months to look back
+            
+        Returns:
+            List of CPI release dates (YYYY-MM-DD)
+        """
+        cpi_dates = []
+        
+        try:
+            cpi_data = self.get_series("CPIAUCSL", limit=months + 1)
+            for obs in cpi_data:
+                if obs.get("date"):
+                    cpi_dates.append(obs["date"])
+        except Exception as e:
+            log.warning(f"Error fetching CPI dates: {e}")
+        
+        if not cpi_dates:
+            current = datetime.now()
+            for i in range(months):
+                release_date = current - timedelta(days=30 * i)
+                release_date = release_date.replace(day=13)
+                cpi_dates.append(release_date.strftime("%Y-%m-%d"))
+        
+        return cpi_dates
+    
+    def get_economic_calendar(self, weeks: int = 4) -> List[Dict[str, Any]]:
+        """
+        Get upcoming economic events calendar.
+        
+        Args:
+            weeks: Number of weeks to look ahead
+            
+        Returns:
+            List of upcoming economic events
+        """
+        events = []
+        current = datetime.now()
+        end_date = current + timedelta(weeks=weeks)
+        
+        cpi_day = 13
+        current_month = current.replace(day=1)
+        for i in range(weeks // 4 + 2):
+            month = current_month + timedelta(days=30 * i)
+            cpi_date = month.replace(day=cpi_day)
+            if current <= cpi_date <= end_date:
+                events.append({
+                    "date": cpi_date.strftime("%Y-%m-%d"),
+                    "event_type": "cpi",
+                    "name": "CPI Report",
+                    "impact": "high",
+                })
+        
+        fomc_dates = [
+            "2026-01-29", "2026-03-19", "2026-05-07", "2026-06-18",
+            "2026-07-29", "2026-09-17", "2026-11-05", "2026-12-16",
+        ]
+        for date_str in fomc_dates:
+            try:
+                event_date = datetime.strptime(date_str, "%Y-%m-%d")
+                if current <= event_date <= end_date:
+                    events.append({
+                        "date": date_str,
+                        "event_type": "fomc",
+                        "name": "FOMC Meeting",
+                        "impact": "high",
+                    })
+            except ValueError:
+                continue
+        
+        for week in range(weeks):
+            friday = current + timedelta(days=(4 - current.weekday() + 7 * week) % 7 + 7 * (week > 0 or current.weekday() > 4))
+            first_friday = friday.replace(day=1)
+            first_friday = first_friday + timedelta(days=(4 - first_friday.weekday()) % 7)
+            
+            if friday.day <= 7 and current <= friday <= end_date:
+                events.append({
+                    "date": friday.strftime("%Y-%m-%d"),
+                    "event_type": "jobs",
+                    "name": "Jobs Report (NFP)",
+                    "impact": "high",
+                })
+        
+        events.sort(key=lambda x: x["date"])
+        return events
+
+
 fred_collector = FREDCollector()

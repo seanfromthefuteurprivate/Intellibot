@@ -59,6 +59,7 @@ from wsb_snake.engines.strategy_classifier import strategy_classifier, StrategyT
 from wsb_snake.engines.multi_day_scanner import multi_day_scanner
 from wsb_snake.engines.zero_dte_volatility import zero_dte_volatility
 from wsb_snake.engines.earnings_otm_engine import earnings_otm_engine
+from wsb_snake.training.historical_trainer import historical_trainer
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -1059,6 +1060,77 @@ Worst feature: {learning_summary.get('worst_feature', 'N/A')} ({learning_summary
             log.error(f"Failed to send daily report: {e}")
 
 
+    def run_historical_training(self, weeks: int = 6) -> Dict[str, Any]:
+        """
+        Run historical training on startup.
+        
+        Downloads historical data, analyzes past events,
+        and updates Learning Memory weights.
+        
+        Args:
+            weeks: Number of weeks of history to analyze
+            
+        Returns:
+            Training summary
+        """
+        log.info("=" * 50)
+        log.info("RUNNING STARTUP TRAINING")
+        log.info("=" * 50)
+        
+        try:
+            summary = historical_trainer.run_full_training(weeks=weeks)
+            
+            if summary.get("upcoming_events", 0) > 0:
+                log.info(f"Upcoming events loaded: {summary['upcoming_events']}")
+                
+                for event in historical_trainer.upcoming_events[:5]:
+                    log.info(f"  {event.date}: {event.event_type.upper()} - {event.symbol or 'Market'}")
+            
+            learning_summary = learning_memory.get_learning_summary()
+            log.info(f"Learning Memory updated:")
+            log.info(f"  Best feature: {learning_summary.get('best_feature', 'N/A')}")
+            log.info(f"  Weights adjusted: {summary.get('weight_updates', 0)}")
+            
+            training_msg = f"""
+*[TRAINING COMPLETE]*
+
+Analyzed {summary.get('weeks_analyzed', 0)} weeks of history
+━━━━━━━━━━━━━━━━━━
+
+*Events Analyzed:* {summary.get('total_events', 0)}
+*Earnings Events:* {summary.get('earnings_events', 0)}
+*Macro Events:* {summary.get('macro_events', 0)}
+*Weights Updated:* {summary.get('weight_updates', 0)}
+
+*Upcoming Events:* {summary.get('upcoming_events', 0)}
+
+_Engine calibrated from historical data_
+"""
+            send_telegram_alert(training_msg)
+            
+            return summary
+            
+        except Exception as e:
+            log.error(f"Training error: {e}")
+            return {"error": str(e)}
+    
+    def get_upcoming_events_summary(self) -> str:
+        """Get formatted summary of upcoming events."""
+        events = historical_trainer.upcoming_events[:10]
+        
+        if not events:
+            return "No upcoming events loaded"
+        
+        lines = ["*[UPCOMING EVENTS]*", ""]
+        
+        for event in events:
+            symbol_str = event.symbol if event.symbol else "Market"
+            lines.append(f"*{event.date}* - {event.event_type.upper()}: {symbol_str}")
+            lines.append(f"  Expected Move: {event.expected_move:.1f}%")
+        
+        return "\n".join(lines)
+
+
 # Global instance
 orchestrator = SnakeOrchestrator()
 
@@ -1066,6 +1138,11 @@ orchestrator = SnakeOrchestrator()
 def run_pipeline() -> Dict:
     """Run the full pipeline. Convenience function for scheduler."""
     return orchestrator.run_full_pipeline()
+
+
+def run_startup_training(weeks: int = 6) -> Dict:
+    """Run historical training on startup."""
+    return orchestrator.run_historical_training(weeks=weeks)
 
 
 def send_daily_summary() -> None:
