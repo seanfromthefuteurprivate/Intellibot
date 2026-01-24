@@ -146,11 +146,19 @@ class SnakeOrchestrator:
                 surge = next((s for s in results["surge_signals"] if s.get("ticker") == ticker), None)
                 prob = next((p for p in results["probabilities"] if p.get("ticker") == ticker), None)
                 
-                # Calculate P(hit target by close) using Probability Engine
+                # Get current price - from prob, or fallback to levels/snapshot
                 current_price = 0.0
+                if prob and prob.get("entry_price"):
+                    current_price = float(prob.get("entry_price", 0) or 0)
+                
+                if current_price == 0:
+                    # Fallback: get price from target levels (which queries Polygon)
+                    levels = get_target_levels(ticker)
+                    current_price = float(levels.get("current_price", 0) or 0)
+                
+                # Calculate P(hit target by close) using Probability Engine for ALL tickers
                 p_hit = 0.0
-                if prob:
-                    current_price = prob.get("entry_price", 0) or 0
+                entry_quality = "poor"
                 
                 if current_price > 0:
                     # Get target level (day high for long, day low for short)
@@ -164,15 +172,36 @@ class SnakeOrchestrator:
                     else:
                         target = levels.get("day_low", current_price * 0.99)
                     
-                    # Calculate probability
+                    # Calculate probability - this works even without fused probability
                     prob_estimate = probability_engine.calculate_probability(ticker, target, current_price)
                     p_hit = prob_estimate.p_hit_by_close
+                    entry_quality = prob_estimate.entry_quality
+                
+                # Build probability output for state machine
+                # Inject p_hit into existing prob, or create new one
+                if prob:
+                    prob["p_hit_by_close"] = p_hit
+                    prob["probability_win"] = p_hit  # State machine uses this field
+                    prob["entry_quality"] = entry_quality
+                    prob_output = prob
+                else:
+                    # Create synthetic probability output for tickers without fused prob
+                    # This allows STRIKE to occur based on probability engine alone
+                    ignition_score = ignition.get("score", 0) if ignition else 0
+                    pressure_score = pressure.get("score", 0) if pressure else 0
+                    surge_score = surge.get("score", 0) if surge else 0
                     
-                    # Inject into probability output for state machine
-                    if prob:
-                        prob["p_hit_by_close"] = p_hit
-                        prob["probability_win"] = p_hit  # State machine uses this field
-                        prob["entry_quality"] = prob_estimate.entry_quality
+                    # Combined score from components
+                    combined_score = (ignition_score * 0.4 + pressure_score * 0.35 + surge_score * 0.25)
+                    
+                    prob_output = {
+                        "ticker": ticker,
+                        "probability_win": p_hit,
+                        "p_hit_by_close": p_hit,
+                        "combined_score": combined_score,
+                        "entry_quality": entry_quality,
+                        "entry_price": current_price,
+                    }
                 
                 # Update state
                 state = update_state(
@@ -180,7 +209,7 @@ class SnakeOrchestrator:
                     ignition_signal=ignition,
                     pressure_signal=pressure,
                     surge_signal=surge,
-                    probability_output=prob if prob else {"probability_win": p_hit, "combined_score": 0},
+                    probability_output=prob_output,
                     current_price=current_price,
                 )
                 

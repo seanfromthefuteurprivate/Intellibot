@@ -33,7 +33,7 @@ class TickerState:
     """State tracking for a single ticker."""
     ticker: str
     state: EngineState = EngineState.LURK
-    state_entered_at: datetime = field(default_factory=datetime.now)
+    state_entered_at: datetime = field(default_factory=lambda: get_eastern_time().replace(tzinfo=None))
     
     # Coiled conditions
     compression_score: float = 0.0  # Low ATR into a level
@@ -63,20 +63,22 @@ class TickerState:
     def transition_to(self, new_state: EngineState, reason: str = ""):
         """Transition to a new state."""
         if new_state != self.state:
+            et_now = get_eastern_time().replace(tzinfo=None)
             self.state_history.append((
                 self.state.value, 
                 new_state.value, 
-                datetime.now().isoformat(),
+                et_now.isoformat(),
                 reason
             ))
             old_state = self.state
             self.state = new_state
-            self.state_entered_at = datetime.now()
+            self.state_entered_at = et_now
             log.info(f"🐍 {self.ticker} STATE: {old_state.value} → {new_state.value} | {reason}")
     
     def time_in_state(self) -> int:
-        """Minutes spent in current state."""
-        return int((datetime.now() - self.state_entered_at).total_seconds() / 60)
+        """Minutes spent in current state (ET timezone)."""
+        et_now = get_eastern_time().replace(tzinfo=None)
+        return int((et_now - self.state_entered_at).total_seconds() / 60)
     
     def to_dict(self) -> Dict:
         return {
@@ -228,15 +230,24 @@ class RattlesnakeStateMachine:
                 combined_score >= self.STRIKE_COMBINED_SCORE
             )
             
-            if strike_conditions:
+            # Also allow STRIKE if probability is very high even with lower combined score
+            # This lets probability engine drive decisions for synthetic outputs
+            high_prob_override = (
+                probability_score >= 0.65 and
+                state.structure_break and
+                state.direction_confirmed != "neutral"
+            )
+            
+            if strike_conditions or high_prob_override:
                 state.transition_to(
                     EngineState.STRIKE, 
                     f"Structure break + direction {state.direction_confirmed} + P={probability_score:.2f}"
                 )
-                # Record strike
+                # Record strike with ET timestamp
+                et_now = get_eastern_time().replace(tzinfo=None)
                 self._daily_strikes.append({
                     "ticker": ticker,
-                    "time": datetime.now().isoformat(),
+                    "time": et_now.isoformat(),
                     "direction": state.direction_confirmed,
                     "probability": probability_score,
                     "price": current_price,
