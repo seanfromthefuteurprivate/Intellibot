@@ -19,7 +19,7 @@ import numpy as np
 
 from wsb_snake.config import POLYGON_API_KEY, POLYGON_BASE_URL, ZERO_DTE_UNIVERSE
 from wsb_snake.utils.logger import log
-from wsb_snake.utils.session_regime import get_session_info
+from wsb_snake.utils.session_regime import get_session_info, get_eastern_time
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 
 
@@ -128,8 +128,9 @@ class ProbabilityEngine:
         self._chop_cache: Dict[str, Tuple[datetime, ChopScore]] = {}
     
     def _get_time_remaining(self) -> float:
-        """Get minutes remaining until market close."""
-        now = datetime.now()
+        """Get minutes remaining until market close (ET timezone)."""
+        now = get_eastern_time()
+        # Create close time in ET
         close_time = now.replace(
             hour=self.MARKET_CLOSE_HOUR, 
             minute=self.MARKET_CLOSE_MINUTE,

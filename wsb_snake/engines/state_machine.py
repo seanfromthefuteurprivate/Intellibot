@@ -15,7 +15,7 @@ from enum import Enum
 import threading
 
 from wsb_snake.utils.logger import log
-from wsb_snake.utils.session_regime import get_session_info, SessionType
+from wsb_snake.utils.session_regime import get_session_info, SessionType, get_eastern_time
 
 
 class EngineState(Enum):
@@ -190,8 +190,9 @@ class RattlesnakeStateMachine:
                 state.structure_break = True
                 state.direction_confirmed = pressure_signal.get("direction", "neutral")
         
-        # Determine time alignment (approaching power hour)
-        current_hour = datetime.now().hour
+        # Determine time alignment (approaching power hour) - use ET timezone
+        et_now = get_eastern_time()
+        current_hour = et_now.hour
         state.time_alignment = current_hour >= self.COILED_TIME_WINDOW_START
         
         # STATE MACHINE LOGIC

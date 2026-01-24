@@ -33,7 +33,8 @@ from wsb_snake.engines.probability_generator import generate_probabilities
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.paper_trader import paper_trader
 from wsb_snake.engines.state_machine import state_machine, update_state, should_strike, get_venom_report
-from wsb_snake.engines.probability_engine import probability_engine, get_chop_score, should_block
+from wsb_snake.engines.probability_engine import probability_engine, get_chop_score, should_block, get_target_levels
+from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
 class SnakeOrchestrator:
@@ -119,17 +120,59 @@ class SnakeOrchestrator:
                         filtered_probs.append(prob)
             results["probabilities"] = filtered_probs
             
-            # Stage 2.5: Update state machine
+            # Stage 2.5: Update state machine for ALL tickers with signals
             log.info("Stage 2.5: Updating state machine...")
+            
+            # Collect all tickers that have any signals
+            all_tickers_with_signals = set()
+            for sig in results["ignition_signals"]:
+                if sig.get("ticker"):
+                    all_tickers_with_signals.add(sig.get("ticker"))
+            for sig in results["pressure_signals"]:
+                if sig.get("ticker"):
+                    all_tickers_with_signals.add(sig.get("ticker"))
+            for sig in results["surge_signals"]:
+                if sig.get("ticker"):
+                    all_tickers_with_signals.add(sig.get("ticker"))
             for prob in results["probabilities"]:
-                ticker = prob.get("ticker")
-                if not ticker:
-                    continue
-                
+                if prob.get("ticker"):
+                    all_tickers_with_signals.add(prob.get("ticker"))
+            
+            # Update state machine for ALL tickers with signals (enables LURK→COILED→RATTLE)
+            for ticker in all_tickers_with_signals:
                 # Find matching signals
                 ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
                 pressure = next((s for s in results["pressure_signals"] if s.get("ticker") == ticker), None)
                 surge = next((s for s in results["surge_signals"] if s.get("ticker") == ticker), None)
+                prob = next((p for p in results["probabilities"] if p.get("ticker") == ticker), None)
+                
+                # Calculate P(hit target by close) using Probability Engine
+                current_price = 0.0
+                p_hit = 0.0
+                if prob:
+                    current_price = prob.get("entry_price", 0) or 0
+                
+                if current_price > 0:
+                    # Get target level (day high for long, day low for short)
+                    direction = "long"
+                    if pressure:
+                        direction = pressure.get("direction", "long")
+                    
+                    levels = get_target_levels(ticker)
+                    if direction == "long":
+                        target = levels.get("day_high", current_price * 1.01)
+                    else:
+                        target = levels.get("day_low", current_price * 0.99)
+                    
+                    # Calculate probability
+                    prob_estimate = probability_engine.calculate_probability(ticker, target, current_price)
+                    p_hit = prob_estimate.p_hit_by_close
+                    
+                    # Inject into probability output for state machine
+                    if prob:
+                        prob["p_hit_by_close"] = p_hit
+                        prob["probability_win"] = p_hit  # State machine uses this field
+                        prob["entry_quality"] = prob_estimate.entry_quality
                 
                 # Update state
                 state = update_state(
@@ -137,11 +180,11 @@ class SnakeOrchestrator:
                     ignition_signal=ignition,
                     pressure_signal=pressure,
                     surge_signal=surge,
-                    probability_output=prob,
-                    current_price=prob.get("entry_price", 0),
+                    probability_output=prob if prob else {"probability_win": p_hit, "combined_score": 0},
+                    current_price=current_price,
                 )
                 
-                log.debug(f"State: {ticker} -> {state.get('state')}")
+                log.debug(f"State: {ticker} -> {state.get('state')} | P(hit)={p_hit:.2%}")
             
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")
