@@ -57,6 +57,8 @@ from wsb_snake.collectors.earnings_calendar import earnings_calendar
 from wsb_snake.collectors.alpha_vantage_collector import alpha_vantage
 from wsb_snake.engines.strategy_classifier import strategy_classifier, StrategyType
 from wsb_snake.engines.multi_day_scanner import multi_day_scanner
+from wsb_snake.engines.zero_dte_volatility import zero_dte_volatility
+from wsb_snake.engines.earnings_otm_engine import earnings_otm_engine
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -329,6 +331,65 @@ class SnakeOrchestrator:
                     log.info(f"   Multi-day: Using cached ({len(multi_day_scanner.active_setups)} setups)")
             except Exception as e:
                 log.warning(f"   Multi-day scanner error: {e}")
+            
+            # Stage 0.9: Phase 1 Strategy Engines (0DTE Vol + Earnings OTM)
+            log.info("Stage 0.9: Phase 1 strategies (0DTE Vol + Earnings OTM)...")
+            results["phase1_setups"] = {
+                "zero_dte_volatility": [],
+                "earnings_otm": [],
+            }
+            
+            try:
+                # 0DTE Volatility Engine - check for vol expansion plays
+                vix_data = results.get("expanded_data", {}).get("vix_structure", {})
+                market_data = {
+                    "vix": vix_data.get("vix", 15.0),
+                    "vix_structure": vix_data.get("structure", "contango"),
+                    "macro_event": None,  # TODO: check economic calendar
+                    "SPY_iv": 0.18,
+                    "SPY_iv_percentile": 35,
+                    "QQQ_iv": 0.22,
+                    "QQQ_iv_percentile": 40,
+                    "IWM_iv": 0.25,
+                    "IWM_iv_percentile": 45,
+                }
+                
+                vol_setups = zero_dte_volatility.scan_volatility_opportunities(market_data)
+                results["phase1_setups"]["zero_dte_volatility"] = [
+                    {"symbol": s.symbol, "structure": s.structure, "edge": s.vol_edge, "confidence": s.confidence}
+                    for s in vol_setups
+                ]
+                if vol_setups:
+                    log.info(f"   0DTE Volatility: {len(vol_setups)} setups found")
+                
+                # Earnings OTM Engine - check for lotto plays
+                earnings_data = results.get("expanded_data", {}).get("earnings", {}).get("this_week", [])
+                if earnings_data:
+                    earnings_calendar_formatted = []
+                    for e in earnings_data:
+                        earnings_calendar_formatted.append({
+                            "symbol": e.get("symbol"),
+                            "days_until": e.get("days_until", 0),
+                            "date": e.get("date", ""),
+                            "expected_move": e.get("expected_move", 5.0),
+                            "iv_rank": e.get("iv_rank", 50),
+                            "price": e.get("price", 100),
+                        })
+                    
+                    earnings_setups = earnings_otm_engine.scan_earnings_opportunities(
+                        earnings_calendar_formatted, 
+                        market_data
+                    )
+                    results["phase1_setups"]["earnings_otm"] = [
+                        {"symbol": s.symbol, "direction": s.direction, "strike": s.strike_type, 
+                         "dte": s.dte, "confidence": s.confidence}
+                        for s in earnings_setups
+                    ]
+                    if earnings_setups:
+                        log.info(f"   Earnings OTM: {len(earnings_setups)} lotto plays found")
+                        
+            except Exception as e:
+                log.warning(f"   Phase 1 engines error: {e}")
             
             # Stage 1: Run all detection engines in sequence
             log.info("Stage 1: Running detection engines...")
