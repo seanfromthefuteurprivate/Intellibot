@@ -32,6 +32,8 @@ from wsb_snake.engines.surge_hunter import run_surge_hunt
 from wsb_snake.engines.probability_generator import generate_probabilities
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.paper_trader import paper_trader
+from wsb_snake.engines.state_machine import state_machine, update_state, should_strike, get_venom_report
+from wsb_snake.engines.probability_engine import probability_engine, get_chop_score, should_block
 
 
 class SnakeOrchestrator:
@@ -97,13 +99,49 @@ class SnakeOrchestrator:
             else:
                 log.info("  → Engine 3: Surge Hunter (skipped - not power hour)")
             
-            # Stage 2: Fuse signals
-            log.info("Stage 2: Fusing signals...")
+            # Stage 2: Fuse signals with chop filter
+            log.info("Stage 2: Fusing signals with chop filter...")
             results["probabilities"] = generate_probabilities(
                 results["ignition_signals"],
                 results["pressure_signals"],
                 results["surge_signals"],
             )
+            
+            # Apply chop kill filter
+            filtered_probs = []
+            for prob in results["probabilities"]:
+                ticker = prob.get("ticker")
+                if ticker:
+                    blocked, reason = should_block(ticker)
+                    if blocked:
+                        log.info(f"🚫 Chop filter blocked {ticker}: {reason}")
+                    else:
+                        filtered_probs.append(prob)
+            results["probabilities"] = filtered_probs
+            
+            # Stage 2.5: Update state machine
+            log.info("Stage 2.5: Updating state machine...")
+            for prob in results["probabilities"]:
+                ticker = prob.get("ticker")
+                if not ticker:
+                    continue
+                
+                # Find matching signals
+                ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                pressure = next((s for s in results["pressure_signals"] if s.get("ticker") == ticker), None)
+                surge = next((s for s in results["surge_signals"] if s.get("ticker") == ticker), None)
+                
+                # Update state
+                state = update_state(
+                    ticker=ticker,
+                    ignition_signal=ignition,
+                    pressure_signal=pressure,
+                    surge_signal=surge,
+                    probability_output=prob,
+                    current_price=prob.get("entry_price", 0),
+                )
+                
+                log.debug(f"State: {ticker} -> {state.get('state')}")
             
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")
@@ -146,16 +184,22 @@ class SnakeOrchestrator:
                 signal_id = save_signal(signal_data)
                 prob["signal_id"] = signal_id
                 
-                # Send alerts for A+ and A tier
+                # Send alerts for A+ and A tier - but only if state machine says STRIKE
                 if tier in ["A+", "A"]:
-                    if self._should_send_alert(ticker):
-                        self._send_alert(prob, tier, session_info)
-                        results["alerts_sent"] += 1
-                        
-                        # Paper trade high-conviction signals
-                        position = paper_trader.evaluate_signal(prob)
-                        if position:
-                            results["paper_trades"] += 1
+                    # Check if state machine has reached STRIKE state
+                    if should_strike(ticker):
+                        log.info(f"🐍 STRIKE STATE: {ticker} - sending alert!")
+                        if self._should_send_alert(ticker):
+                            self._send_alert(prob, tier, session_info)
+                            results["alerts_sent"] += 1
+                            
+                            # Paper trade high-conviction signals
+                            position = paper_trader.evaluate_signal(prob)
+                            if position:
+                                results["paper_trades"] += 1
+                    else:
+                        # State machine not ready - log as watch
+                        log.info(f"👁️ WATCH: {ticker} score {score:.0f} - awaiting state escalation")
             
             # Stage 4: Update paper positions
             log.info("Stage 4: Managing paper positions...")
@@ -275,9 +319,22 @@ Minutes to close: {mins_to_close:.0f}"""
         return result
     
     def send_daily_report(self) -> None:
-        """Send end-of-day report via Telegram."""
+        """Send end-of-day report via Telegram (VENOM state)."""
+        # Get venom report from state machine
+        venom = get_venom_report()
+        
         report = paper_trader.get_daily_report()
         message = paper_trader.format_daily_report(report)
+        
+        # Add state machine stats
+        message += f"""
+
+🐍 **State Machine Stats**
+Total strikes: {venom.get('total_strikes', 0)}
+Outcomes tracked: {venom.get('total_outcomes', 0)}
+Win rate: {venom.get('win_rate', 0)*100:.0f}%
+Avg win: {venom.get('avg_win_pct', 0):.1f}%
+Avg loss: {venom.get('avg_loss_pct', 0):.1f}%"""
         
         # Add learning stats
         learning_summary = learning_memory.get_learning_summary()

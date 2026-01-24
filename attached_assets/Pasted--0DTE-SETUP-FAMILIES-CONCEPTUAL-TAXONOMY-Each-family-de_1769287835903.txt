@@ -1,0 +1,546 @@
+ 0DTE SETUP FAMILIES — CONCEPTUAL TAXONOMY
+
+Each “family” describes:
+	•	Market context
+	•	Structural trigger
+	•	Options-pressure signature
+	•	Time-of-day behavior
+	•	Why convexity explodes
+	•	Failure mode (how it lies)
+
+⸻
+
+1) VWAP RECLAIM + GAMMA SNAP
+
+(The Classic Power-Hour Ignition)
+
+Context
+	•	Market spends most of the day below VWAP (or above).
+	•	Sentiment drifts negative/positive but without follow-through.
+
+Structural Signature
+	•	Price reclaims VWAP late-day and holds.
+	•	Follow-through candles show increasing range, not chop.
+
+Options Signature
+	•	Near-ATM 0DTE volume clusters rapidly.
+	•	Directional skew emerges (calls or puts dominate near spot).
+	•	IV begins expanding after the reclaim, not before.
+
+Why Convexity Explodes
+	•	Dealers reposition as price crosses VWAP.
+	•	Gamma sensitivity is highest near spot late-day.
+	•	Small spot move → large delta flip.
+
+Failure Mode
+	•	VWAP reclaim without volume.
+	•	Price re-crosses VWAP multiple times (chop trap).
+
+⸻
+
+2) STRIKE MAGNET PIN → LATE BREAK
+
+(The “All Day Nothing, Then Everything”)
+
+Context
+	•	Price pins near a heavy 0DTE strike most of the day.
+	•	Low realized volatility, compressed range.
+
+Structural Signature
+	•	Price escapes the pin late-day with acceleration.
+	•	Breaks away from strike by >X% of expected move.
+
+Options Signature
+	•	Massive OI/volume at pinned strike.
+	•	Sudden decay in pin strike volume as flow shifts to next strike.
+
+Why Convexity Explodes
+	•	Pinning suppresses volatility.
+	•	Once broken, gamma hedging flips direction rapidly.
+
+Failure Mode
+	•	Fake breaks that snap back into pin.
+	•	Occurs too early in the day (pin not “mature”).
+
+⸻
+
+3) AFTERNOON RANGE EXPANSION (ARE)
+
+(Pure Volatility Expansion Play)
+
+Context
+	•	Morning and midday are compressed.
+	•	No directional conviction until afternoon.
+
+Structural Signature
+	•	First meaningful range expansion after 1–2pm ET.
+	•	Expansion holds for multiple bars.
+
+Options Signature
+	•	Sudden surge in 0DTE volume across multiple near strikes.
+	•	IV expansion coincides with realized volatility.
+
+Why Convexity Explodes
+	•	Market reprices volatility late.
+	•	Options were underpriced relative to realized move.
+
+Failure Mode
+	•	One-bar expansion with no continuation.
+	•	Volume spike without follow-through.
+
+⸻
+
+4) LIQUIDITY SWEEP + REVERSAL
+
+(The Stop-Hunt Snapback)
+
+Context
+	•	Price hovers near a key high/low all day.
+	•	Stops are visibly stacked beyond the level.
+
+Structural Signature
+	•	Quick sweep beyond the level.
+	•	Immediate snapback with volume acceleration.
+
+Options Signature
+	•	Burst of 0DTE volume immediately after the sweep.
+	•	Skew flips quickly.
+
+Why Convexity Explodes
+	•	Stops trigger liquidity.
+	•	Reversal creates urgency + gamma response.
+
+Failure Mode
+	•	Sweep continues (trend day instead of reversal).
+	•	No snapback volume.
+
+⸻
+
+5) NEWS-ASSISTED GAMMA IGNITION
+
+(Headline + Structure Alignment)
+
+Context
+	•	Market is technically primed (levels, pressure).
+	•	News arrives after structure is ready.
+
+Structural Signature
+	•	News aligns with break/reclaim already forming.
+	•	Immediate acceleration rather than hesitation.
+
+Options Signature
+	•	Explosion in near-ATM volume seconds/minutes after headline.
+	•	IV jumps but delta response dominates.
+
+Why Convexity Explodes
+	•	Dealers hedge fast.
+	•	Late-day time compression amplifies delta/gamma.
+
+Failure Mode
+	•	News fades without technical confirmation.
+	•	IV spike without spot movement.
+
+⸻
+
+6) POWER-HOUR TREND CONTINUATION
+
+(The “It Just Keeps Going”)
+
+Context
+	•	Clear intraday trend established earlier.
+	•	Consolidation or pullback into afternoon.
+
+Structural Signature
+	•	Trend resumes after consolidation.
+	•	Breaks minor resistance/support with volume.
+
+Options Signature
+	•	Consistent call/put dominance all day.
+	•	Late surge in same-direction 0DTE volume.
+
+Why Convexity Explodes
+	•	Trend followers pile in late.
+	•	Gamma remains directional into close.
+
+Failure Mode
+	•	Trend exhaustion.
+	•	Volume fades on continuation attempt.
+
+⸻
+
+7) FALSE BREAK TRAP → REAL MOVE
+
+(The Double Bluff)
+
+Context
+	•	Market attempts breakout earlier, fails.
+	•	Participants become skeptical.
+
+Structural Signature
+	•	Second attempt later-day succeeds decisively.
+	•	Much stronger volume than first attempt.
+
+Options Signature
+	•	Early fake move has scattered volume.
+	•	Real move shows tight clustering and urgency.
+
+Why Convexity Explodes
+	•	Traders reposition after being trapped.
+	•	Dealers caught wrong-footed.
+
+Failure Mode
+	•	Second break also fails (true chop day).
+
+⸻
+
+8) VOLATILITY REGIME SHIFT
+
+(From Dead to Alive)
+
+Context
+	•	Extremely low intraday volatility.
+	•	Options cheap relative to historical behavior.
+
+Structural Signature
+	•	Sudden sustained expansion in both range and volume.
+	•	Market behavior changes character.
+
+Options Signature
+	•	IV expansion lags the move initially.
+	•	Volume floods in as repricing occurs.
+
+Why Convexity Explodes
+	•	Market underestimates volatility until too late.
+	•	Convex instruments reprice violently.
+
+Failure Mode
+	•	One-off volatility spike.
+	•	No sustained regime change.
+
+⸻
+
+9) CROWD IGNITION + STRUCTURE CONFIRMATION
+
+(WSB-Style Acceleration, but Clean)
+
+Context
+	•	Rising social attention.
+	•	Crowd focuses on a small set of tickers.
+
+Structural Signature
+	•	Technical break occurs after crowd attention rises.
+	•	Not before.
+
+Options Signature
+	•	Surge in retail-sized 0DTE contracts.
+	•	Liquidity still sufficient (not total chaos).
+
+Why Convexity Explodes
+	•	Retail urgency + dealer hedging collide.
+	•	Late-day time decay amplifies delta shifts.
+
+Failure Mode
+	•	Crowd-only move without structure.
+	•	Illiquid contracts → bad fills (in real life).
+
+⸻
+
+10) END-OF-DAY MEAN REVERSION SNAP
+
+(The “They Overdid It”)
+
+Context
+	•	Strong intraday move stretches too far.
+	•	Market statistically extended.
+
+Structural Signature
+	•	Loss of momentum near extreme.
+	•	Sharp reversal toward VWAP or mean.
+
+Options Signature
+	•	Spike in opposite-direction near-ATM volume.
+	•	Implied volatility remains elevated (fuel for snap).
+
+Why Convexity Explodes
+	•	Price travels fast back toward mean.
+	•	Gamma works both ways late-day.
+
+Failure Mode
+	•	Trend day that never reverts.
+	•	Reversal without speed.
+
+⸻
+
+🧠 Why These Families Matter (Meta-Insight)
+
+The $800 → $40k stories don’t come from randomness.
+They come from rare alignment of:
+	•	late-day timing,
+	•	convex instruments,
+	•	structure breaks,
+	•	and positioning pressure.
+
+A real engine doesn’t chase trades — it classifies moments into families and learns:
+	•	which families work,
+	•	on which tickers,
+	•	in which regimes,
+	•	at which times.
+
+
+Premise
+
+The market does not reward “setups.”
+It rewards setup families that are alive in the current regime.
+
+So the engine’s real job is not:
+
+“Is this a good setup?”
+
+It is:
+
+“Is this species viable right now?”
+
+⸻
+
+I. FAMILY-SPECIFIC PROBABILITY CURVES
+
+(Each family has its own mathematical fingerprint)
+
+Forget one universal probability model.
+Each family owns a distinct curve across time, volatility, and structure.
+
+Think of it like this:
+
+Each setup family has:
+	•	a probability density function over time
+	•	a decay rate
+	•	a failure acceleration profile
+
+Example archetypes:
+
+1️⃣ VWAP Reclaim + Gamma Snap
+	•	Probability curve:
+	•	Low early
+	•	Explodes after confirmation
+	•	Collapses violently if VWAP is lost again
+	•	Time sensitivity:
+	•	Strong in power hour
+	•	Weak outside time compression
+	•	Shape:
+	•	Sharp spike, narrow window
+
+2️⃣ Strike Magnet Pin → Break
+	•	Probability curve:
+	•	Flat for hours
+	•	Then step-function jump
+	•	Time sensitivity:
+	•	Requires “pin maturity”
+	•	Shape:
+	•	Binary (nothing → everything)
+
+3️⃣ Range Expansion (ARE)
+	•	Probability curve:
+	•	Gradual slope
+	•	Wide usable window
+	•	Time sensitivity:
+	•	Less strict
+	•	Shape:
+	•	Fat tail, slower decay
+
+👉 The engine never compares setups directly.
+It compares where each family is on its own curve.
+
+⸻
+
+II. DYNAMIC FAMILY RANKING
+
+(The market is a food chain)
+
+At any moment, families are ranked, not equal.
+
+Ranking dimensions (conceptual):
+	1.	Regime compatibility
+	2.	Time alignment
+	3.	Liquidity friendliness
+	4.	Convexity potential
+	5.	False-positive rate (recent memory)
+
+The engine builds a live leaderboard:
+
+Rank	Family	Alive?	Notes
+1	VWAP Reclaim	🔥	Trend regime + power hour
+2	Liquidity Sweep	🟡	Needs confirmation
+3	Crowd Ignition	❌	Retail noise, no structure
+
+
+Only top-ranked living families are even allowed to express signals.
+
+Everything else is ignored — not debated.
+
+⸻
+
+III. HOW A FAMILY “DIES”
+
+(This is the most important part)
+
+Families don’t fail randomly.
+They die of environmental mismatch.
+
+Death Signals (Conceptual):
+
+🧊 1. Regime Poisoning
+	•	Chop regime kills:
+	•	Breakout families
+	•	Trend continuation
+	•	Trend regime kills:
+	•	Mean reversion snaps
+
+The engine marks families as toxic in incompatible regimes.
+
+⸻
+
+🕰️ 2. Time Window Miss
+Each family has:
+	•	a minimum viable time
+	•	a maximum survivable delay
+
+If the window passes:
+	•	probability collapses
+	•	theta wins
+	•	family is declared expired
+
+Expired ≠ bad.
+Expired = no longer convex.
+
+⸻
+
+🔄 3. Repetition Exhaustion
+If a family triggers repeatedly in short succession:
+	•	marginal edge decays
+	•	participants adapt
+	•	liquidity thins
+
+The engine tracks signal saturation.
+
+Too many attempts → family enters cooldown.
+
+⸻
+
+🧠 4. Memory Veto
+The Memory Warden keeps scars.
+
+If:
+	•	last N instances failed
+	•	under similar conditions
+	•	with similar features
+
+The family is temporarily blacklisted.
+
+This is how the engine learns fear without emotion.
+
+⸻
+
+IV. ASYMMETRIC VS CONSISTENT FAMILIES
+
+(The $800 → $40k truth)
+
+Not all families are meant to be “profitable.”
+
+They serve different purposes.
+
+⸻
+
+🧨 ASYMMETRIC FAMILIES
+
+Low hit rate. Extreme payoff.
+
+Traits:
+	•	Require rare alignment
+	•	Explode under time compression
+	•	Most instances fail quietly
+	•	One success dominates the P&L curve
+
+Examples:
+	•	Strike magnet break
+	•	News-assisted gamma ignition
+	•	Late-day volatility regime shift
+
+These families are:
+	•	dangerous
+	•	powerful
+	•	never scaled blindly
+
+The engine treats them like explosives.
+
+⸻
+
+⚙️ CONSISTENT FAMILIES
+
+Higher hit rate. Moderate payoff.
+
+Traits:
+	•	Work across many days
+	•	Lower convexity
+	•	Smaller variance
+	•	Reliable expectancy
+
+Examples:
+	•	VWAP reclaim continuation
+	•	Trend pullback resumes
+	•	Mean reversion snaps in known regimes
+
+These families build confidence and data.
+
+⸻
+
+The key insight:
+
+You don’t blend these.
+You rotate exposure based on regime.
+
+Asymmetric families dominate rare days.
+Consistent families dominate most days.
+
+⸻
+
+V. THE FAMILY ROTATION ENGINE
+
+(This is where systems become predatory)
+
+The engine maintains a Family Viability Matrix:
+
+Dimensions:
+	•	Regime
+	•	Time of day
+	•	Volatility state
+	•	Liquidity
+	•	Recent outcomes
+
+Each family has a viability score ∈ [0, 1].
+
+Only families above a threshold are:
+	•	monitored closely
+	•	allowed to escalate
+	•	allowed to “strike” (paper-theoretically)
+
+Others remain dormant.
+
+This prevents:
+	•	forcing setups
+	•	revenge logic
+	•	nostalgia bias
+
+⸻
+
+VI. WHY THIS STRUCTURE CREATES “MYTHIC” DAYS
+
+Those legendary outcomes happen when:
+	1.	An asymmetric family
+	2.	Is alive
+	3.	In the correct regime
+	4.	At the exact time compression window
+	5.	With structure + pressure aligned
+	6.	And no competing families active
+
+That’s when the engine doesn’t hesitate — because everything else is silent.
+
