@@ -43,6 +43,7 @@ from wsb_snake.engines.inception_detector import (
 )
 from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.collectors.polygon_options import polygon_options
+from wsb_snake.collectors.reddit_collector import get_wsb_trending, get_wsb_catalysts
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -93,6 +94,24 @@ class SnakeOrchestrator:
         }
         
         try:
+            # Stage 0: Scan Reddit WSB for trending tickers and catalysts
+            log.info("Stage 0: Scanning Reddit r/wallstreetbets...")
+            try:
+                wsb_trending = get_wsb_trending()
+                wsb_catalysts = get_wsb_catalysts()
+                results["wsb_trending"] = wsb_trending
+                results["wsb_catalysts"] = wsb_catalysts
+                
+                if wsb_trending:
+                    trending_str = ", ".join([f"{t['ticker']}({t['mentions']})" for t in wsb_trending[:5]])
+                    log.info(f"   WSB Trending: {trending_str}")
+                if wsb_catalysts:
+                    log.info(f"   WSB Catalysts: {len(wsb_catalysts)} detected")
+            except Exception as e:
+                log.warning(f"   WSB scan error: {e}")
+                results["wsb_trending"] = []
+                results["wsb_catalysts"] = []
+            
             # Stage 1: Run all detection engines in sequence
             log.info("Stage 1: Running detection engines...")
             

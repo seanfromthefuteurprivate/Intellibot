@@ -28,6 +28,7 @@ from wsb_snake.utils.session_regime import (
 )
 from wsb_snake.collectors.alpaca_news import alpaca_news
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
+from wsb_snake.collectors.reddit_collector import get_wsb_sentiment, get_wsb_trending
 
 
 class IgnitionType(Enum):
@@ -295,6 +296,38 @@ class IgnitionDetector:
                     evidence.append("MACD bearish histogram")
         except Exception:
             pass
+        
+        # WSB Reddit Sentiment Boost (0-20 points)
+        try:
+            wsb_data = get_wsb_sentiment(ticker)
+            if wsb_data and wsb_data.get("mentions", 0) > 0:
+                mentions = wsb_data.get("mentions", 0)
+                sentiment = wsb_data.get("overall_sentiment", "mixed")
+                heat_score = wsb_data.get("heat_score", 0)
+                bullish_ratio = wsb_data.get("bullish_ratio", 0.5)
+                
+                # Mentions boost (0-10 points)
+                mention_boost = min(10, mentions * 2)
+                score += mention_boost
+                evidence.append(f"WSB mentions: {mentions}")
+                
+                # Sentiment alignment boost (0-10 points)
+                if sentiment == "bullish" and change_pct > 0:
+                    score += 10
+                    evidence.append(f"WSB bullish sentiment ({bullish_ratio:.0%})")
+                elif sentiment == "bearish" and change_pct < 0:
+                    score += 10
+                    evidence.append(f"WSB bearish sentiment ({1-bullish_ratio:.0%})")
+                elif sentiment != "no_data":
+                    score += 3
+                    evidence.append(f"WSB active: {sentiment}")
+                
+                # DD post boost
+                if wsb_data.get("dd_posts", 0) > 0:
+                    score += 5
+                    evidence.append(f"WSB DD posts: {wsb_data.get('dd_posts')}")
+        except Exception as e:
+            log.debug(f"WSB sentiment unavailable for {ticker}: {e}")
         
         return score, ignition_type, evidence
     

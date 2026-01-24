@@ -31,7 +31,7 @@ def send_startup_ping():
     
     session_info = get_session_info()
     
-    message = f"""🐍 **WSB SNAKE v2.1 ONLINE**
+    message = f"""🐍 **WSB SNAKE v2.2 ONLINE**
 
 **0DTE Intelligence Engine Activated**
 
@@ -43,6 +43,7 @@ def send_startup_ping():
 • Engine 5: Self-Learning Memory
 • Engine 6: Paper Shadow Trader
 • 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
+• 📱 Reddit r/wallstreetbets: LIVE SCRAPING
 
 📊 **Session Status:**
 • Session: {session_info['session'].upper()}
@@ -52,7 +53,7 @@ def send_startup_ping():
 
 🎯 **Monitoring:** SPY, QQQ, IWM + TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 
-⚡ Pipeline + AI chart analysis running continuously.
+⚡ Pipeline + AI charts + WSB sentiment running continuously.
 """
     
     send_alert(message)
