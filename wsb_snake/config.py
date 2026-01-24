@@ -12,10 +12,40 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "python:wsb-snake:v1.0")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Alpaca (Paper Trading)
+# Alpaca (Paper Trading + News)
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_DATA_URL = "https://data.alpaca.markets"
+ALPACA_NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Polygon.io (Options Chain Data)
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+POLYGON_BASE_URL = "https://api.polygon.io"
+
+# Benzinga (News)
+BENZINGA_API_KEY = os.getenv("BENZINGA_API_KEY")
+BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
+
+# 0DTE Universe - Tickers to monitor for options activity
+ZERO_DTE_UNIVERSE = [
+    "SPY", "QQQ", "IWM",  # ETFs
+    "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT"  # Mega caps
+]
+
+# Session time windows (Eastern Time)
+SESSION_WINDOWS = {
+    "premarket": (4, 0, 9, 30),      # 4:00 AM - 9:30 AM ET
+    "open": (9, 30, 10, 30),          # 9:30 AM - 10:30 AM ET (first hour)
+    "morning": (10, 30, 12, 0),       # 10:30 AM - 12:00 PM ET
+    "lunch": (12, 0, 13, 0),          # 12:00 PM - 1:00 PM ET (chop zone)
+    "power_hour_early": (13, 0, 15, 0),  # 1:00 PM - 3:00 PM ET
+    "power_hour": (15, 0, 16, 0),     # 3:00 PM - 4:00 PM ET (final hour)
+    "afterhours": (16, 0, 20, 0),     # 4:00 PM - 8:00 PM ET
+}
+
+# Database
+DB_PATH = "wsb_snake.db"
