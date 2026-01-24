@@ -38,6 +38,10 @@ from wsb_snake.engines.family_classifier import (
     family_classifier, classify_setup, get_leaderboard,
     record_family_signal, SetupFamily, FamilyLifecycle
 )
+from wsb_snake.engines.inception_detector import (
+    inception_detector, detect_inception, InceptionState, InstabilityState
+)
+from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -255,6 +259,61 @@ class SnakeOrchestrator:
                     if fam.get("lifecycle") in ["alive", "peaked"]:
                         log.info(f"   🎯 {ticker}: {fam.get('family')} is {fam.get('lifecycle')} (viability={fam.get('viability_score'):.2f})")
             
+            # Stage 2.7: Inception Detection (Convex Instability)
+            log.info("Stage 2.7: Running Inception Detection...")
+            results["inception_states"] = []
+            
+            for ticker in all_tickers_with_signals:
+                try:
+                    ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                    pressure = next((s for s in results["pressure_signals"] if s.get("ticker") == ticker), None)
+                    prob = next((p for p in results["probabilities"] if p.get("ticker") == ticker), None)
+                    
+                    current_price = prob.get("entry_price", 0) if prob else 0
+                    
+                    if current_price <= 0:
+                        continue
+                    
+                    price_bars = ignition.get("price_bars", []) if ignition else []
+                    current_volume = ignition.get("volume", 0) if ignition else 0
+                    
+                    ticker_changes = {}
+                    for t in ["SPY", "QQQ", "IWM", "VIX"]:
+                        sig = next((s for s in results["ignition_signals"] if s.get("ticker") == t), None)
+                        if sig:
+                            ticker_changes[t] = sig.get("change_pct", 0)
+                    
+                    options_data = None
+                    try:
+                        options_data = polygon_options.get_full_options_analysis(ticker, current_price)
+                    except Exception as e:
+                        log.debug(f"Options analysis unavailable for {ticker}: {e}")
+                    
+                    inception_state = detect_inception(
+                        ticker=ticker,
+                        price_bars=price_bars,
+                        current_price=current_price,
+                        current_volume=current_volume,
+                        ticker_changes=ticker_changes,
+                        options_data=options_data,
+                        related_tickers=ticker_changes,
+                    )
+                    
+                    results["inception_states"].append(inception_state.to_dict())
+                    
+                    if inception_state.inception_detected:
+                        log.warning(f"🌀 INCEPTION: {ticker} | Index={inception_state.instability_index:.2f} | Confidence={inception_state.inception_confidence:.2%}")
+                        
+                        if self._should_send_alert(ticker):
+                            self._send_inception_alert(ticker, inception_state, options_data, session_info)
+                            results["alerts_sent"] += 1
+                            
+                except Exception as e:
+                    log.warning(f"Inception detection failed for {ticker}: {e}")
+            
+            inception_count = len([s for s in results["inception_states"] if s.get("inception_detected")])
+            log.info(f"   Inception detections: {inception_count}")
+            
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")
             for prob in results["probabilities"]:
@@ -441,6 +500,65 @@ Minutes to close: {mins_to_close:.0f}"""
             log.info(f"Alert sent for {ticker}")
         except Exception as e:
             log.error(f"Failed to send alert: {e}")
+    
+    def _send_inception_alert(
+        self,
+        ticker: str,
+        inception_state: InceptionState,
+        options_data: Optional[Dict],
+        session_info: Dict
+    ) -> None:
+        """Send Telegram alert for inception (convex instability) detection."""
+        message = f"""🌀 **INCEPTION DETECTED — ${ticker}**
+Instability Index: {inception_state.instability_index:.2f}
+Confidence: {inception_state.inception_confidence:.0%}
+State: {inception_state.instability_state.value.upper()}
+
+🔬 **Sensor Readings**
+• Event Horizon: {inception_state.event_horizon.sensitivity_score:.2f}
+• Correlation Fracture: {inception_state.correlation_fracture.fracture_score:.2f}
+• Liquidity Fragility: {inception_state.liquidity_elasticity.fragility_score:.2f}
+• Temporal Distortion: {inception_state.temporal_anomaly.time_distortion_score:.2f}
+• Attention Surge: {inception_state.attention_surge.attention_acceleration:.2f}
+
+⚠️ **Signals**"""
+        
+        for signal in inception_state.signals[:5]:
+            message += f"\n• {signal}"
+        
+        if options_data and options_data.get("has_data"):
+            gex = options_data.get("gex", {})
+            max_pain = options_data.get("max_pain", {})
+            
+            message += f"""
+
+📊 **Options Structure**
+• GEX Regime: {gex.get('gex_regime', 'unknown').upper()}
+• Max Pain: ${max_pain.get('max_pain_strike', 0):.0f} ({max_pain.get('distance_pct', 0):.1f}% away)"""
+            
+            walls = options_data.get("volume_walls", {})
+            if walls.get("nearest_resistance"):
+                message += f"\n• Resistance Wall: ${walls['nearest_resistance']:.0f}"
+            if walls.get("nearest_support"):
+                message += f"\n• Support Wall: ${walls['nearest_support']:.0f}"
+        
+        mins_to_close = session_info.get("minutes_to_close", 0)
+        
+        message += f"""
+
+⏰ **Timing**
+Minutes to close: {mins_to_close:.0f}
+
+💡 **Interpretation**
+This is a phase transition detection — small moves may create outsized effects. 
+The market is entering a state of convex instability."""
+        
+        try:
+            send_telegram_alert(message)
+            self.alerts_sent_today[ticker] = datetime.utcnow()
+            log.info(f"Inception alert sent for {ticker}")
+        except Exception as e:
+            log.error(f"Failed to send inception alert: {e}")
     
     def _get_current_prices(self, probabilities: List[Dict]) -> Dict[str, float]:
         """Extract current prices from probability outputs."""
