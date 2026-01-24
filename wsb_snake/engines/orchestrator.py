@@ -34,6 +34,10 @@ from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.paper_trader import paper_trader
 from wsb_snake.engines.state_machine import state_machine, update_state, should_strike, get_venom_report
 from wsb_snake.engines.probability_engine import probability_engine, get_chop_score, should_block, get_target_levels
+from wsb_snake.engines.family_classifier import (
+    family_classifier, classify_setup, get_leaderboard,
+    record_family_signal, SetupFamily, FamilyLifecycle
+)
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -76,6 +80,8 @@ class SnakeOrchestrator:
             "pressure_signals": [],
             "surge_signals": [],
             "probabilities": [],
+            "family_classifications": [],
+            "family_leaderboard": [],
             "alerts_sent": 0,
             "paper_trades": 0,
             "errors": [],
@@ -215,6 +221,40 @@ class SnakeOrchestrator:
                 
                 log.debug(f"State: {ticker} -> {state.get('state')} | P(hit)={p_hit:.2%}")
             
+            # Stage 2.6: Classify setups into families
+            log.info("Stage 2.6: Classifying setups into families...")
+            
+            # Get market regime for family classification
+            from wsb_snake.engines.pressure_engine import get_market_regime
+            regime_data = get_market_regime()
+            current_regime = regime_data.get("regime", "neutral")
+            
+            # Get family leaderboard first
+            results["family_leaderboard"] = get_leaderboard(current_regime)
+            alive_families = [f for f in results["family_leaderboard"] if f.get("alive")]
+            log.info(f"   Family Leaderboard: {len(alive_families)} alive of {len(results['family_leaderboard'])}")
+            
+            # Classify each ticker into families
+            for ticker in all_tickers_with_signals:
+                ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                pressure = next((s for s in results["pressure_signals"] if s.get("ticker") == ticker), None)
+                surge = next((s for s in results["surge_signals"] if s.get("ticker") == ticker), None)
+                
+                families = classify_setup(
+                    ticker=ticker,
+                    regime=current_regime,
+                    ignition_signal=ignition,
+                    pressure_signal=pressure,
+                    surge_signal=surge,
+                )
+                
+                for fam in families:
+                    fam["ticker"] = ticker
+                    results["family_classifications"].append(fam)
+                    
+                    if fam.get("lifecycle") in ["alive", "peaked"]:
+                        log.info(f"   🎯 {ticker}: {fam.get('family')} is {fam.get('lifecycle')} (viability={fam.get('viability_score'):.2f})")
+            
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")
             for prob in results["probabilities"]:
@@ -234,6 +274,10 @@ class SnakeOrchestrator:
                 else:
                     tier = "C"
                 
+                # Get family classification for this ticker
+                ticker_families = [f for f in results["family_classifications"] if f.get("ticker") == ticker]
+                top_family = ticker_families[0] if ticker_families else None
+                
                 # Save signal to database
                 signal_data = {
                     "ticker": ticker,
@@ -250,6 +294,8 @@ class SnakeOrchestrator:
                         "pressure_score": prob.get("pressure_score"),
                         "surge_score": prob.get("surge_score"),
                         "direction": prob.get("direction"),
+                        "family": top_family.get("family") if top_family else None,
+                        "family_viability": top_family.get("viability_score") if top_family else 0,
                     },
                     "evidence": prob.get("bull_thesis", []) + prob.get("bear_thesis", []),
                 }
@@ -257,18 +303,33 @@ class SnakeOrchestrator:
                 prob["signal_id"] = signal_id
                 
                 # Send alerts for A+ and A tier - but only if state machine says STRIKE
+                # AND family is alive (viable)
                 if tier in ["A+", "A"]:
                     # Check if state machine has reached STRIKE state
-                    if should_strike(ticker):
-                        log.info(f"🐍 STRIKE STATE: {ticker} - sending alert!")
+                    family_alive = top_family and top_family.get("lifecycle") in ["alive", "peaked"]
+                    
+                    if should_strike(ticker) and family_alive:
+                        family_name = top_family.get("family", "unknown") if top_family else "unknown"
+                        log.info(f"🐍 STRIKE STATE: {ticker} ({family_name}) - sending alert!")
+                        
                         if self._should_send_alert(ticker):
+                            # Add family info to probability for alert
+                            prob["setup_family"] = family_name
+                            prob["family_viability"] = top_family.get("viability_score", 0) if top_family else 0
+                            
                             self._send_alert(prob, tier, session_info)
                             results["alerts_sent"] += 1
+                            
+                            # Record family signal for learning
+                            record_family_signal(ticker, family_name)
                             
                             # Paper trade high-conviction signals
                             position = paper_trader.evaluate_signal(prob)
                             if position:
                                 results["paper_trades"] += 1
+                    elif should_strike(ticker):
+                        # State machine ready but no viable family
+                        log.info(f"👁️ WATCH: {ticker} score {score:.0f} - no viable family")
                     else:
                         # State machine not ready - log as watch
                         log.info(f"👁️ WATCH: {ticker} score {score:.0f} - awaiting state escalation")
@@ -291,6 +352,7 @@ class SnakeOrchestrator:
             log.info(f"   Pressure signals: {len(results['pressure_signals'])}")
             log.info(f"   Surge signals: {len(results['surge_signals'])}")
             log.info(f"   Probabilities: {len(results['probabilities'])}")
+            log.info(f"   Alive families: {len([f for f in results['family_classifications'] if f.get('lifecycle') in ['alive', 'peaked']])}")
             log.info(f"   Alerts sent: {results['alerts_sent']}")
             log.info(f"   Paper trades: {results['paper_trades']}")
             log.info("=" * 50)

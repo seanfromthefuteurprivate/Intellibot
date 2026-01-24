@@ -9,6 +9,7 @@ WSB Snake is a production-grade 0DTE options intelligence engine implementing th
 - **Phase 3:** 0DTE Intelligence Engine ✅ COMPLETE (6 engines built)
 - **Phase 4:** Enhanced Technical Analysis ✅ COMPLETE (RSI, MACD, SMA, EMA)
 - **Phase 5:** Rattlesnake Pattern ✅ COMPLETE (State Machine + Probability Engine + Chop Filter)
+- **Phase 6:** Setup Family Classifier ✅ COMPLETE (10 0DTE families + viability matrix)
 
 ## Architecture
 
@@ -27,8 +28,9 @@ wsb_snake/
 │   └── market_data.py         # Alpaca market data
 ├── engines/
 │   ├── orchestrator.py        # Coordinates all engines
-│   ├── state_machine.py       # NEW: LURK→COILED→RATTLE→STRIKE→CONSTRICT
-│   ├── probability_engine.py  # NEW: P(hit target by close) + Chop Kill
+│   ├── state_machine.py       # LURK→COILED→RATTLE→STRIKE→CONSTRICT→VENOM
+│   ├── probability_engine.py  # P(hit target by close) + Chop Kill
+│   ├── family_classifier.py   # NEW: 10 0DTE setup families + viability matrix
 │   ├── ignition_detector.py   # Engine 1: Enhanced with RSI/MACD
 │   ├── pressure_engine.py     # Engine 2: Technical + strike structure
 │   ├── surge_hunter.py        # Engine 3: Power hour setups
@@ -97,6 +99,56 @@ Blocks signals in choppy, fake-breakout conditions:
 | VWAP Crossings | 30 | Many crosses = whipsaw |
 
 **Block threshold**: Score ≥60
+
+## The 10 Setup Families
+
+Each "family" describes a distinct 0DTE setup archetype with unique probability curves:
+
+| # | Family | Type | Peak Hour | Description |
+|---|--------|------|-----------|-------------|
+| 1 | **VWAP Reclaim + Gamma Snap** | Consistent | 3pm ET | Price reclaims VWAP late-day with volume |
+| 2 | **Strike Magnet Pin → Break** | Asymmetric | 3pm ET | Price escapes heavy OI pin late-day |
+| 3 | **Afternoon Range Expansion** | Consistent | 2pm ET | First meaningful expansion after compression |
+| 4 | **Liquidity Sweep + Reversal** | Asymmetric | 3pm ET | Stop-hunt snapback with volume |
+| 5 | **News-Assisted Gamma Ignition** | Asymmetric | 3pm ET | Headline + structure alignment |
+| 6 | **Power-Hour Trend Continuation** | Consistent | 3pm ET | Trend resumes after consolidation |
+| 7 | **False Break Trap → Real Move** | Asymmetric | 3pm ET | Second attempt succeeds after failed first |
+| 8 | **Volatility Regime Shift** | Asymmetric | 3pm ET | Dead→alive volatility expansion |
+| 9 | **Crowd Ignition + Structure** | Asymmetric | 3pm ET | Social attention + technical break |
+| 10 | **Mean Reversion Snap** | Consistent | 3pm ET | Extended move snaps back to mean |
+
+### Family Viability Matrix
+
+The engine maintains a live ranking of families based on:
+- **Regime Compatibility**: Which families work in current market conditions
+- **Time Alignment**: Each family has optimal time windows
+- **Volatility State**: Some families thrive in low-vol, others need expansion
+- **Memory Veto**: Recent failure rate affects viability
+- **Saturation**: Too many signals → family enters cooldown
+
+### Asymmetric vs Consistent Families
+
+| Type | Hit Rate | Payoff | Strategy |
+|------|----------|--------|----------|
+| **Asymmetric** | Low | Extreme | Rare alignment, explosive outcomes |
+| **Consistent** | Higher | Moderate | Work across many days |
+
+### Family Lifecycle States
+
+| State | Description |
+|-------|-------------|
+| DORMANT | Not currently viable |
+| AWAKENING | Viability rising |
+| ALIVE | Conditions building, monitoring active |
+| PEAKED | All conditions met, maximum probability |
+| DYING | Viability declining |
+| DEAD | Time window expired or regime poisoned |
+| COOLDOWN | Repetition exhaustion, waiting to reset |
+
+**Key Insight**: Alerts only fire when:
+1. State machine reaches STRIKE
+2. Probability engine confirms P(hit) threshold
+3. Family is ALIVE or PEAKED (viable)
 
 ## The 6 Core Engines
 
@@ -236,7 +288,13 @@ Minutes to close: 45
 **model_weights** - Adaptive feature weights
 
 ## Recent Changes
-- **2026-01-24 (Latest):** Implemented Rattlesnake Pattern
+- **2026-01-24 (Latest):** Implemented Setup Family Classifier
+  - Added 10 0DTE setup families with unique probability curves
+  - Built Family Viability Matrix (regime/time/volatility ranking)
+  - Added family lifecycle management (death conditions, cooldowns, memory veto)
+  - Integrated family classification into orchestrator pipeline
+  - Alerts now require viable family + STRIKE state + P(hit) threshold
+- 2026-01-24: Implemented Rattlesnake Pattern
   - Added formal State Machine (LURK→COILED→RATTLE→STRIKE→CONSTRICT→VENOM)
   - Added Probability Engine with P(hit target by close) calculations
   - Added Chop Kill filter to block fake breakout signals
