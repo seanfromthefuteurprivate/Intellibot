@@ -12,16 +12,14 @@ import os
 import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
+from wsb_snake.utils.logger import log
 
 try:
     import finnhub
     FINNHUB_AVAILABLE = True
 except ImportError:
     FINNHUB_AVAILABLE = False
-    logger.warning("finnhub-python not installed")
+    log.warning("finnhub-python not installed")
 
 
 class FinnhubCollector:
@@ -40,10 +38,10 @@ class FinnhubCollector:
         
         if FINNHUB_AVAILABLE and self.api_key:
             self.client = finnhub.Client(api_key=self.api_key)
-            logger.info("Finnhub collector initialized")
+            log.info("Finnhub collector initialized")
         else:
             if not self.api_key:
-                logger.warning("FINNHUB_API_KEY not set - collector disabled")
+                log.warning("FINNHUB_API_KEY not set - collector disabled")
     
     def _rate_limit(self):
         """Ensure we don't exceed 60 calls/min"""
@@ -122,11 +120,11 @@ class FinnhubCollector:
             }
             
             self._set_cache(cache_key, result)
-            logger.debug(f"Finnhub news sentiment for {ticker}: {avg_sentiment:.2f} ({len(news)} articles)")
+            log.debug(f"Finnhub news sentiment for {ticker}: {avg_sentiment:.2f} ({len(news)} articles)")
             return result
             
         except Exception as e:
-            logger.warning(f"Finnhub news sentiment error for {ticker}: {e}")
+            log.warning(f"Finnhub news sentiment error for {ticker}: {e}")
             return {"sentiment": 0, "buzz": 0, "articles": 0, "source": "error"}
     
     def _analyze_headline_sentiment(self, text: str) -> float:
@@ -216,11 +214,11 @@ class FinnhubCollector:
             }
             
             self._set_cache(cache_key, result)
-            logger.debug(f"Finnhub social sentiment for {ticker}: score={score:.3f}, mentions={total_mentions}")
+            log.debug(f"Finnhub social sentiment for {ticker}: score={score:.3f}, mentions={total_mentions}")
             return result
             
         except Exception as e:
-            logger.warning(f"Finnhub social sentiment error for {ticker}: {e}")
+            log.warning(f"Finnhub social sentiment error for {ticker}: {e}")
             return {"score": 0, "mentions": 0, "positive_ratio": 0.5, "source": "error"}
     
     def get_insider_sentiment(self, ticker: str) -> Dict:
@@ -267,11 +265,11 @@ class FinnhubCollector:
             }
             
             self._set_cache(cache_key, result)
-            logger.debug(f"Finnhub insider sentiment for {ticker}: MSPR={avg_mspr:.2f}")
+            log.debug(f"Finnhub insider sentiment for {ticker}: MSPR={avg_mspr:.2f}")
             return result
             
         except Exception as e:
-            logger.warning(f"Finnhub insider sentiment error for {ticker}: {e}")
+            log.warning(f"Finnhub insider sentiment error for {ticker}: {e}")
             return {"mspr": 0, "change": 0, "buying": False, "source": "error"}
     
     def get_all_sentiment(self, ticker: str) -> Dict:
@@ -345,7 +343,7 @@ class FinnhubCollector:
             return 0
             
         except Exception as e:
-            logger.warning(f"Finnhub boost calculation error: {e}")
+            log.warning(f"Finnhub boost calculation error: {e}")
             return 0
 
 

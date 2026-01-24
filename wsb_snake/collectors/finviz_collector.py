@@ -10,9 +10,7 @@ import re
 import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
+from wsb_snake.utils.logger import log
 
 
 class FinvizCollector:
@@ -34,7 +32,7 @@ class FinvizCollector:
         self.last_call = 0
         self.min_interval = 2.0
         
-        logger.info("Finviz collector initialized")
+        log.info("Finviz collector initialized")
     
     def _rate_limit(self):
         """Be respectful with scraping"""
@@ -72,7 +70,7 @@ class FinvizCollector:
             response = self.session.get(url, timeout=10)
             
             if response.status_code != 200:
-                logger.warning(f"Finviz returned {response.status_code} for {ticker}")
+                log.warning(f"Finviz returned {response.status_code} for {ticker}")
                 return {"error": f"HTTP {response.status_code}"}
             
             html = response.text
@@ -83,7 +81,7 @@ class FinvizCollector:
             return data
             
         except Exception as e:
-            logger.warning(f"Finviz error for {ticker}: {e}")
+            log.warning(f"Finviz error for {ticker}: {e}")
             return {"error": str(e)}
     
     def _parse_stock_page(self, html: str, ticker: str) -> Dict:
@@ -252,7 +250,7 @@ class FinvizCollector:
                 return 0
                 
         except Exception as e:
-            logger.warning(f"Finviz boost calculation error: {e}")
+            log.warning(f"Finviz boost calculation error: {e}")
             return 0
 
 

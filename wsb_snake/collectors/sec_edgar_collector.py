@@ -9,9 +9,7 @@ import requests
 import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
+from wsb_snake.utils.logger import log
 
 
 CIK_MAPPING = {
@@ -47,7 +45,7 @@ class SECEdgarCollector:
         self.last_call = 0
         self.min_interval = 0.15
         
-        logger.info("SEC EDGAR collector initialized")
+        log.info("SEC EDGAR collector initialized")
     
     def _rate_limit(self):
         """SEC requires max 10 requests/second"""
@@ -89,7 +87,7 @@ class SECEdgarCollector:
             response = self.session.get(url, timeout=10)
             
             if response.status_code != 200:
-                logger.warning(f"SEC EDGAR returned {response.status_code} for {ticker}")
+                log.warning(f"SEC EDGAR returned {response.status_code} for {ticker}")
                 return {"filings": [], "error": f"HTTP {response.status_code}"}
             
             data = response.json()
@@ -117,11 +115,11 @@ class SECEdgarCollector:
             }
             
             self._set_cache(cache_key, result)
-            logger.debug(f"SEC EDGAR found {len(form4_filings)} Form 4 filings for {ticker}")
+            log.debug(f"SEC EDGAR found {len(form4_filings)} Form 4 filings for {ticker}")
             return result
             
         except Exception as e:
-            logger.warning(f"SEC EDGAR error for {ticker}: {e}")
+            log.warning(f"SEC EDGAR error for {ticker}: {e}")
             return {"filings": [], "error": str(e)}
     
     def get_insider_activity(self, ticker: str) -> Dict:
@@ -185,7 +183,7 @@ class SECEdgarCollector:
                 return 0
                 
         except Exception as e:
-            logger.warning(f"SEC EDGAR boost calculation error: {e}")
+            log.warning(f"SEC EDGAR boost calculation error: {e}")
             return 0
 
 
