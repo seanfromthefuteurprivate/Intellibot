@@ -101,7 +101,7 @@ class IgnitionDetector:
         self.alpaca_secret = ALPACA_SECRET_KEY
         
         # Cache for previous data points
-        self._price_cache: Dict[str, List[Dict]] = {}
+        self._price_cache: Dict[str, Any] = {}  # Can hold List[Dict] or List[float]
         self._volume_cache: Dict[str, float] = {}  # Average volumes
         
     def scan_universe(self) -> List[IgnitionSignal]:
