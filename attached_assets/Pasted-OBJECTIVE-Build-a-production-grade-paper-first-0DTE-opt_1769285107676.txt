@@ -1,0 +1,171 @@
+OBJECTIVE: Build a production-grade, paper-first 0DTE options intelligence engine for US markets that detects late-day volatility surges and “lottery-ticket” setups by fusing social chatter, market microstructure, options chain pressure, news catalysts, and technical regime filters. Output is a Telegram feed of ranked “Setups” with probability estimates, levels, and if/then trade plans. No live trading. Paper shadow simulation must run automatically and learn which setups work.
+
+1) Integrations and Keys (env vars only, no keys in code)
+
+Use environment variables only:
+	•	TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+	•	OPENAI_API_KEY
+	•	ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_BASE_URL
+	•	Options chain data provider (choose ONE and implement adapter pattern so it can be swapped later):
+	•	Preferred: Tradier OR Polygon OR Intrinio OR ORATS (if available)
+	•	Use env vars: OPTIONS_API_KEY (+ secret if required)
+	•	News provider (choose ONE): Benzinga (paid), Polygon News, Finnhub, or Alpaca News where available:
+	•	env vars: NEWS_API_KEY
+
+2) Runtime model
+	•	Runs as a long-lived daemon in Replit
+	•	Uses async tasks + scheduler
+	•	Has health checks and heartbeat messages to Telegram
+	•	Has robust retries/backoff on rate limits and transient failures
+	•	Logs to JSONL and uses SQLite for persistent state
+
+3) Data Inputs (must be implemented as modular adapters)
+
+A. Social
+	•	Reddit WSB ingestion (hot/new + comments; JSON or PRAW)
+	•	Optional: StockTwits trending symbols (if easy)
+Extract: tickers, 0DTE language, directional bias signals, urgency, “power hour” mentions.
+
+B. Market microstructure
+	•	Alpaca trades + quotes (or polling bars if streaming not stable)
+Compute: range expansion, volume acceleration, VWAP reclaim/lose, liquidity/spread proxy.
+
+C. Options intelligence
+Implement options chain snapshot polling for a small universe:
+	•	SPY, QQQ, IWM, TSLA, NVDA, AAPL, META, AMD (configurable)
+For 0DTE expiration only (or nearest expiry during market hours):
+Compute:
+	•	strike clustering by volume and OI
+	•	near-the-money pressure
+	•	call/put imbalance near spot
+	•	IV level and IV change
+	•	skew change (put wing vs call wing)
+	•	“late-day surge” detection: abrupt increase in 0DTE volume at specific strikes
+
+D. News & calendar
+	•	Headline ingestion
+	•	Earnings/calendar flags (at minimum: next earnings date for each ticker if available)
+	•	Macro calendar awareness (optional minimal stub)
+
+E. Chart state
+Compute technical features from bars (no chart images required initially):
+	•	trend/range regime classifier
+	•	VWAP + anchored VWAP
+	•	key levels: day high/low, premarket high/low, prior day high/low
+	•	compression detection (ATR contraction)
+
+4) Core Engines (must be implemented)
+
+ENGINE 1: “Ignition Detector”
+Detect when a ticker moves from baseline → ignition using:
+	•	social velocity spike
+	•	volume acceleration spike
+	•	range expansion spike
+Outputs a candidate event with timestamp.
+
+ENGINE 2: “0DTE Pressure Engine”
+For each candidate:
+	•	find nearest 0DTE chain
+	•	compute “strike magnet map” (top strikes by OI/vol near spot)
+	•	compute “pressure gradient” (where spot is likely pulled based on clustering)
+	•	compute “time-left sensitivity” (minutes to close; gamma-like acceleration proxy)
+Outputs: OptionsPressureScore and key strikes.
+
+ENGINE 3: “Late-Day Surge Hunter” (the wild one)
+Specialized for 1:00–4:00pm ET:
+Trigger criteria must include:
+	•	time window gating
+	•	range expansion
+	•	volume acceleration
+	•	reclaim/break of VWAP or key level
+	•	options pressure confirmation (0DTE volume cluster near spot)
+Outputs: SurgeSetup events.
+
+ENGINE 4: “Probability + Scenario Generator”
+Compute probability estimates for reaching a target strike/level by close using:
+	•	current IV (or IV proxy)
+	•	distance to strike
+	•	time remaining
+	•	realized vol
+	•	regime multiplier (chop vs trend)
+Output:
+	•	P(reach level A), P(reach level B) by close
+	•	expected move band
+	•	confidence score
+
+ENGINE 5: “Self-learning Memory”
+Store every alert and its features + subsequent outcome:
+	•	Did price reach target?
+	•	MAE/MFE
+	•	time-to-hit
+	•	false positive
+Learn:
+	•	adjust weights for scoring per time-of-day and regime
+	•	track which pattern families perform best
+Persist to SQLite:
+	•	signals
+	•	features
+	•	outcomes
+	•	model_weights (simple online learning)
+
+ENGINE 6: “Paper Shadow Trader”
+This must run automatically:
+	•	When a setup fires, create a simulated trade plan:
+	•	entry trigger (if/then)
+	•	invalidation
+	•	2 targets
+	•	time stop
+	•	Simulate execution using market data (bars or quotes)
+	•	Track PnL in R-multiples
+	•	Publish daily summary to Telegram at 4:15pm ET:
+	•	win rate
+	•	avg R
+	•	top setups
+	•	worst setups
+	•	regime notes
+
+5) Telegram output format (strict)
+
+Every alert must include:
+	•	Ticker + timestamp
+	•	Setup type (“SURGE”, “BREAKOUT”, “REVERSAL”, “GAMMA PUSH PROXY”)
+	•	Score and probability table
+	•	Key levels (VWAP, day high/low, target strike)
+	•	Options pressure summary (top strikes, call/put imbalance)
+	•	Evidence links (top reddit thread or news headline)
+	•	“If/then plan” steps (not direct instructions)
+
+6) Testing (must be real tests, not placeholders)
+
+Implement test scripts that validate:
+	•	Telegram send works (smoke test)
+	•	OpenAI responds (smoke test)
+	•	Alpaca market data retrieval works (bars + snapshot)
+	•	Options provider returns a chain snapshot (even for one ticker)
+	•	End-to-end dry run generates one sample alert without crashing
+	•	DB writes and reads work (SQLite)
+
+Add a RUNBOOK.md that includes:
+	•	how to set env vars in Replit
+	•	how to run tests
+	•	how to start the daemon
+	•	how to interpret logs
+	•	how to reset DB
+
+7) Execution commands
+
+Ensure .replit run command launches the daemon:
+	•	python -m wsb_snake.main or python wsb_snake/main.py
+Provide a single command to run tests:
+	•	python -m unittest discover tests
+
+8) Phased delivery inside the same repo
+	•	Phase A: integrations + health + Telegram heartbeat + DB
+	•	Phase B: market + Reddit ignition
+	•	Phase C: options chain pressure engine
+	•	Phase D: surge hunter + probability engine
+	•	Phase E: paper shadow + learning + daily report
+
+Deliver incrementally, ensuring each phase runs before moving on.
+
+⸻
