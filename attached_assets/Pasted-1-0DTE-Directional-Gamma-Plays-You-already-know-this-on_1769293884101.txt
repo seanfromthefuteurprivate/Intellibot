@@ -1,0 +1,164 @@
+1️⃣ 0DTE Directional Gamma Plays (You already know this one)
+
+Event type:
+	•	CPI
+	•	FOMC
+	•	Fed speakers
+	•	Index rebalancing
+	•	Macro headlines
+
+What you’re training:
+	•	Gamma sensitivity
+	•	Speed of reaction
+	•	Dealer hedging flows
+	•	Intraday momentum vs fade
+
+Key skill:
+Timing + exits
+Not prediction
+
+⚠️ This is the hardest and most unforgiving.
+
+⸻
+
+2️⃣ 0DTE / 1DTE VOLATILITY EXPANSION (Non-Directional)
+
+Most people don’t know this exists.
+
+Structure:
+	•	ATM straddles
+	•	Slight OTM strangles
+
+Event type:
+	•	CPI
+	•	Jobs report
+	•	Surprise press conferences
+
+You’re betting on:
+
+“The move will be larger than the market priced — direction irrelevant.”
+
+What you train:
+	•	Implied vs realized volatility
+	•	Speed of IV collapse
+	•	How fast to exit after the move
+
+This is cleaner than directional 0DTE for training.
+
+⸻
+
+3️⃣ EARNINGS OTM DIRECTIONAL (7–10 DTE) 🔥
+
+This is the classic $800 → big return lane.
+
+Structure:
+	•	Long OTM calls or puts
+	•	Expiration after earnings
+	•	10–30 delta
+
+You’re betting on:
+	•	Surprise magnitude
+	•	Follow-through (not just the initial gap)
+
+What you train:
+	•	Earnings gap behavior
+	•	IV crush vs trend continuation
+	•	Crowd positioning errors
+
+This is where discipline > bravery.
+
+⸻
+
+4️⃣ EARNINGS VOLATILITY PLAYS (Straddles / Strangles, 7–10 DTE)
+
+Advanced but powerful.
+
+Structure:
+	•	Buy both call + put
+	•	Usually slightly OTM
+
+You’re betting on:
+
+“The move will exceed implied volatility.”
+
+What you train:
+	•	IV math
+	•	Expected move accuracy
+	•	How to exit ONE leg and let the other die
+
+Most people overpay here — studying fixes that.
+
+⸻
+
+5️⃣ POST-EARNINGS TREND CONTINUATION (3–10 DTE) ⚠️ Underrated
+
+This is sneaky powerful.
+
+Structure:
+	•	Enter after earnings
+	•	Direction confirmed
+	•	Slightly OTM options
+
+You’re betting on:
+	•	Funds repositioning
+	•	Analyst upgrades/downgrades
+	•	Multi-day momentum
+
+What you train:
+	•	When IV stays elevated
+	•	Which stocks trend vs fade
+	•	Patience over adrenaline
+
+This is where pros quietly print.
+
+⸻
+
+6️⃣ NEWS-WINDOW OPTIONS (Legal / FDA / M&A)
+
+Binary events with time uncertainty.
+
+Structure:
+	•	OTM calls/puts
+	•	7–21 DTE
+	•	Defined risk
+
+Event type:
+	•	FDA approvals
+	•	Court rulings
+	•	Merger announcements
+	•	Regulatory decisions
+
+You’re betting on:
+	•	Binary outcome + violent repricing
+
+What you train:
+	•	Risk asymmetry
+	•	Sizing discipline
+	•	Emotional control (hard)
+
+This is pure asymmetric warfare.
+
+⸻
+
+7️⃣ MACRO REACTION OPTIONS (Indexes, 3–10 DTE)
+
+Not day trading — reaction trading.
+
+Structure:
+	•	SPY / QQQ / IWM options
+	•	Slightly OTM
+	•	Post-event entry
+
+Event type:
+	•	CPI
+	•	Fed days
+	•	Rate decisions
+
+You’re betting on:
+	•	Second-order reaction
+	•	Narrative shift, not headline
+
+What you train:
+	•	Market psychology
+	•	Fake first moves
+	•	Trend vs chop regimes

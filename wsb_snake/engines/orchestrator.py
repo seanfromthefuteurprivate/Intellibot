@@ -50,6 +50,13 @@ from wsb_snake.collectors.finviz_collector import finviz_collector
 from wsb_snake.collectors.finra_darkpool import finra_darkpool
 from wsb_snake.collectors.options_flow_scraper import options_flow_scraper
 from wsb_snake.collectors.level2_simulator import level2_simulator
+from wsb_snake.collectors.congressional_trading import congressional_trading
+from wsb_snake.collectors.fred_collector import fred_collector
+from wsb_snake.collectors.vix_structure import vix_structure
+from wsb_snake.collectors.earnings_calendar import earnings_calendar
+from wsb_snake.collectors.alpha_vantage_collector import alpha_vantage
+from wsb_snake.engines.strategy_classifier import strategy_classifier, StrategyType
+from wsb_snake.engines.multi_day_scanner import multi_day_scanner
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -241,6 +248,87 @@ class SnakeOrchestrator:
                     
             except Exception as e:
                 log.warning(f"   Advanced data collection error: {e}")
+            
+            # Stage 0.7: Collect expanded data sources (Phase 11)
+            log.info("Stage 0.7: Collecting expanded data sources...")
+            results["expanded_data"] = {
+                "congressional": {},
+                "macro_regime": {},
+                "vix_structure": {},
+                "earnings": {},
+                "sentiment": {},
+            }
+            
+            try:
+                # Congressional Trading (100% free)
+                try:
+                    hot_congress = congressional_trading.get_hot_tickers(days_back=14)
+                    results["expanded_data"]["congressional"]["hot_tickers"] = hot_congress[:10]
+                    
+                    for ticker in ZERO_DTE_UNIVERSE[:5]:
+                        congress_signal = congressional_trading.get_trades_for_ticker(ticker)
+                        if congress_signal.get("total_trades", 0) > 0:
+                            results["expanded_data"]["congressional"][ticker] = congress_signal
+                    
+                    log.info(f"   Congressional: {len(hot_congress)} hot tickers")
+                except Exception as e:
+                    log.debug(f"Congressional trading error: {e}")
+                
+                # FRED Macro Regime
+                try:
+                    macro_regime = fred_collector.get_macro_regime()
+                    results["expanded_data"]["macro_regime"] = macro_regime
+                    log.info(f"   Macro: {macro_regime.get('overall_regime', 'unknown')} | VIX: {macro_regime.get('metrics', {}).get('vix', 0):.1f}")
+                except Exception as e:
+                    log.debug(f"FRED error: {e}")
+                
+                # VIX Term Structure
+                try:
+                    vix_signal = vix_structure.get_trading_signal()
+                    results["expanded_data"]["vix_structure"] = vix_signal
+                    log.info(f"   VIX: {vix_signal.get('vix', 0):.1f} | Structure: {vix_signal.get('structure', 'unknown')}")
+                except Exception as e:
+                    log.debug(f"VIX structure error: {e}")
+                
+                # Earnings Calendar
+                try:
+                    this_week_earnings = earnings_calendar.get_this_week_earnings(ZERO_DTE_UNIVERSE)
+                    results["expanded_data"]["earnings"]["this_week"] = this_week_earnings
+                    
+                    if this_week_earnings:
+                        earnings_str = ", ".join([f"{e['symbol']}({e['days_until']}d)" for e in this_week_earnings[:5]])
+                        log.info(f"   Earnings This Week: {earnings_str}")
+                except Exception as e:
+                    log.debug(f"Earnings calendar error: {e}")
+                
+                # Alpha Vantage Sentiment (rate limited)
+                try:
+                    market_sentiment = alpha_vantage.get_market_sentiment()
+                    results["expanded_data"]["sentiment"]["market"] = market_sentiment
+                    log.info(f"   Market Sentiment: {market_sentiment.get('market_sentiment', 'unknown')}")
+                except Exception as e:
+                    log.debug(f"Alpha Vantage error: {e}")
+                    
+            except Exception as e:
+                log.warning(f"   Expanded data error: {e}")
+            
+            # Stage 0.8: Run multi-day scanner (every 4 hours)
+            log.info("Stage 0.8: Multi-day opportunity scan...")
+            try:
+                # Only run full scan periodically to save API calls
+                if multi_day_scanner.last_scan is None or \
+                   (datetime.now() - multi_day_scanner.last_scan).total_seconds() > 14400:
+                    multi_day_results = multi_day_scanner.run_full_scan()
+                    results["multi_day_setups"] = multi_day_results
+                    log.info(f"   Multi-day setups: {multi_day_results.get('total_setups', 0)}")
+                else:
+                    results["multi_day_setups"] = {
+                        "total_setups": len(multi_day_scanner.active_setups),
+                        "cached": True,
+                    }
+                    log.info(f"   Multi-day: Using cached ({len(multi_day_scanner.active_setups)} setups)")
+            except Exception as e:
+                log.warning(f"   Multi-day scanner error: {e}")
             
             # Stage 1: Run all detection engines in sequence
             log.info("Stage 1: Running detection engines...")
