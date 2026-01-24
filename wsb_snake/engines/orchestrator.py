@@ -41,6 +41,7 @@ from wsb_snake.engines.family_classifier import (
 from wsb_snake.engines.inception_detector import (
     inception_detector, detect_inception, InceptionState, InstabilityState
 )
+from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
@@ -323,6 +324,55 @@ class SnakeOrchestrator:
             
             inception_count = len([s for s in results["inception_states"] if s.get("inception_detected")])
             log.info(f"   Inception detections: {inception_count}")
+            
+            # Stage 2.8: AI Chart Brain Validation
+            log.info("Stage 2.8: Running AI Chart Analysis validation...")
+            results["ai_validations"] = []
+            
+            try:
+                chart_brain = get_chart_brain()
+                
+                for prob in results["probabilities"]:
+                    ticker = prob.get("ticker")
+                    if not ticker:
+                        continue
+                    
+                    # Determine signal direction
+                    direction = "NEUTRAL"
+                    ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                    if ignition:
+                        if ignition.get("direction") == "bullish" or ignition.get("bias", "").lower() == "bullish":
+                            direction = "LONG"
+                        elif ignition.get("direction") == "bearish" or ignition.get("bias", "").lower() == "bearish":
+                            direction = "SHORT"
+                    
+                    # Validate against AI analysis
+                    validation = chart_brain.validate_signal(
+                        ticker=ticker,
+                        signal_direction=direction,
+                        signal_score=prob.get("combined_score", 0)
+                    )
+                    
+                    validation["ticker"] = ticker
+                    validation["original_score"] = prob.get("combined_score", 0)
+                    results["ai_validations"].append(validation)
+                    
+                    # Update probability score with AI adjustment
+                    if validation.get("adjusted_score") != prob.get("combined_score"):
+                        prob["ai_adjusted_score"] = validation["adjusted_score"]
+                        prob["ai_agrees"] = validation.get("ai_agrees", True)
+                        prob["ai_confidence"] = validation.get("ai_confidence", 0.5)
+                        
+                        if validation.get("ai_agrees") and validation.get("ai_confidence", 0) > 0.7:
+                            log.info(f"   🧠 AI confirms {ticker}: {direction} (conf={validation.get('ai_confidence', 0):.0%})")
+                        elif not validation.get("ai_agrees") and validation.get("ai_confidence", 0) > 0.6:
+                            log.warning(f"   ⚠️ AI disagrees with {ticker}: AI says {validation.get('ai_direction')}")
+                            
+            except Exception as e:
+                log.warning(f"AI chart validation error: {e}")
+            
+            ai_confirmed = len([v for v in results["ai_validations"] if v.get("ai_agrees") and v.get("ai_confidence", 0) > 0.7])
+            log.info(f"   AI confirmations: {ai_confirmed}")
             
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")

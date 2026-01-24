@@ -22,6 +22,7 @@ from wsb_snake.db.database import init_database
 
 from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary
 from wsb_snake.engines.learning_memory import learning_memory
+from wsb_snake.engines.chart_brain import get_chart_brain
 
 
 def send_startup_ping():
@@ -30,7 +31,7 @@ def send_startup_ping():
     
     session_info = get_session_info()
     
-    message = f"""🐍 **WSB SNAKE v2.0 ONLINE**
+    message = f"""🐍 **WSB SNAKE v2.1 ONLINE**
 
 **0DTE Intelligence Engine Activated**
 
@@ -41,6 +42,7 @@ def send_startup_ping():
 • Engine 4: Probability Generator
 • Engine 5: Self-Learning Memory
 • Engine 6: Paper Shadow Trader
+• 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
 
 📊 **Session Status:**
 • Session: {session_info['session'].upper()}
@@ -50,7 +52,7 @@ def send_startup_ping():
 
 🎯 **Monitoring:** SPY, QQQ, IWM + TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 
-⚡ Pipeline running every 10 minutes during market hours.
+⚡ Pipeline + AI chart analysis running continuously.
 """
     
     send_alert(message)
@@ -94,6 +96,12 @@ def main():
     # Initialize database
     log.info("Initializing database...")
     init_database()
+    
+    # Start ChartBrain background AI analysis
+    log.info("Starting ChartBrain AI background analysis...")
+    chart_brain = get_chart_brain()
+    chart_brain.start()
+    log.info("🧠 ChartBrain active - studying charts in real-time")
     
     # Send startup ping
     send_startup_ping()
