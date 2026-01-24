@@ -116,18 +116,21 @@ class ChartGenerator:
             
             buf = io.BytesIO()
             
-            fig, axes = mpf.plot(
-                df,
-                type='candle',
-                style=self.style,
-                title=f'{ticker} {timeframe} Chart',
-                ylabel='Price',
-                volume=True,
-                addplot=addplots if addplots else None,
-                figsize=(10, 6),
-                returnfig=True,
-                tight_layout=True
-            )
+            plot_kwargs = {
+                'type': 'candle',
+                'style': self.style,
+                'title': f'{ticker} {timeframe} Chart',
+                'ylabel': 'Price',
+                'volume': True,
+                'figsize': (10, 6),
+                'returnfig': True,
+                'tight_layout': True
+            }
+            
+            if addplots:
+                plot_kwargs['addplot'] = addplots
+            
+            fig, axes = mpf.plot(df, **plot_kwargs)
             
             current_price = df['Close'].iloc[-1]
             high_of_day = df['High'].max()

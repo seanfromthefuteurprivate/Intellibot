@@ -11,6 +11,7 @@ WSB Snake is a production-grade 0DTE options intelligence engine implementing th
 - **Phase 5:** Rattlesnake Pattern ✅ COMPLETE (State Machine + Probability Engine + Chop Filter)
 - **Phase 6:** Setup Family Classifier ✅ COMPLETE (10 0DTE families + viability matrix)
 - **Phase 7:** Inception Stack ✅ COMPLETE (Convex instability detection + 6 meta-sensors)
+- **Phase 8:** ChartBrain AI ✅ COMPLETE (LangGraph + GPT-4o Vision chart analysis)
 
 ## Architecture
 
@@ -33,12 +34,17 @@ wsb_snake/
 │   ├── probability_engine.py  # P(hit target by close) + Chop Kill
 │   ├── family_classifier.py   # 10 0DTE setup families + viability matrix
 │   ├── inception_detector.py  # Convex instability detection (6 sensors)
+│   ├── chart_brain.py         # Background AI chart analysis engine
 │   ├── ignition_detector.py   # Engine 1: Enhanced with RSI/MACD
 │   ├── pressure_engine.py     # Engine 2: Technical + strike structure
 │   ├── surge_hunter.py        # Engine 3: Power hour setups
 │   ├── probability_generator.py # Engine 4: Signal fusion
 │   ├── learning_memory.py     # Engine 5: Self-learning weights
 │   └── paper_trader.py        # Engine 6: Paper trading + reports
+├── analysis/
+│   ├── chart_generator.py     # Candlestick chart image generation
+│   ├── langgraph_analyzer.py  # LangGraph GPT-4o vision chart analysis
+│   └── sentiment.py           # Text sentiment analysis
 ├── utils/
 │   ├── session_regime.py      # Market session detection
 │   ├── logger.py              # Centralized logging
@@ -167,7 +173,15 @@ Monitored tickers: SPY, QQQ, IWM, TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 | OPENAI_API_KEY | ✅ Set | AI summarization |
 
 ## Recent Changes
-- **2026-01-24 (Latest):** Implemented Inception Stack
+- **2026-01-24 (Latest):** Implemented ChartBrain AI
+  - LangGraph-based AI chart analyzer with GPT-4o vision
+  - Generates candlestick charts with indicators (SMA, VWAP)
+  - Background analysis thread studies all 11 tickers continuously
+  - 5-node LangGraph workflow: patterns → trend → levels → recommendation → compile
+  - AI validates algorithmic signals (boosts confirmed, dampens contradicted)
+  - Integrated as Stage 2.8 in orchestrator pipeline
+  - 5-minute cache TTL to avoid redundant API calls
+- 2026-01-24: Implemented Inception Stack
   - Added 6 meta-sensors for convex instability detection
   - Event Horizon: variance of variance + instrument dispersion
   - Correlation Fracture: SPY/VIX breaks, QQQ divergence, IV/price disconnect

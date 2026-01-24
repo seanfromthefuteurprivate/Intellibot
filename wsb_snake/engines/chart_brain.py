@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from wsb_snake.analysis.chart_generator import ChartGenerator
 from wsb_snake.analysis.langgraph_analyzer import get_chart_analyzer
-from wsb_snake.collectors.polygon_enhanced import get_polygon_bars
-from wsb_snake.config import UNIVERSE
+from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
+from wsb_snake.config import ZERO_DTE_UNIVERSE as UNIVERSE
 from wsb_snake.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,7 +95,7 @@ class ChartBrain:
     def _analyze_ticker(self, ticker: str) -> Optional[Dict]:
         """Analyze a single ticker's chart."""
         try:
-            bars = get_polygon_bars(ticker, timespan="minute", multiplier=5, limit=60)
+            bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=60)
             
             if not bars or len(bars) < 10:
                 logger.warning(f"Insufficient data for {ticker} chart")

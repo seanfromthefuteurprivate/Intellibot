@@ -24,3 +24,7 @@ def setup_logger(name: str = "wsb_snake", level: int = logging.INFO) -> logging.
 
 # Global logger instance
 log = setup_logger()
+
+def get_logger(name: str = "wsb_snake") -> logging.Logger:
+    """Get a named logger."""
+    return setup_logger(name)
