@@ -1,13 +1,14 @@
 # WSB Snake - 0DTE Intelligence Engine
 
 ## Overview
-WSB Snake is a production-grade 0DTE options intelligence engine that monitors social signals (Reddit/WSB), market microstructure, options chain pressure, and news catalysts to detect late-day volatility surges and "lottery ticket" setups. The system fuses multi-source signals into scored alerts sent via Telegram, with paper trading simulation and self-learning capabilities.
+WSB Snake is a production-grade 0DTE options intelligence engine implementing the **"Rattlesnake" predator pattern**. It monitors social signals (Reddit/WSB), market microstructure, options chain pressure, and news catalysts to detect late-day volatility surges and "lottery ticket" setups. The system fuses multi-source signals into scored alerts sent via Telegram, with paper trading simulation and self-learning capabilities.
 
 ## Current Status
 - **Phase 1:** Connectivity + Health ✅ COMPLETE
 - **Phase 2:** End-to-End Signal Pipeline ✅ COMPLETE
 - **Phase 3:** 0DTE Intelligence Engine ✅ COMPLETE (6 engines built)
 - **Phase 4:** Enhanced Technical Analysis ✅ COMPLETE (RSI, MACD, SMA, EMA)
+- **Phase 5:** Rattlesnake Pattern ✅ COMPLETE (State Machine + Probability Engine + Chop Filter)
 
 ## Architecture
 
@@ -18,14 +19,16 @@ wsb_snake/
 ├── db/
 │   └── database.py            # SQLite database for signals/outcomes
 ├── collectors/
-│   ├── polygon_enhanced.py    # NEW: Full Polygon basic plan utilization
+│   ├── polygon_enhanced.py    # Full Polygon basic plan utilization
 │   ├── polygon_options.py     # Polygon.io options chain data
 │   ├── benzinga_news.py       # Benzinga news adapter
 │   ├── alpaca_news.py         # Alpaca news adapter
 │   ├── reddit_collector.py    # Reddit scraping (needs OAuth)
 │   └── market_data.py         # Alpaca market data
 ├── engines/
-│   ├── orchestrator.py        # Coordinates all 6 engines
+│   ├── orchestrator.py        # Coordinates all engines
+│   ├── state_machine.py       # NEW: LURK→COILED→RATTLE→STRIKE→CONSTRICT
+│   ├── probability_engine.py  # NEW: P(hit target by close) + Chop Kill
 │   ├── ignition_detector.py   # Engine 1: Enhanced with RSI/MACD
 │   ├── pressure_engine.py     # Engine 2: Technical + strike structure
 │   ├── surge_hunter.py        # Engine 3: Power hour setups
@@ -41,7 +44,61 @@ wsb_snake/
     └── message_templates.py   # Structured message formats
 ```
 
-## The 6 Engines
+## The Rattlesnake Pattern
+
+The engine behaves like a **predator** using a formal state machine:
+
+### State Machine (6 States)
+
+| State | Description | Entry Conditions |
+|-------|-------------|------------------|
+| **LURK** | Passive monitoring, building heat maps | Default state |
+| **COILED** | Conditions building, sensitivity raised | Time alignment (approaching power hour) |
+| **RATTLE** | Warning signals, publishing "watch" events | ≥2 ignition signals (volume + catalyst + momentum) |
+| **STRIKE** | Attack mode, triggering alerts/paper trades | Structure break + direction confirmed + P(hit)>55% |
+| **CONSTRICT** | Post-strike management | After strike executed |
+| **VENOM** | End-of-day postmortem | At market close |
+
+### Why State Machine?
+- **Prevents premature alerts**: Signals must escalate through states before triggering
+- **Reduces false positives**: Multiple conditions must align
+- **Surgical precision**: Only strikes when high probability + structure confirmed
+
+## Probability Engine
+
+Calculates **P(hit target by close)** using:
+
+| Component | Source | Description |
+|-----------|--------|-------------|
+| Realized Volatility | Recent price bars | Regime-adjusted annualized vol |
+| Distance to Target | Key levels (day high/low, VWAP) | Distance as % of price |
+| Time Remaining | Session clock | Minutes to close |
+| Regime Scalar | Market classification | Trend/chop/panic multipliers |
+
+### Hazard Curve
+- P(hit in next 5 min)
+- P(hit in next 10 min)
+- P(hit in next 20 min)
+- P(hit by close)
+
+### Entry Quality Assessment
+- **Optimal**: High near-term probability + high overall probability
+- **Acceptable**: Medium probability window
+- **Poor**: Low probability or time running out
+
+## Chop Kill Filter
+
+Blocks signals in choppy, fake-breakout conditions:
+
+| Metric | Weight | Description |
+|--------|--------|-------------|
+| Range Compression | 30 | Low ATR into a level = compression |
+| Trend Strength | 40 | Weak trend = chop |
+| VWAP Crossings | 30 | Many crosses = whipsaw |
+
+**Block threshold**: Score ≥60
+
+## The 6 Core Engines
 
 | Engine | Name | Purpose |
 |--------|------|---------|
@@ -54,7 +111,7 @@ wsb_snake/
 
 ## Enhanced Polygon Basic Plan Usage
 
-The system now maximizes Polygon.io basic plan with these endpoints:
+The system maximizes Polygon.io basic plan with these endpoints:
 
 ### Available Data Sources
 | Endpoint | Usage | Status |
@@ -118,8 +175,8 @@ Monitored tickers: SPY, QQQ, IWM, TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 
 | Tier | Score | Action |
 |------|-------|--------|
-| A+ | 85+ | Immediate alert + paper trade |
-| A | 70-84 | Alert + paper trade |
+| A+ | 85+ | Immediate alert + paper trade (if STRIKE state) |
+| A | 70-84 | Alert + paper trade (if STRIKE state) |
 | B | 50-69 | Watchlist |
 | C | 30-49 | Log only |
 
@@ -179,6 +236,12 @@ Minutes to close: 45
 **model_weights** - Adaptive feature weights
 
 ## Recent Changes
+- **2026-01-24 (Latest):** Implemented Rattlesnake Pattern
+  - Added formal State Machine (LURK→COILED→RATTLE→STRIKE→CONSTRICT→VENOM)
+  - Added Probability Engine with P(hit target by close) calculations
+  - Added Chop Kill filter to block fake breakout signals
+  - Orchestrator now gates alerts through state machine
+  - Added VENOM (end-of-day postmortem) report
 - 2026-01-24: Enhanced with full Polygon basic plan utilization
 - Added RSI, SMA, EMA, MACD technical indicators
 - Added market regime detection (gainers/losers ratio)
@@ -194,8 +257,10 @@ Minutes to close: 45
 - Gamma exposure calculations
 - Open interest clustering
 - Max pain calculation
+- Strike clustering for gamma-magnet detection
 
 ### With Reddit OAuth:
 - Live WSB mention tracking
 - Social velocity signals
 - Sentiment analysis on posts
+- Crowd heat integration
