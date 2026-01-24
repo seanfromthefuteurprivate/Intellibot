@@ -13,6 +13,7 @@ WSB Snake is a production-grade 0DTE options intelligence engine implementing th
 - **Phase 7:** Inception Stack ✅ COMPLETE (Convex instability detection + 6 meta-sensors)
 - **Phase 8:** ChartBrain AI ✅ COMPLETE (LangGraph + GPT-4o Vision chart analysis)
 - **Phase 9:** Alternative Data Stack ✅ COMPLETE (Finnhub + SEC EDGAR + Finviz)
+- **Phase 10:** Advanced Market Structure ✅ COMPLETE (Real-time streaming + Dark Pool + Options Flow + Simulated L2)
 
 ## Architecture
 
@@ -31,6 +32,10 @@ wsb_snake/
 │   ├── finnhub_collector.py   # News sentiment + social sentiment + insider MSPR
 │   ├── sec_edgar_collector.py # Insider trading Form 4 filings
 │   ├── finviz_collector.py    # Unusual volume detection
+│   ├── finnhub_websocket.py   # Real-time streaming (WebSocket)
+│   ├── finra_darkpool.py      # Dark pool data (100% free)
+│   ├── options_flow_scraper.py # Unusual options flow detection
+│   ├── level2_simulator.py    # Simulated L2 from options
 │   └── market_data.py         # Alpaca market data
 ├── engines/
 │   ├── orchestrator.py        # Coordinates all engines
@@ -202,7 +207,34 @@ Final Score = AI_Adjusted_Score + Alt_Data_Boost
 ### Pipeline Integration
 
 - **Stage 0.5:** Collects alt data for priority tickers (SPY, QQQ, TSLA, NVDA, AAPL)
+- **Stage 0.6:** Collects advanced market structure data (Dark Pool, Options Flow, L2 Sim)
 - **Stage 2.9:** Applies alt data boosts to probability scores
+
+## Advanced Market Structure (Phase 10)
+
+### Data Sources (Free/Cheap)
+
+| Feature | Source | Cost | Latency | Notes |
+|---------|--------|------|---------|-------|
+| **Real-time Streaming** | Finnhub WebSocket | Free | Sub-second | Trades for US stocks |
+| **Dark Pool Visibility** | FINRA OTC Transparency | Free | 2-4 week delay | ATS volume by security |
+| **Unusual Options Flow** | Barchart + Polygon | Free | 15-min delay | Sweeps, blocks detection |
+| **Simulated Level 2** | Options-derived | Free | Real-time | GEX walls, max pain, OI |
+
+### Level 2 Simulator
+
+Since true Level 2 requires expensive subscriptions ($200+/mo), we simulate order book pressure using:
+- Options strike concentration (where big orders cluster)
+- GEX (Gamma Exposure) as support/resistance
+- Max Pain as price magnet
+- Volume Profile analysis
+
+This gives ~80% of actionable insight at 0% of the cost.
+
+### What We Can't Get Cheaply
+- Sub-millisecond execution (requires co-location ~$10K+/mo)
+- Real-time Level 2 for stocks (NASDAQ TotalView ~$26/mo retail)
+- Real-time dark pool prints (requires $1K+/mo feeds)
 
 ## Recent Changes
 - **2026-01-24 (Latest):** Implemented Alternative Data Stack

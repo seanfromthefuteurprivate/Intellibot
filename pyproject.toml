@@ -20,4 +20,5 @@ dependencies = [
     "pytz>=2025.2",
     "schedule>=1.2.2",
     "scipy>=1.17.0",
+    "websocket-client>=1.9.0",
 ]

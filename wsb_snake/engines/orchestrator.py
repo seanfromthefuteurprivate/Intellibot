@@ -47,6 +47,9 @@ from wsb_snake.collectors.reddit_collector import get_wsb_trending, get_wsb_cata
 from wsb_snake.collectors.finnhub_collector import finnhub_collector
 from wsb_snake.collectors.sec_edgar_collector import sec_edgar_collector
 from wsb_snake.collectors.finviz_collector import finviz_collector
+from wsb_snake.collectors.finra_darkpool import finra_darkpool
+from wsb_snake.collectors.options_flow_scraper import options_flow_scraper
+from wsb_snake.collectors.level2_simulator import level2_simulator
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -176,6 +179,68 @@ class SnakeOrchestrator:
                     
             except Exception as e:
                 log.warning(f"   Alt data collection error: {e}")
+            
+            # Stage 0.6: Advanced data (Dark Pool, Options Flow, Level 2 Sim)
+            log.info("Stage 0.6: Collecting advanced market structure data...")
+            results["advanced_data"] = {}
+            
+            try:
+                for ticker in ["SPY", "QQQ", "TSLA"][:2]:
+                    adv = {}
+                    
+                    # FINRA Dark Pool data (free)
+                    try:
+                        dark_pool = finra_darkpool.get_dark_pool_ratio(ticker)
+                        adv["dark_pool"] = {
+                            "ats_volume": dark_pool.get("ats_volume", 0),
+                            "signal": dark_pool.get("signal", "unknown"),
+                            "top_ats": dark_pool.get("top_ats", [])[:2],
+                        }
+                    except Exception as e:
+                        log.debug(f"Dark pool error for {ticker}: {e}")
+                        adv["dark_pool"] = {"signal": "unknown"}
+                    
+                    # Unusual Options Flow (scraped/simulated)
+                    try:
+                        flow_signals = options_flow_scraper.get_smart_money_signals([ticker])
+                        flow = flow_signals.get(ticker, {})
+                        adv["options_flow"] = {
+                            "signal": flow.get("signal", "neutral"),
+                            "confidence": flow.get("confidence", 0),
+                            "put_call_ratio": flow.get("put_call_ratio", 1.0),
+                        }
+                    except Exception as e:
+                        log.debug(f"Options flow error for {ticker}: {e}")
+                        adv["options_flow"] = {"signal": "neutral"}
+                    
+                    # Simulated Level 2 from options data
+                    try:
+                        l2_book = level2_simulator.get_synthetic_order_book(ticker)
+                        adv["level2"] = {
+                            "bias": l2_book.get("bias", "neutral"),
+                            "imbalance": l2_book.get("imbalance", 0),
+                            "key_support": l2_book.get("key_support", 0),
+                            "key_resistance": l2_book.get("key_resistance", 0),
+                        }
+                    except Exception as e:
+                        log.debug(f"Level 2 sim error for {ticker}: {e}")
+                        adv["level2"] = {"bias": "neutral"}
+                    
+                    results["advanced_data"][ticker] = adv
+                
+                # Log summary
+                bullish_flow = [t for t, d in results["advanced_data"].items() 
+                               if d.get("options_flow", {}).get("signal") == "bullish"]
+                bearish_flow = [t for t, d in results["advanced_data"].items() 
+                               if d.get("options_flow", {}).get("signal") == "bearish"]
+                
+                if bullish_flow:
+                    log.info(f"   Bullish flow: {', '.join(bullish_flow)}")
+                if bearish_flow:
+                    log.info(f"   Bearish flow: {', '.join(bearish_flow)}")
+                    
+            except Exception as e:
+                log.warning(f"   Advanced data collection error: {e}")
             
             # Stage 1: Run all detection engines in sequence
             log.info("Stage 1: Running detection engines...")
