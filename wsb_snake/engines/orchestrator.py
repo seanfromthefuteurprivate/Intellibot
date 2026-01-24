@@ -387,6 +387,19 @@ class SnakeOrchestrator:
                     ]
                     if earnings_setups:
                         log.info(f"   Earnings OTM: {len(earnings_setups)} lotto plays found")
+                
+                # Send Telegram alerts for high-confidence Phase 1 setups
+                for vol_setup in zero_dte_volatility.active_setups:
+                    if vol_setup.confidence >= 60:
+                        alert_msg = zero_dte_volatility.format_telegram_alert(vol_setup)
+                        send_telegram_alert(alert_msg)
+                        log.info(f"   Sent 0DTE Vol alert: {vol_setup.symbol}")
+                
+                for earnings_setup in earnings_otm_engine.active_setups:
+                    if earnings_setup.confidence >= 55:
+                        alert_msg = earnings_otm_engine.format_telegram_alert(earnings_setup)
+                        send_telegram_alert(alert_msg)
+                        log.info(f"   Sent Earnings OTM alert: {earnings_setup.symbol}")
                         
             except Exception as e:
                 log.warning(f"   Phase 1 engines error: {e}")

@@ -334,30 +334,29 @@ class EarningsOTMEngine:
     
     def format_telegram_alert(self, setup: EarningsOTMSetup) -> str:
         """Format setup for Telegram alert"""
-        emoji = "🎯" if setup.direction == "CALLS" else "🎯"
-        arrow = "📈" if setup.direction == "CALLS" else "📉"
+        direction_label = "BULLISH" if setup.direction == "CALLS" else "BEARISH"
         
         return f"""
-{emoji} *EARNINGS OTM PLAY*
+*[EARNINGS OTM PLAY]*
 
-{arrow} *{setup.symbol}* | {setup.direction}
+*{setup.symbol}* | {setup.direction} ({direction_label})
 ━━━━━━━━━━━━━━━━━━
 
-📅 *Earnings:* {setup.earnings_date}
-⏰ *DTE:* {setup.dte} days
-💰 *Strike:* {setup.strike_type}
+*Earnings:* {setup.earnings_date}
+*DTE:* {setup.dte} days
+*Strike:* {setup.strike_type}
 
-📊 *Expected Move:* {setup.expected_move:.1f}%
-📈 *Historical Move:* {setup.historical_move:.1f}%
-📉 *IV Rank:* {setup.iv_rank:.0f}%
-📜 *History:* {setup.surprise_history}
+*Expected Move:* {setup.expected_move:.1f}%
+*Historical Move:* {setup.historical_move:.1f}%
+*IV Rank:* {setup.iv_rank:.0f}%
+*History:* {setup.surprise_history}
 
-💵 *Entry Range:* {setup.entry_price_range}
-🎯 *Target:* {setup.target_return}
-⚠️ *Max Loss:* {setup.max_loss}
+*Entry Range:* {setup.entry_price_range}
+*Target:* {setup.target_return}
+*Max Loss:* {setup.max_loss}
 
-🔥 *{setup.recommendation}*
-🎲 *Confidence:* {setup.confidence:.0f}%
+*{setup.recommendation}*
+*Confidence:* {setup.confidence:.0f}%
 
 _Cheap lotto play - size for total loss_
 """

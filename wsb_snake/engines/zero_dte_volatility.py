@@ -267,22 +267,22 @@ class ZeroDTEVolatilityEngine:
     def format_telegram_alert(self, setup: VolatilitySetup) -> str:
         """Format setup for Telegram alert"""
         return f"""
-🎰 *0DTE VOLATILITY PLAY*
+*[0DTE VOLATILITY PLAY]*
 
 *{setup.symbol}* | {setup.structure}
 ━━━━━━━━━━━━━━━━━━
 
-📊 *Volatility Edge:* {setup.vol_edge:.1f}%
-📈 *Expected Move:* {setup.expected_move:.2f}%
-📉 *Historical Move:* {setup.historical_move:.2f}%
-📏 *IV Percentile:* {setup.iv_percentile:.0f}%
+*Volatility Edge:* {setup.vol_edge:.1f}%
+*Expected Move:* {setup.expected_move:.2f}%
+*Historical Move:* {setup.historical_move:.2f}%
+*IV Percentile:* {setup.iv_percentile:.0f}%
 
-🎯 *Catalyst:* {setup.catalyst}
-⏰ *Entry:* {setup.entry_timing}
-🚪 *Exit:* {setup.exit_plan}
+*Catalyst:* {setup.catalyst}
+*Entry:* {setup.entry_timing}
+*Exit:* {setup.exit_plan}
 
-⚠️ *Risk:* {setup.risk_level}
-🎲 *Confidence:* {setup.confidence:.0f}%
+*Risk:* {setup.risk_level}
+*Confidence:* {setup.confidence:.0f}%
 
 _This is NOT a directional trade - profit from volatility expansion_
 """
