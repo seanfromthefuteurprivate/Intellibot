@@ -9,5 +9,6 @@ dependencies = [
     "praw>=7.8.1",
     "python-dotenv>=1.2.1",
     "python-telegram-bot>=22.6",
+    "pytz>=2025.2",
     "schedule>=1.2.2",
 ]

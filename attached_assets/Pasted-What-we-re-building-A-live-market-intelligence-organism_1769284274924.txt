@@ -1,0 +1,274 @@
+What we’re building
+
+A live market-intelligence organism that ingests social alpha + market microstructure + options flow + news + chart state, converts it into probabilistic trade hypotheses, and pushes operator-grade Telegram alerts (and optional auto-execution suggestions) with traceable evidence, risk controls, and continuous learning.
+
+It’s not a “Reddit bot.”
+It’s a multi-sensor trading intelligence pipeline that can eventually output:
+	•	WATCH / WAIT / ENTER / EXIT / HEDGE
+	•	Directional bias + confidence
+	•	0DTE timing windows
+	•	risk flags + kill-switch conditions
+	•	and (optional) broker-ready trade instructions (paper trading first)
+
+⸻
+
+Core Outputs (what the system produces)
+
+1) Telegram: Immediate Alerts (High Conviction)
+
+Only when:
+	•	a ticker’s social velocity + market confirmation + options pressure crosses a threshold
+	•	AND risk model does not block it
+Format: short, brutal, actionable.
+
+2) Telegram: Watchlist Digest (Medium Conviction)
+
+Periodic list of tickers to track with:
+	•	the “why”
+	•	the setup
+	•	key levels
+	•	risk flags
+	•	time horizon (0DTE / day / swing)
+
+3) Telegram: Operator Commands (Optional)
+
+When enabled, the system outputs:
+	•	“If X then Y” execution logic
+	•	buy/sell suggestion with exact entry/stop/targets
+	•	but always with risk gates and confidence labels
+	•	paper-trading first; live trading only after validation
+
+4) Signal Ledger (Traceability)
+
+For every alert, store:
+	•	the evidence bundle (links, excerpts, metrics)
+	•	the computed features
+	•	the scoring breakdown
+	•	the model decision
+	•	later: outcome metrics (win/loss, MAE/MFE, slippage)
+
+⸻
+
+Data Inputs (wild mode: “everything”)
+
+Social / Crowd Inputs
+	•	Reddit (WSB + spinoff subs): posts, comments, author diversity, engagement rate, acceleration, sentiment, intent tags (0DTE, earnings, squeeze, catalyst)
+	•	Optional: X/Twitter, Stocktwits, Discord/Telegram groups (read-only, later)
+	•	Keyword detection: “0DTE”, “calls”, “puts”, “IV”, “gamma”, “pin”, “squeeze”, “halt”, “catalyst”, “buying pressure”, “short interest”, “float”, “FDA”, “SEC”, etc.
+
+Market Data Inputs (Real-time)
+	•	Price stream (trades)
+	•	Quote stream (bid/ask for spread + liquidity)
+	•	Volume profile / spikes
+	•	Intraday returns (1m/5m/15m/60m)
+	•	Volatility proxies (realized vol, ATR)
+	•	Market regime signals from indexes (SPY/QQQ/VIX proxy)
+	•	Correlation / beta context (ticker vs sector vs index)
+
+Options Inputs (0DTE intelligence)
+	•	Options chain snapshots (calls/puts OI)
+	•	Intraday changes in OI (if available)
+	•	Volume by strike/expiry (especially same-day)
+	•	Put/Call ratio (global + near-the-money + 0DTE-only)
+	•	Implied volatility, IV rank, IV skew
+	•	Gamma exposure heuristics (GEX style, even approximate)
+	•	“Pin risk” detection near large OI strikes
+	•	“Dealer positioning heuristic” (approx): likely magnet levels / volatility traps
+	•	Late-day 0DTE “snap” detector: abnormal volume bursts after 12pm / after 2pm / final hour
+	•	Probability engine: “chance of reaching strike X by expiry” using IV + distance + time remaining
+
+News / Event Inputs
+	•	Live headlines feed (earnings, upgrades/downgrades, SEC, macro prints, court rulings, product announcements)
+	•	Calendar: earnings date, CPI/FOMC, major macro, ex-div, split, lockups, FDA dates
+	•	Catalyst classifier: “hard catalyst” vs “rumor” vs “meme”
+
+Chart / Technical Inputs (model-readable)
+	•	Multi-timeframe structure: 1m / 5m / 15m / 1h / 1d
+	•	Trend state: uptrend/downtrend/range
+	•	Support/resistance detection (auto)
+	•	VWAP + anchored VWAP
+	•	Relative strength vs SPY
+	•	Pattern flags (breakout, breakdown, reclaim, mean-reversion setup)
+	•	Liquidity zones + gap fills
+
+Optional “Vision” Input (chart images)
+	•	Ingest chart screenshots and run a vision model that outputs:
+	•	trend state
+	•	key levels
+	•	pattern classification
+	•	“setup quality” score
+Used when you want the system to “study charts” like a human.
+
+⸻
+
+Intelligence Layer (how it thinks)
+
+A) Feature Engine
+
+Everything becomes standardized numeric features, such as:
+	•	Hype velocity (mentions/min, upvotes/min, comment accel)
+	•	Author diversity (pump detection)
+	•	Social-to-market lag (does price lead or follow?)
+	•	Market confirmation score (volume + return alignment)
+	•	Liquidity / spread penalty
+	•	Options pressure score (0DTE dominance, strike clustering, IV)
+	•	Regime compatibility score (risk-on/off)
+	•	Catalyst strength score
+	•	Technical setup quality score
+
+B) Probabilistic Scoring + Routing
+
+System produces:
+	•	A unified Signal Score (0–100)
+	•	A Probability of move (e.g., “chance of +1% in 30m”)
+	•	A Time Horizon tag (0DTE / intraday / swing)
+	•	A Risk Tier (low/medium/high)
+	•	A Recommended Action (WATCH / WAIT / ENTER / EXIT / HEDGE)
+
+Routing logic:
+	•	Only A+ signals become immediate Telegram alerts
+	•	B signals go to watchlist digest
+	•	C signals are logged but not pushed
+
+C) AI Summarization (operator-grade)
+
+When triggered, AI outputs structured intelligence:
+	•	“What’s happening”
+	•	“Why now”
+	•	“Crowd stance”
+	•	“Market confirmation”
+	•	“Options pressure”
+	•	“Key levels”
+	•	“Risk flags”
+	•	“If/then plan”
+
+No fluff, no motivational tone — pure operator output.
+
+⸻
+
+Learning & Autonomy Upgrades (optional but “wild”)
+
+1) LangGraph Orchestration (Agent Brain)
+
+Use LangGraph to coordinate specialized agents:
+	•	Collector Agent: ingests streams, manages rate limits, normalizes
+	•	Signal Agent: computes features + scores, runs thresholds
+	•	Options Agent: options chain analysis, 0DTE spike detection, strike magnet logic
+	•	Chart Agent: technical analysis + levels + structure classification
+	•	News Agent: headline ingestion + catalyst classification + credibility scoring
+	•	Risk Agent: kill-switch logic, exposure rules, volatility regime rules
+	•	Execution Planner Agent: builds trade plan suggestions (entry/stop/targets)
+	•	Compliance Agent: ensures messages include disclaimers + avoids bad outputs
+	•	Memory Agent: stores outcomes, evaluates hit rate, tunes weights
+
+This is a multi-agent trading intelligence workflow where each module produces artifacts that feed the final decision.
+
+2) Continuous Learning Loop (Outcome-Based)
+
+After each alert:
+	•	track what happened (did price move? how far? how fast?)
+	•	compute outcome metrics (hit rate, false positive rate, MAE/MFE)
+	•	tune scoring weights:
+	•	which features predict moves best in this regime?
+	•	which signals are noisy?
+	•	update thresholds dynamically based on volatility and time of day
+
+3) Command Generator (Optional: “Trade Instruction Output”)
+
+When enabled:
+	•	system outputs broker-ready instructions in a strict schema:
+	•	instrument
+	•	direction
+	•	entry logic
+	•	invalidation level (stop)
+	•	targets
+	•	position size suggestion (based on risk budget)
+	•	time-based exits (especially for 0DTE)
+	•	hedge suggestion (optional)
+	•	always labeled as “paper-first” until validated
+
+⸻
+
+Risk Controls (must be embedded)
+
+Hard Kill Switches
+	•	No execution suggestions if:
+	•	market is in extreme volatility (regime filter)
+	•	liquidity is too low
+	•	spread too wide
+	•	pump indicators too high
+	•	news uncertainty too high
+	•	API health degraded
+	•	Cooldowns: avoid repeated spam on the same ticker unless score breakout is real
+
+Exposure Rules (optional)
+	•	per-ticker max alerts per hour
+	•	max number of “active” watchlist tickers
+	•	risk budget: per day maximum loss threshold
+	•	time-of-day rules for 0DTE (last hour behavior different)
+
+⸻
+
+Telegram Experience (what user feels)
+
+“Snake Online” ping at startup
+
+Confirms:
+	•	secrets loaded
+	•	connectors healthy
+	•	running loop active
+
+Immediate alert examples (structure, not content)
+	•	headline: “WSB SNAKE ALERT — TICKER — Score 91/100”
+	•	why: 2–3 bullets (social + market + options)
+	•	levels: VWAP + key resistance/support
+	•	0DTE: dominant strikes + time window
+	•	risk: 2 red flags max
+	•	plan: WATCH/WAIT/ENTER logic
+	•	evidence: top links
+
+Digest
+	•	top 10 ranked by score
+	•	short reason per ticker
+	•	one risk tag
+
+⸻
+
+Validation Phases (non-negotiable)
+
+Phase 1: Connectivity + Health
+
+Confirm each connector works in isolation:
+	•	Telegram send succeeds
+	•	market snapshot or stream succeeds
+	•	Reddit ingestion succeeds
+	•	AI summarizer call succeeds
+No scoring yet.
+
+Phase 2: End-to-end “First Real Alert”
+
+Minimal scoring:
+	•	detect ticker clusters
+	•	confirm market alignment
+	•	push first clean Telegram alert
+
+Phase 3: Options + 0DTE Spike Engine
+
+Add options intelligence and “last-minute spike predictor”
+Add probability computations using IV and time remaining.
+
+Phase 4: Learning + LangGraph
+
+Introduce multi-agent orchestration and outcome tuning.
+
+⸻
+
+What success looks like
+
+A system that routinely catches:
+	•	early-stage crowd momentum before mainstream trend
+	•	late-day 0DTE pressure shifts before the final move
+	•	breakouts with market confirmation
+	•	avoids most pump noise through author diversity + liquidity + risk penalties
+	•	produces Telegram alerts that feel like:
+“I have evidence, probability, plan, and risk.”
