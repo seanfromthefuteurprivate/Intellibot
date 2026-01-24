@@ -1,0 +1,612 @@
+"""
+Enhanced Polygon.io Data Adapter
+
+Maximizes the basic plan by using all available endpoints:
+- Stock aggregates (1min bars for momentum)
+- Technical indicators (RSI, SMA, EMA, MACD)
+- Gainers/Losers (market regime)
+- Stock snapshots (real-time quotes)
+- Options contracts reference (strike structure)
+"""
+
+import requests
+from datetime import datetime, date, timedelta
+from typing import Dict, List, Any, Optional, Tuple
+from wsb_snake.config import POLYGON_API_KEY, POLYGON_BASE_URL
+from wsb_snake.utils.logger import log
+
+
+class EnhancedPolygonAdapter:
+    """Enhanced adapter maximizing Polygon basic plan capabilities."""
+    
+    def __init__(self):
+        self.api_key = POLYGON_API_KEY
+        self.base_url = POLYGON_BASE_URL
+        self._cache: Dict[str, Tuple[datetime, Any]] = {}
+        self._cache_ttl = 60  # seconds
+        
+    def _request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
+        """Make authenticated request to Polygon API with caching."""
+        if not self.api_key:
+            log.error("POLYGON_API_KEY not set")
+            return None
+            
+        if params is None:
+            params = {}
+        params["apiKey"] = self.api_key
+        
+        # Check cache
+        cache_key = f"{endpoint}:{str(sorted(params.items()))}"
+        if cache_key in self._cache:
+            cached_time, cached_data = self._cache[cache_key]
+            if (datetime.now() - cached_time).seconds < self._cache_ttl:
+                return cached_data
+        
+        url = f"{self.base_url}{endpoint}"
+        
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                self._cache[cache_key] = (datetime.now(), data)
+                return data
+            else:
+                log.warning(f"Polygon API {resp.status_code}: {endpoint}")
+                return None
+        except Exception as e:
+            log.error(f"Polygon request failed: {e}")
+            return None
+    
+    # ========================
+    # STOCK DATA
+    # ========================
+    
+    def get_intraday_bars(
+        self, 
+        ticker: str, 
+        timespan: str = "minute",
+        multiplier: int = 1,
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        Get intraday price bars for momentum analysis.
+        
+        Args:
+            ticker: Stock symbol
+            timespan: minute, hour, day
+            multiplier: Bar size multiplier
+            limit: Number of bars
+            
+        Returns:
+            List of OHLCV bars
+        """
+        today = date.today().strftime("%Y-%m-%d")
+        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        endpoint = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{yesterday}/{today}"
+        data = self._request(endpoint, {"limit": limit, "sort": "desc"})
+        
+        if data and "results" in data:
+            bars = []
+            for bar in data["results"]:
+                bars.append({
+                    "timestamp": bar.get("t", 0),
+                    "open": bar.get("o", 0),
+                    "high": bar.get("h", 0),
+                    "low": bar.get("l", 0),
+                    "close": bar.get("c", 0),
+                    "volume": bar.get("v", 0),
+                    "vwap": bar.get("vw", 0),
+                    "trades": bar.get("n", 0),
+                })
+            return bars
+        return []
+    
+    def get_previous_day(self, ticker: str) -> Optional[Dict]:
+        """Get previous day's aggregates for gap analysis."""
+        endpoint = f"/v2/aggs/ticker/{ticker}/prev"
+        data = self._request(endpoint)
+        
+        if data and "results" in data and data["results"]:
+            bar = data["results"][0]
+            return {
+                "open": bar.get("o", 0),
+                "high": bar.get("h", 0),
+                "low": bar.get("l", 0),
+                "close": bar.get("c", 0),
+                "volume": bar.get("v", 0),
+                "vwap": bar.get("vw", 0),
+            }
+        return None
+    
+    def get_snapshot(self, ticker: str) -> Optional[Dict]:
+        """Get real-time quote snapshot."""
+        endpoint = f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}"
+        data = self._request(endpoint)
+        
+        if data and "ticker" in data:
+            t = data["ticker"]
+            day = t.get("day", {})
+            prev = t.get("prevDay", {})
+            
+            return {
+                "symbol": ticker,
+                "price": t.get("lastTrade", {}).get("p", 0) or day.get("c", 0),
+                "today_open": day.get("o", 0),
+                "today_high": day.get("h", 0),
+                "today_low": day.get("l", 0),
+                "today_close": day.get("c", 0),
+                "today_volume": day.get("v", 0),
+                "today_vwap": day.get("vw", 0),
+                "prev_close": prev.get("c", 0),
+                "prev_volume": prev.get("v", 0),
+                "change_pct": t.get("todaysChangePerc", 0),
+                "updated": t.get("updated", 0),
+            }
+        return None
+    
+    # ========================
+    # TECHNICAL INDICATORS
+    # ========================
+    
+    def get_rsi(
+        self, 
+        ticker: str, 
+        window: int = 14, 
+        timespan: str = "minute"
+    ) -> Optional[Dict]:
+        """
+        Get RSI indicator values.
+        
+        Args:
+            ticker: Stock symbol
+            window: RSI period (default 14)
+            timespan: minute, hour, day
+            
+        Returns:
+            RSI data with current and historical values
+        """
+        endpoint = f"/v1/indicators/rsi/{ticker}"
+        data = self._request(endpoint, {
+            "timespan": timespan,
+            "window": window,
+            "limit": 10,
+            "order": "desc"
+        })
+        
+        if data and "results" in data and "values" in data["results"]:
+            values = data["results"]["values"]
+            if values:
+                return {
+                    "current": values[0].get("value", 50),
+                    "previous": values[1].get("value", 50) if len(values) > 1 else 50,
+                    "history": [v.get("value", 50) for v in values],
+                    "window": window,
+                    "timespan": timespan,
+                }
+        return None
+    
+    def get_sma(
+        self, 
+        ticker: str, 
+        window: int = 20, 
+        timespan: str = "minute"
+    ) -> Optional[Dict]:
+        """Get Simple Moving Average."""
+        endpoint = f"/v1/indicators/sma/{ticker}"
+        data = self._request(endpoint, {
+            "timespan": timespan,
+            "window": window,
+            "limit": 10,
+            "order": "desc"
+        })
+        
+        if data and "results" in data and "values" in data["results"]:
+            values = data["results"]["values"]
+            if values:
+                return {
+                    "current": values[0].get("value", 0),
+                    "previous": values[1].get("value", 0) if len(values) > 1 else 0,
+                    "history": [v.get("value", 0) for v in values],
+                    "window": window,
+                }
+        return None
+    
+    def get_ema(
+        self, 
+        ticker: str, 
+        window: int = 9, 
+        timespan: str = "minute"
+    ) -> Optional[Dict]:
+        """Get Exponential Moving Average."""
+        endpoint = f"/v1/indicators/ema/{ticker}"
+        data = self._request(endpoint, {
+            "timespan": timespan,
+            "window": window,
+            "limit": 10,
+            "order": "desc"
+        })
+        
+        if data and "results" in data and "values" in data["results"]:
+            values = data["results"]["values"]
+            if values:
+                return {
+                    "current": values[0].get("value", 0),
+                    "previous": values[1].get("value", 0) if len(values) > 1 else 0,
+                    "history": [v.get("value", 0) for v in values],
+                    "window": window,
+                }
+        return None
+    
+    def get_macd(
+        self, 
+        ticker: str, 
+        timespan: str = "minute",
+        short_window: int = 12,
+        long_window: int = 26,
+        signal_window: int = 9
+    ) -> Optional[Dict]:
+        """Get MACD indicator."""
+        endpoint = f"/v1/indicators/macd/{ticker}"
+        data = self._request(endpoint, {
+            "timespan": timespan,
+            "short_window": short_window,
+            "long_window": long_window,
+            "signal_window": signal_window,
+            "limit": 10,
+            "order": "desc"
+        })
+        
+        if data and "results" in data and "values" in data["results"]:
+            values = data["results"]["values"]
+            if values:
+                current = values[0]
+                return {
+                    "macd": current.get("value", 0),
+                    "signal": current.get("signal", 0),
+                    "histogram": current.get("histogram", 0),
+                    "history": values,
+                }
+        return None
+    
+    def get_full_technicals(self, ticker: str) -> Dict[str, Any]:
+        """Get all technical indicators for a ticker."""
+        snapshot = self.get_snapshot(ticker)
+        price = snapshot.get("price", 0) if snapshot else 0
+        
+        rsi = self.get_rsi(ticker, window=14, timespan="minute")
+        sma_20 = self.get_sma(ticker, window=20, timespan="minute")
+        ema_9 = self.get_ema(ticker, window=9, timespan="minute")
+        macd = self.get_macd(ticker, timespan="minute")
+        
+        # Compute derived signals
+        signals = []
+        
+        if rsi:
+            rsi_val = rsi["current"]
+            if rsi_val > 70:
+                signals.append(("RSI_OVERBOUGHT", -1))
+            elif rsi_val < 30:
+                signals.append(("RSI_OVERSOLD", 1))
+            elif rsi_val > rsi["previous"]:
+                signals.append(("RSI_RISING", 0.5))
+            else:
+                signals.append(("RSI_FALLING", -0.5))
+        
+        if sma_20 and price:
+            if price > sma_20["current"] * 1.02:
+                signals.append(("ABOVE_SMA20", 1))
+            elif price < sma_20["current"] * 0.98:
+                signals.append(("BELOW_SMA20", -1))
+        
+        if ema_9 and sma_20:
+            if ema_9["current"] > sma_20["current"]:
+                signals.append(("EMA_ABOVE_SMA", 1))
+            else:
+                signals.append(("EMA_BELOW_SMA", -1))
+        
+        if macd:
+            if macd["histogram"] > 0 and macd["macd"] > macd["signal"]:
+                signals.append(("MACD_BULLISH", 1))
+            elif macd["histogram"] < 0:
+                signals.append(("MACD_BEARISH", -1))
+        
+        return {
+            "ticker": ticker,
+            "price": price,
+            "snapshot": snapshot,
+            "rsi": rsi,
+            "sma_20": sma_20,
+            "ema_9": ema_9,
+            "macd": macd,
+            "signals": signals,
+            "net_signal": sum(s[1] for s in signals),
+        }
+    
+    # ========================
+    # MARKET REGIME
+    # ========================
+    
+    def get_market_movers(self, direction: str = "gainers") -> List[Dict]:
+        """
+        Get top market movers for regime detection.
+        
+        Args:
+            direction: "gainers" or "losers"
+            
+        Returns:
+            List of top moving stocks
+        """
+        endpoint = f"/v2/snapshot/locale/us/markets/stocks/{direction}"
+        data = self._request(endpoint)
+        
+        if data and "tickers" in data:
+            movers = []
+            for t in data["tickers"][:20]:
+                day = t.get("day", {})
+                movers.append({
+                    "ticker": t.get("ticker", ""),
+                    "change_pct": t.get("todaysChangePerc", 0),
+                    "price": day.get("c", 0),
+                    "volume": day.get("v", 0),
+                })
+            return movers
+        return []
+    
+    def get_market_regime(self) -> Dict[str, Any]:
+        """
+        Analyze market regime using gainers/losers ratio.
+        
+        Returns:
+            Market regime classification
+        """
+        gainers = self.get_market_movers("gainers")
+        losers = self.get_market_movers("losers")
+        
+        if not gainers and not losers:
+            return {"regime": "unknown", "score": 0}
+        
+        # Compute breadth metrics
+        avg_gainer_pct = sum(g["change_pct"] for g in gainers) / len(gainers) if gainers else 0
+        avg_loser_pct = sum(l["change_pct"] for l in losers) / len(losers) if losers else 0
+        
+        total_gainer_vol = sum(g["volume"] for g in gainers)
+        total_loser_vol = sum(l["volume"] for l in losers)
+        
+        # Regime score: positive = bullish, negative = bearish
+        regime_score = (avg_gainer_pct + avg_loser_pct) / 2  # Net change
+        volume_tilt = (total_gainer_vol - total_loser_vol) / max(total_gainer_vol + total_loser_vol, 1)
+        
+        combined_score = regime_score * 10 + volume_tilt * 20
+        
+        if combined_score > 15:
+            regime = "strong_bullish"
+        elif combined_score > 5:
+            regime = "bullish"
+        elif combined_score > -5:
+            regime = "neutral"
+        elif combined_score > -15:
+            regime = "bearish"
+        else:
+            regime = "strong_bearish"
+        
+        return {
+            "regime": regime,
+            "score": combined_score,
+            "avg_gainer_pct": avg_gainer_pct,
+            "avg_loser_pct": avg_loser_pct,
+            "volume_tilt": volume_tilt,
+            "top_gainers": [g["ticker"] for g in gainers[:5]],
+            "top_losers": [l["ticker"] for l in losers[:5]],
+        }
+    
+    # ========================
+    # OPTIONS STRUCTURE
+    # ========================
+    
+    def get_options_contracts(
+        self, 
+        ticker: str, 
+        expiration_date: str = None,
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        Get options contracts reference data (available on basic plan).
+        
+        This gives us strike structure without real-time pricing.
+        """
+        if expiration_date is None:
+            expiration_date = date.today().strftime("%Y-%m-%d")
+        
+        endpoint = "/v3/reference/options/contracts"
+        params = {
+            "underlying_ticker": ticker,
+            "expiration_date": expiration_date,
+            "limit": limit,
+            "order": "asc",
+            "sort": "strike_price"
+        }
+        
+        data = self._request(endpoint, params)
+        
+        if data and "results" in data:
+            contracts = []
+            for c in data["results"]:
+                contracts.append({
+                    "ticker": c.get("ticker", ""),
+                    "underlying": c.get("underlying_ticker", ""),
+                    "strike": c.get("strike_price", 0),
+                    "expiration": c.get("expiration_date", ""),
+                    "type": c.get("contract_type", "").lower(),
+                    "style": c.get("exercise_style", ""),
+                    "shares_per_contract": c.get("shares_per_contract", 100),
+                })
+            return contracts
+        return []
+    
+    def analyze_strike_structure(self, ticker: str, spot_price: float) -> Dict[str, Any]:
+        """
+        Analyze options strike structure to infer support/resistance levels.
+        
+        Even without volume data, strike clustering tells us where market makers
+        have concentrated their hedging - these become support/resistance.
+        """
+        today = date.today().strftime("%Y-%m-%d")
+        contracts = self.get_options_contracts(ticker, today, limit=200)
+        
+        if not contracts:
+            return {"available": False}
+        
+        calls = [c for c in contracts if c["type"] == "call"]
+        puts = [c for c in contracts if c["type"] == "put"]
+        
+        call_strikes = [c["strike"] for c in calls]
+        put_strikes = [p["strike"] for p in puts]
+        all_strikes = sorted(set(call_strikes + put_strikes))
+        
+        # Find ATM strike
+        atm_strike = min(all_strikes, key=lambda s: abs(s - spot_price)) if all_strikes else spot_price
+        
+        # Strike density analysis (more strikes = more liquidity/hedging)
+        strike_step = 1 if spot_price < 200 else 5 if spot_price < 500 else 10
+        
+        # Identify key levels based on strike clustering
+        # Round strikes (like 600, 610, 620 for SPY) typically have more activity
+        round_call_strikes = [s for s in call_strikes if s % (strike_step * 5) == 0]
+        round_put_strikes = [s for s in put_strikes if s % (strike_step * 5) == 0]
+        
+        # Support = puts below spot, Resistance = calls above spot
+        support_levels = sorted([s for s in put_strikes if s < spot_price], reverse=True)[:3]
+        resistance_levels = sorted([s for s in call_strikes if s > spot_price])[:3]
+        
+        return {
+            "available": True,
+            "ticker": ticker,
+            "spot_price": spot_price,
+            "atm_strike": atm_strike,
+            "total_calls": len(calls),
+            "total_puts": len(puts),
+            "put_call_ratio": len(puts) / max(len(calls), 1),
+            "support_levels": support_levels,
+            "resistance_levels": resistance_levels,
+            "key_round_calls": round_call_strikes[:5],
+            "key_round_puts": round_put_strikes[:5],
+            "strike_range": (min(all_strikes), max(all_strikes)) if all_strikes else (0, 0),
+        }
+    
+    # ========================
+    # MOMENTUM ANALYSIS
+    # ========================
+    
+    def get_momentum_signals(self, ticker: str) -> Dict[str, Any]:
+        """
+        Comprehensive momentum analysis using all available data.
+        """
+        # Get intraday bars
+        bars = self.get_intraday_bars(ticker, timespan="minute", limit=30)
+        prev_day = self.get_previous_day(ticker)
+        snapshot = self.get_snapshot(ticker)
+        
+        if not snapshot:
+            return {"available": False}
+        
+        price = snapshot.get("price", 0)
+        today_open = snapshot.get("today_open", 0)
+        today_volume = snapshot.get("today_volume", 0)
+        prev_close = snapshot.get("prev_close", 0)
+        prev_volume = prev_day.get("volume", 0) if prev_day else 0
+        
+        signals = []
+        
+        # Gap analysis
+        if prev_close and today_open:
+            gap_pct = (today_open - prev_close) / prev_close * 100
+            if gap_pct > 1:
+                signals.append(("GAP_UP", gap_pct / 2))
+            elif gap_pct < -1:
+                signals.append(("GAP_DOWN", gap_pct / 2))
+        
+        # Volume analysis
+        if prev_volume and today_volume:
+            vol_ratio = today_volume / prev_volume
+            if vol_ratio > 1.5:
+                signals.append(("VOLUME_SURGE", min(vol_ratio - 1, 2)))
+            elif vol_ratio < 0.5:
+                signals.append(("VOLUME_DRY", -1))
+        
+        # Intraday momentum from bars
+        if len(bars) >= 5:
+            recent_bars = bars[:5]
+            older_bars = bars[5:10] if len(bars) >= 10 else []
+            
+            recent_avg_vol = sum(b["volume"] for b in recent_bars) / len(recent_bars)
+            
+            if older_bars:
+                older_avg_vol = sum(b["volume"] for b in older_bars) / len(older_bars)
+                if recent_avg_vol > older_avg_vol * 1.5:
+                    signals.append(("VOLUME_ACCELERATING", 1))
+            
+            # Price momentum
+            if recent_bars[0]["close"] > recent_bars[-1]["close"]:
+                price_change = (recent_bars[0]["close"] - recent_bars[-1]["close"]) / recent_bars[-1]["close"] * 100
+                if price_change > 0.5:
+                    signals.append(("PRICE_MOMENTUM_UP", price_change))
+            else:
+                price_change = (recent_bars[-1]["close"] - recent_bars[0]["close"]) / recent_bars[0]["close"] * 100
+                if price_change > 0.5:
+                    signals.append(("PRICE_MOMENTUM_DOWN", -price_change))
+        
+        # Day range position
+        if snapshot.get("today_high") and snapshot.get("today_low"):
+            day_range = snapshot["today_high"] - snapshot["today_low"]
+            if day_range > 0:
+                range_position = (price - snapshot["today_low"]) / day_range
+                if range_position > 0.9:
+                    signals.append(("NEAR_DAY_HIGH", 1))
+                elif range_position < 0.1:
+                    signals.append(("NEAR_DAY_LOW", -1))
+        
+        return {
+            "available": True,
+            "ticker": ticker,
+            "price": price,
+            "change_pct": snapshot.get("change_pct", 0),
+            "volume_ratio": today_volume / max(prev_volume, 1) if prev_volume else 1,
+            "signals": signals,
+            "net_signal": sum(s[1] for s in signals),
+            "bars_analyzed": len(bars),
+        }
+
+
+# Global instance
+polygon_enhanced = EnhancedPolygonAdapter()
+
+
+def get_full_analysis(ticker: str) -> Dict[str, Any]:
+    """Get comprehensive analysis combining all data sources."""
+    technicals = polygon_enhanced.get_full_technicals(ticker)
+    momentum = polygon_enhanced.get_momentum_signals(ticker)
+    strike_structure = polygon_enhanced.analyze_strike_structure(
+        ticker, 
+        momentum.get("price", 0) or technicals.get("price", 0)
+    )
+    
+    # Combine all signals
+    all_signals = []
+    if technicals.get("signals"):
+        all_signals.extend(technicals["signals"])
+    if momentum.get("signals"):
+        all_signals.extend(momentum["signals"])
+    
+    total_score = sum(s[1] for s in all_signals)
+    
+    return {
+        "ticker": ticker,
+        "price": momentum.get("price") or technicals.get("price", 0),
+        "technicals": technicals,
+        "momentum": momentum,
+        "options_structure": strike_structure,
+        "all_signals": all_signals,
+        "combined_score": total_score,
+        "direction": "LONG" if total_score > 2 else "SHORT" if total_score < -2 else "NEUTRAL",
+    }
