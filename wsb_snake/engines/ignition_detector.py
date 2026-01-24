@@ -27,6 +27,7 @@ from wsb_snake.utils.session_regime import (
     get_session_info, get_session_signal_multiplier, SessionType
 )
 from wsb_snake.collectors.alpaca_news import alpaca_news
+from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 
 
 class IgnitionType(Enum):
@@ -205,6 +206,7 @@ class IgnitionDetector:
     ) -> tuple:
         """
         Score the ignition signal based on multiple factors.
+        Enhanced with RSI and technical indicators from Polygon.
         
         Returns:
             (score, ignition_type, evidence list)
@@ -252,6 +254,40 @@ class IgnitionDetector:
             score += 15
             evidence.append("News catalyst detected")
             ignition_type = IgnitionType.NEWS_CATALYST
+        
+        # Enhanced with RSI from Polygon (0-20 points)
+        try:
+            rsi = polygon_enhanced.get_rsi(ticker, window=14, timespan="minute")
+            if rsi:
+                rsi_val = rsi.get("current", 50)
+                rsi_prev = rsi.get("previous", 50)
+                
+                # Oversold bounce or overbought extension
+                if rsi_val < 30 and rsi_val > rsi_prev:
+                    score += 15
+                    evidence.append(f"RSI oversold bounce: {rsi_val:.0f}")
+                elif rsi_val > 70 and rsi_val > rsi_prev:
+                    score += 10
+                    evidence.append(f"RSI momentum extension: {rsi_val:.0f}")
+                elif 40 < rsi_val < 60 and abs(rsi_val - rsi_prev) > 5:
+                    score += 5
+                    evidence.append(f"RSI breakout from neutral: {rsi_val:.0f}")
+        except Exception:
+            pass  # Continue without RSI if unavailable
+        
+        # MACD crossover detection (0-15 points)
+        try:
+            macd = polygon_enhanced.get_macd(ticker, timespan="minute")
+            if macd:
+                histogram = macd.get("histogram", 0)
+                if histogram > 0 and change_pct > 0:
+                    score += 10
+                    evidence.append("MACD bullish histogram")
+                elif histogram < 0 and change_pct < 0:
+                    score += 10
+                    evidence.append("MACD bearish histogram")
+        except Exception:
+            pass
         
         return score, ignition_type, evidence
     
