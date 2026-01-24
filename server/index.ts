@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { spawn } from "child_process";
 
 const app = express();
 const httpServer = createServer(app);
@@ -98,6 +99,43 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      
+      // Start the WSB Snake trading engine as a child process
+      log("Starting WSB Snake trading engine...", "snake");
+      const snakeProcess = spawn("python", ["-m", "wsb_snake.main"], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+      });
+      
+      snakeProcess.stdout?.on("data", (data: Buffer) => {
+        const lines = data.toString().trim().split("\n");
+        lines.forEach((line: string) => {
+          if (line.trim()) log(line, "snake");
+        });
+      });
+      
+      snakeProcess.stderr?.on("data", (data: Buffer) => {
+        const lines = data.toString().trim().split("\n");
+        lines.forEach((line: string) => {
+          if (line.trim()) log(line, "snake-err");
+        });
+      });
+      
+      snakeProcess.on("exit", (code: number | null) => {
+        log(`Trading engine exited with code ${code}`, "snake");
+        // Restart after 5 seconds if it crashes
+        setTimeout(() => {
+          log("Restarting trading engine...", "snake");
+          spawn("python", ["-m", "wsb_snake.main"], {
+            cwd: process.cwd(),
+            stdio: "inherit",
+            detached: false,
+          });
+        }, 5000);
+      });
+      
+      log("WSB Snake trading engine started", "snake");
     },
   );
 })();
