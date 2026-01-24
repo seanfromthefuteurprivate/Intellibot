@@ -12,6 +12,7 @@ WSB Snake is a production-grade 0DTE options intelligence engine implementing th
 - **Phase 6:** Setup Family Classifier ✅ COMPLETE (10 0DTE families + viability matrix)
 - **Phase 7:** Inception Stack ✅ COMPLETE (Convex instability detection + 6 meta-sensors)
 - **Phase 8:** ChartBrain AI ✅ COMPLETE (LangGraph + GPT-4o Vision chart analysis)
+- **Phase 9:** Alternative Data Stack ✅ COMPLETE (Finnhub + SEC EDGAR + Finviz)
 
 ## Architecture
 
@@ -27,6 +28,9 @@ wsb_snake/
 │   ├── benzinga_news.py       # Benzinga news adapter
 │   ├── alpaca_news.py         # Alpaca news adapter
 │   ├── reddit_collector.py    # Reddit scraping (needs OAuth)
+│   ├── finnhub_collector.py   # News sentiment + social sentiment + insider MSPR
+│   ├── sec_edgar_collector.py # Insider trading Form 4 filings
+│   ├── finviz_collector.py    # Unusual volume detection
 │   └── market_data.py         # Alpaca market data
 ├── engines/
 │   ├── orchestrator.py        # Coordinates all engines
@@ -172,8 +176,44 @@ Monitored tickers: SPY, QQQ, IWM, TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 | BENZINGA_API_KEY | ✅ Set | Benzinga news |
 | OPENAI_API_KEY | ✅ Set | AI summarization |
 
+## Alternative Data Stack
+
+### Data Sources
+
+| Source | API Key | Data | Boost |
+|--------|---------|------|-------|
+| **Finnhub** | FINNHUB_API_KEY | News sentiment, social sentiment, insider MSPR | +4 to +8 pts aligned, -2 to -5 contra |
+| **SEC EDGAR** | None (free) | Insider trading Form 4 filings | +5 pts high activity |
+| **Finviz** | None (scrape) | Unusual volume detection | +5 to +15 pts unusual volume |
+
+### Signal Boost Calculation
+
+```
+Alt Data Boost = Σ(
+  Finviz unusual volume boost (0 to +15),
+  Finnhub sentiment alignment (+4 to +8 or -2 to -5),
+  Finnhub insider buying (+5),
+  SEC EDGAR high activity (+5)
+)
+
+Final Score = AI_Adjusted_Score + Alt_Data_Boost
+```
+
+### Pipeline Integration
+
+- **Stage 0.5:** Collects alt data for priority tickers (SPY, QQQ, TSLA, NVDA, AAPL)
+- **Stage 2.9:** Applies alt data boosts to probability scores
+
 ## Recent Changes
-- **2026-01-24 (Latest):** Implemented ChartBrain AI
+- **2026-01-24 (Latest):** Implemented Alternative Data Stack
+  - Finnhub collector: News sentiment + social sentiment + insider MSPR
+  - SEC EDGAR collector: Insider trading Form 4 filings (free, no API key)
+  - Finviz collector: Unusual volume detection (scraping, no API key)
+  - Stage 0.5: Collects alt data for priority tickers
+  - Stage 2.9: Applies signal boosts based on alt data alignment
+  - Unusual volume gives +5 to +15 point boost
+  - Sentiment alignment gives +4 to +8 boost, contra gives -2 to -5 penalty
+- 2026-01-24: Implemented ChartBrain AI
   - LangGraph-based AI chart analyzer with GPT-4o vision
   - Generates candlestick charts with indicators (SMA, VWAP)
   - Background analysis thread studies all 11 tickers continuously

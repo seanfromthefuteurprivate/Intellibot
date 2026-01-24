@@ -44,6 +44,9 @@ from wsb_snake.engines.inception_detector import (
 from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.collectors.reddit_collector import get_wsb_trending, get_wsb_catalysts
+from wsb_snake.collectors.finnhub_collector import finnhub_collector
+from wsb_snake.collectors.sec_edgar_collector import sec_edgar_collector
+from wsb_snake.collectors.finviz_collector import finviz_collector
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -111,6 +114,68 @@ class SnakeOrchestrator:
                 log.warning(f"   WSB scan error: {e}")
                 results["wsb_trending"] = []
                 results["wsb_catalysts"] = []
+            
+            # Stage 0.5: Collect alternative data (Finnhub, SEC EDGAR, Finviz)
+            log.info("Stage 0.5: Collecting alternative data sources...")
+            results["alt_data"] = {}
+            
+            try:
+                # Sample a few high-priority tickers for alt data
+                priority_tickers = ["SPY", "QQQ", "TSLA", "NVDA", "AAPL"]
+                
+                for ticker in priority_tickers[:3]:
+                    alt = {}
+                    
+                    # Finnhub: News + Social + Insider sentiment
+                    try:
+                        finnhub_data = finnhub_collector.get_all_sentiment(ticker)
+                        alt["finnhub"] = {
+                            "sentiment": finnhub_data.get("combined_score", 0),
+                            "direction": finnhub_data.get("direction", "neutral"),
+                            "news_buzz": finnhub_data.get("news", {}).get("buzz", 0),
+                            "social_mentions": finnhub_data.get("social", {}).get("mentions", 0),
+                            "insider_buying": finnhub_data.get("insider", {}).get("buying", False),
+                        }
+                    except Exception as e:
+                        log.debug(f"   Finnhub error for {ticker}: {e}")
+                        alt["finnhub"] = {"sentiment": 0, "direction": "neutral"}
+                    
+                    # SEC EDGAR: Insider activity
+                    try:
+                        edgar_data = sec_edgar_collector.get_insider_activity(ticker)
+                        alt["sec_edgar"] = {
+                            "signal": edgar_data.get("signal", "low_activity"),
+                            "filings_this_week": edgar_data.get("filings_this_week", 0),
+                        }
+                    except Exception as e:
+                        log.debug(f"   SEC EDGAR error for {ticker}: {e}")
+                        alt["sec_edgar"] = {"signal": "unknown"}
+                    
+                    # Finviz: Unusual volume
+                    try:
+                        finviz_data = finviz_collector.get_unusual_volume(ticker)
+                        alt["finviz"] = {
+                            "unusual_volume": finviz_data.get("unusual", False),
+                            "rel_volume": finviz_data.get("rel_volume", 1.0),
+                            "signal": finviz_data.get("signal", "normal"),
+                        }
+                    except Exception as e:
+                        log.debug(f"   Finviz error for {ticker}: {e}")
+                        alt["finviz"] = {"unusual_volume": False, "rel_volume": 1.0}
+                    
+                    results["alt_data"][ticker] = alt
+                
+                # Log summary
+                volume_alerts = [t for t, d in results["alt_data"].items() if d.get("finviz", {}).get("unusual_volume")]
+                sentiment_alerts = [t for t, d in results["alt_data"].items() if d.get("finnhub", {}).get("direction") != "neutral"]
+                
+                if volume_alerts:
+                    log.info(f"   Unusual volume: {', '.join(volume_alerts)}")
+                if sentiment_alerts:
+                    log.info(f"   Sentiment signals: {', '.join(sentiment_alerts)}")
+                    
+            except Exception as e:
+                log.warning(f"   Alt data collection error: {e}")
             
             # Stage 1: Run all detection engines in sequence
             log.info("Stage 1: Running detection engines...")
@@ -393,16 +458,95 @@ class SnakeOrchestrator:
             ai_confirmed = len([v for v in results["ai_validations"] if v.get("ai_agrees") and v.get("ai_confidence", 0) > 0.7])
             log.info(f"   AI confirmations: {ai_confirmed}")
             
+            # Stage 2.9: Apply alternative data boosts (Finnhub, Finviz, SEC EDGAR)
+            log.info("Stage 2.9: Applying alternative data signal boosts...")
+            alt_boosts_applied = 0
+            
+            for prob in results["probabilities"]:
+                ticker = prob.get("ticker")
+                if not ticker:
+                    continue
+                
+                current_score = prob.get("ai_adjusted_score", prob.get("combined_score", 0))
+                total_boost = 0
+                boost_reasons = []
+                
+                # Get alt data for this ticker
+                alt = results.get("alt_data", {}).get(ticker, {})
+                
+                # Finviz unusual volume boost (most impactful)
+                finviz = alt.get("finviz", {})
+                if finviz.get("unusual_volume"):
+                    rel_vol = finviz.get("rel_volume", 1.0)
+                    if rel_vol >= 3.0:
+                        boost = 15
+                        boost_reasons.append(f"Extreme volume ({rel_vol:.1f}x)")
+                    elif rel_vol >= 2.0:
+                        boost = 10
+                        boost_reasons.append(f"High volume ({rel_vol:.1f}x)")
+                    else:
+                        boost = 5
+                        boost_reasons.append(f"Elevated volume ({rel_vol:.1f}x)")
+                    total_boost += boost
+                
+                # Finnhub sentiment alignment boost
+                finnhub = alt.get("finnhub", {})
+                signal_direction = "bullish"  # Default
+                ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                if ignition:
+                    signal_direction = ignition.get("direction", "bullish")
+                
+                finnhub_dir = finnhub.get("direction", "neutral")
+                if finnhub_dir != "neutral":
+                    if finnhub_dir == signal_direction:
+                        boost = 8 if abs(finnhub.get("sentiment", 0)) > 0.2 else 4
+                        boost_reasons.append(f"Finnhub sentiment aligned ({finnhub_dir})")
+                        total_boost += boost
+                    else:
+                        # Sentiment disagrees - slight penalty
+                        penalty = -5 if abs(finnhub.get("sentiment", 0)) > 0.2 else -2
+                        boost_reasons.append(f"Finnhub sentiment contra ({finnhub_dir})")
+                        total_boost += penalty
+                
+                # Finnhub insider buying boost
+                if finnhub.get("insider_buying"):
+                    total_boost += 5
+                    boost_reasons.append("Insider buying detected")
+                
+                # SEC EDGAR high activity boost
+                edgar = alt.get("sec_edgar", {})
+                if edgar.get("signal") == "high_activity":
+                    total_boost += 5
+                    boost_reasons.append("High insider filing activity")
+                
+                # Apply boost if any
+                if total_boost != 0:
+                    new_score = max(0, min(100, current_score + total_boost))
+                    prob["alt_data_boost"] = total_boost
+                    prob["alt_boost_reasons"] = boost_reasons
+                    prob["final_score"] = new_score
+                    alt_boosts_applied += 1
+                    
+                    if total_boost > 0:
+                        log.info(f"   📊 {ticker}: +{total_boost} pts from alt data ({', '.join(boost_reasons)})")
+                    else:
+                        log.debug(f"   📊 {ticker}: {total_boost} pts from alt data ({', '.join(boost_reasons)})")
+                else:
+                    prob["final_score"] = current_score
+            
+            log.info(f"   Alt data boosts applied: {alt_boosts_applied}")
+            
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")
             for prob in results["probabilities"]:
                 ticker = prob.get("ticker")
-                score = prob.get("combined_score", 0)
+                # Use final_score (includes AI + alt data boosts), fallback to combined_score
+                score = prob.get("final_score", prob.get("ai_adjusted_score", prob.get("combined_score", 0)))
                 
                 if not ticker:
                     continue
                     
-                # Determine tier
+                # Determine tier based on final score
                 if score >= self.A_PLUS_THRESHOLD:
                     tier = "A+"
                 elif score >= self.A_THRESHOLD:

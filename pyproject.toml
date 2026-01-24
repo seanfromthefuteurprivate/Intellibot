@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "alpaca-trade-api>=3.2.0",
+    "finnhub-python>=2.4.26",
     "langchain>=1.2.7",
     "langchain-openai>=1.1.7",
     "langgraph>=1.0.7",
