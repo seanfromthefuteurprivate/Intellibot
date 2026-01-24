@@ -19,11 +19,20 @@ from wsb_snake.utils.logger import log
 class EnhancedPolygonAdapter:
     """Enhanced adapter maximizing Polygon basic plan capabilities."""
     
+    # Rate limiting: Polygon basic plan allows 5 requests/min
+    REQUESTS_PER_MINUTE = 5
+    
     def __init__(self):
         self.api_key = POLYGON_API_KEY
         self.base_url = POLYGON_BASE_URL
         self._cache: Dict[str, Tuple[datetime, Any]] = {}
-        self._cache_ttl = 60  # seconds
+        self._cache_ttl = 120  # Increased to 2 minutes to reduce API calls
+        self._request_times: List[datetime] = []
+        
+        # Per-scan cache for batch efficiency
+        self._scan_cache: Dict[str, Any] = {}
+        self._scan_cache_time: Optional[datetime] = None
+        self._scan_cache_ttl = 60  # Per-scan cache valid for 60s
         
     def _request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
         """Make authenticated request to Polygon API with caching."""
@@ -582,8 +591,26 @@ class EnhancedPolygonAdapter:
 polygon_enhanced = EnhancedPolygonAdapter()
 
 
-def get_full_analysis(ticker: str) -> Dict[str, Any]:
-    """Get comprehensive analysis combining all data sources."""
+def get_full_analysis(ticker: str, use_cache: bool = True) -> Dict[str, Any]:
+    """
+    Get comprehensive analysis combining all data sources.
+    
+    Uses scan cache to avoid redundant API calls within the same scan cycle.
+    """
+    # Check scan cache first
+    now = datetime.now()
+    if use_cache and polygon_enhanced._scan_cache_time:
+        cache_age = (now - polygon_enhanced._scan_cache_time).seconds
+        if cache_age < polygon_enhanced._scan_cache_ttl:
+            if ticker in polygon_enhanced._scan_cache:
+                return polygon_enhanced._scan_cache[ticker]
+    
+    # Reset scan cache if expired
+    if not polygon_enhanced._scan_cache_time or \
+       (now - polygon_enhanced._scan_cache_time).seconds >= polygon_enhanced._scan_cache_ttl:
+        polygon_enhanced._scan_cache = {}
+        polygon_enhanced._scan_cache_time = now
+    
     technicals = polygon_enhanced.get_full_technicals(ticker)
     momentum = polygon_enhanced.get_momentum_signals(ticker)
     strike_structure = polygon_enhanced.analyze_strike_structure(
@@ -600,7 +627,7 @@ def get_full_analysis(ticker: str) -> Dict[str, Any]:
     
     total_score = sum(s[1] for s in all_signals)
     
-    return {
+    result = {
         "ticker": ticker,
         "price": momentum.get("price") or technicals.get("price", 0),
         "technicals": technicals,
@@ -610,3 +637,8 @@ def get_full_analysis(ticker: str) -> Dict[str, Any]:
         "combined_score": total_score,
         "direction": "LONG" if total_score > 2 else "SHORT" if total_score < -2 else "NEUTRAL",
     }
+    
+    # Store in scan cache
+    polygon_enhanced._scan_cache[ticker] = result
+    
+    return result

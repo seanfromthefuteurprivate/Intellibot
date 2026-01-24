@@ -119,14 +119,21 @@ class PressureEngine:
         
         log.info(f"Pressure scan starting | Regime: {self._market_regime.get('regime', 'unknown') if self._market_regime else 'unknown'}")
         
+        # Skip scanning if session multiplier is 0 (market closed)
+        if session_info["signal_quality_multiplier"] == 0:
+            log.info("Pressure scan skipped - market closed")
+            return signals
+        
         for ticker in ZERO_DTE_UNIVERSE:
             try:
                 signal = self._analyze_ticker(ticker)
                 if signal and signal.score >= self.MIN_SCORE_TO_SIGNAL:
                     # Apply session multiplier
                     signal.score *= session_info["signal_quality_multiplier"]
-                    signals.append(signal)
-                    log.info(f"Pressure detected: {ticker} | Score: {signal.score:.0f} | Type: {signal.pressure_type.value}")
+                    # Only append if score is still above threshold after multiplier
+                    if signal.score >= self.MIN_SCORE_TO_SIGNAL:
+                        signals.append(signal)
+                        log.info(f"Pressure detected: {ticker} | Score: {signal.score:.0f} | Type: {signal.pressure_type.value}")
             except Exception as e:
                 log.warning(f"Pressure analysis failed for {ticker}: {e}")
         

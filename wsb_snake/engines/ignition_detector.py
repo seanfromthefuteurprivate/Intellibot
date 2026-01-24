@@ -117,14 +117,21 @@ class IgnitionDetector:
         
         log.info(f"Ignition scan starting | Session: {session_info['session']}")
         
+        # Skip scanning if session multiplier is 0 (market closed)
+        if session_info["signal_quality_multiplier"] == 0:
+            log.info("Ignition scan skipped - market closed")
+            return signals
+        
         for ticker in ZERO_DTE_UNIVERSE:
             try:
                 signal = self._analyze_ticker(ticker)
                 if signal and signal.score >= self.MIN_SCORE_TO_SIGNAL:
                     # Apply session multiplier
                     signal.score *= session_info["signal_quality_multiplier"]
-                    signals.append(signal)
-                    log.info(f"Ignition detected: {ticker} | Score: {signal.score:.0f} | Type: {signal.ignition_type.value}")
+                    # Only append if score is still above threshold after multiplier
+                    if signal.score >= self.MIN_SCORE_TO_SIGNAL:
+                        signals.append(signal)
+                        log.info(f"Ignition detected: {ticker} | Score: {signal.score:.0f} | Type: {signal.ignition_type.value}")
             except Exception as e:
                 log.warning(f"Failed to analyze {ticker}: {e}")
         
