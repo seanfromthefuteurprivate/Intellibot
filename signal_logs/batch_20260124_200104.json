@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-01-24T20:01:04.853093",
+  "count": 3,
+  "signals": [
+    {
+      "ticker": "NVDA",
+      "timestamp": "2026-01-24T20:01:04.852407",
+      "score": 23.60484743562,
+      "tier": "C",
+      "action": "WAIT",
+      "horizon": "INTRADAY",
+      "confidence": 1.0,
+      "market": {
+        "price": 187.43,
+        "volume": 3285830,
+        "change_pct": 0.014012118589050007
+      },
+      "social": {
+        "mention_count": 1,
+        "velocity": 0.5,
+        "sentiment": 0.3
+      },
+      "risk": {
+        "blocked": false,
+        "block_reason": ""
+      },
+      "summary": "",
+      "why": [],
+      "levels": {},
+      "evidence": []
+    },
+    {
+      "ticker": "QQQ",
+      "timestamp": "2026-01-24T20:01:04.852383",
+      "score": 18.631433127688034,
+      "tier": "C",
+      "action": "WAIT",
+      "horizon": "INTRADAY",
+      "confidence": 1.0,
+      "market": {
+        "price": 621.79,
+        "volume": 533885,
+        "change_pct": 0.0015785828192200807
+      },
+      "social": {
+        "mention_count": 1,
+        "velocity": 0.5,
+        "sentiment": 0.3
+      },
+      "risk": {
+        "blocked": false,
+        "block_reason": ""
+      },
+      "summary": "",
+      "why": [],
+      "levels": {},
+      "evidence": []
+    },
+    {
+      "ticker": "SPY",
+      "timestamp": "2026-01-24T20:01:04.852291",
+      "score": 18.296098467254986,
+      "tier": "C",
+      "action": "WAIT",
+      "horizon": "INTRADAY",
+      "confidence": 1.0,
+      "market": {
+        "price": 688.45,
+        "volume": 1105712,
+        "change_pct": -0.0007402461681374693
+      },
+      "social": {
+        "mention_count": 1,
+        "velocity": 0.5,
+        "sentiment": 0.3
+      },
+      "risk": {
+        "blocked": false,
+        "block_reason": ""
+      },
+      "summary": "",
+      "why": [],
+      "levels": {},
+      "evidence": []
+    }
+  ]
+}
