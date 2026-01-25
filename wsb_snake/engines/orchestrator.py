@@ -60,6 +60,10 @@ from wsb_snake.engines.multi_day_scanner import multi_day_scanner
 from wsb_snake.engines.zero_dte_volatility import zero_dte_volatility
 from wsb_snake.engines.earnings_otm_engine import earnings_otm_engine
 from wsb_snake.training.historical_trainer import historical_trainer
+from wsb_snake.learning.pattern_memory import pattern_memory
+from wsb_snake.learning.time_learning import time_learning
+from wsb_snake.learning.event_outcomes import event_outcome_db
+from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -332,6 +336,67 @@ class SnakeOrchestrator:
                     log.info(f"   Multi-day: Using cached ({len(multi_day_scanner.active_setups)} setups)")
             except Exception as e:
                 log.warning(f"   Multi-day scanner error: {e}")
+            
+            # Stage 0.85: Learning Module Updates
+            log.info("Stage 0.85: Advanced learning and stalking...")
+            try:
+                # Get time-of-day recommendation
+                time_rec = time_learning.get_recommendation()
+                results["learning"] = {
+                    "time_quality": time_rec.quality_score,
+                    "time_recommendation": time_rec.recommendation,
+                    "time_session": time_rec.session
+                }
+                
+                if time_rec.quality_score >= 60:
+                    log.info(f"   Time Learning: {time_rec.session.upper()} quality={time_rec.quality_score:.0f} ({time_rec.recommendation})")
+                elif time_rec.quality_score < 40:
+                    log.info(f"   Time Learning: LOW quality period ({time_rec.quality_score:.0f})")
+                
+                # Check stalked setups
+                # Gather current prices for stalking check
+                stalk_prices = {}
+                for ticker in ZERO_DTE_UNIVERSE:
+                    levels = get_target_levels(ticker)
+                    if levels.get("current_price"):
+                        stalk_prices[ticker] = float(levels["current_price"])
+                
+                stalk_alerts = stalking_mode.check_all_setups(stalk_prices)
+                results["learning"]["stalk_alerts"] = len(stalk_alerts)
+                
+                # Send alerts for triggered stalks
+                for alert in stalk_alerts:
+                    if alert.urgency >= 4:
+                        alert_msg = f"""
+*[STALKED SETUP {alert.alert_type.upper()}]*
+
+{alert.symbol} - {alert.message}
+
+_Urgency: {alert.urgency}/5_
+"""
+                        send_telegram_alert(alert_msg)
+                        log.info(f"   Stalk alert: {alert.symbol} - {alert.alert_type}")
+                
+                # Add new setups to stalk from multi-day scanner
+                for setup in multi_day_scanner.active_setups[:5]:
+                    if setup.confidence >= 60:
+                        # Check if not already stalking
+                        existing = [s for s in stalking_mode.get_active_setups() 
+                                    if s.symbol == setup.symbol and s.setup_type == setup.setup_type]
+                        if not existing:
+                            stalking_mode.add_setup(
+                                symbol=setup.symbol,
+                                setup_type=setup.setup_type,
+                                catalyst=setup.catalyst,
+                                expected_move=5.0,
+                                expires_hours=72
+                            )
+                            log.info(f"   Now stalking: {setup.symbol} ({setup.setup_type})")
+                
+                log.info(f"   Active stalks: {len(stalking_mode.get_active_setups())}")
+                
+            except Exception as e:
+                log.warning(f"   Learning module error: {e}")
             
             # Stage 0.9: Phase 1 Strategy Engines (0DTE Vol + Earnings OTM)
             log.info("Stage 0.9: Phase 1 strategies (0DTE Vol + Earnings OTM)...")
@@ -763,6 +828,50 @@ class SnakeOrchestrator:
                     prob["final_score"] = current_score
             
             log.info(f"   Alt data boosts applied: {alt_boosts_applied}")
+            
+            # Stage 2.95: Pattern Memory matching
+            log.info("Stage 2.95: Pattern memory matching...")
+            pattern_matches_found = 0
+            
+            for prob in results["probabilities"]:
+                ticker = prob.get("ticker")
+                if not ticker:
+                    continue
+                
+                try:
+                    # Get recent bars for pattern matching
+                    levels = get_target_levels(ticker)
+                    
+                    # Try to match against stored patterns
+                    rsi = prob.get("features", {}).get("rsi", 50)
+                    matches = pattern_memory.find_matching_patterns(
+                        symbol=ticker,
+                        bars=[],  # We'd need bars from price data
+                        rsi=rsi,
+                        vwap_position="neutral"
+                    )
+                    
+                    if matches:
+                        best_match = matches[0]
+                        prob["pattern_match"] = {
+                            "pattern_type": best_match.pattern_type,
+                            "similarity": best_match.similarity_score,
+                            "historical_win_rate": best_match.historical_win_rate,
+                            "direction": best_match.direction
+                        }
+                        
+                        # Boost score based on pattern confidence
+                        if best_match.confidence >= 70 and best_match.historical_win_rate >= 0.6:
+                            current_score = prob.get("final_score", prob.get("combined_score", 0))
+                            boost = min(15, int(best_match.confidence * 0.15))
+                            prob["final_score"] = current_score + boost
+                            pattern_matches_found += 1
+                            log.info(f"   Pattern match: {ticker} {best_match.pattern_type} (sim={best_match.similarity_score:.0f}%, WR={best_match.historical_win_rate:.0%})")
+                            
+                except Exception as e:
+                    log.debug(f"Pattern matching error for {ticker}: {e}")
+            
+            log.info(f"   Pattern matches: {pattern_matches_found}")
             
             # Stage 3: Process high-conviction signals
             log.info("Stage 3: Processing alerts and trades...")

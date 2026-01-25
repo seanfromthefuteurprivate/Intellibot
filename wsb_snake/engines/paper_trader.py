@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from wsb_snake.db.database import get_connection, save_paper_trade
 from wsb_snake.utils.logger import log
 from wsb_snake.engines.learning_memory import learning_memory
+from wsb_snake.learning.time_learning import time_learning
+from wsb_snake.learning.pattern_memory import pattern_memory
 
 
 @dataclass
@@ -322,6 +324,32 @@ class PaperTrader:
                 min_price=position.entry_price if position.pnl > 0 else exit_price,
                 outcome_type=outcome_type,
             )
+        
+        # Record outcome for time learning
+        try:
+            pnl_pct = (position.pnl / (position.entry_price * position.position_size)) * 100 if position.entry_price > 0 else 0
+            time_learning.record_signal(
+                signal_time=position.entry_time,
+                symbol=position.ticker,
+                strategy=position.direction.upper(),
+                score=getattr(position, 'signal_score', 50),
+                outcome=outcome_type,
+                pnl_pct=pnl_pct
+            )
+        except Exception as e:
+            log.debug(f"Time learning record error: {e}")
+        
+        # Store pattern for pattern memory
+        try:
+            pnl_pct = (position.pnl / (position.entry_price * position.position_size)) * 100 if position.entry_price > 0 else 0
+            pattern_memory.store_pattern(
+                symbol=position.ticker,
+                bars=[],  # Would need historical bars
+                outcome=outcome_type,
+                pnl_pct=pnl_pct
+            )
+        except Exception as e:
+            log.debug(f"Pattern memory store error: {e}")
         
         log.info(
             f"Paper trade closed: {position.ticker} | "
