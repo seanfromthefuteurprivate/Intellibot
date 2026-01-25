@@ -23,6 +23,7 @@ from wsb_snake.db.database import init_database
 from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary, run_startup_training
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.chart_brain import get_chart_brain
+from wsb_snake.engines.spy_scalper import spy_scalper
 
 
 def send_startup_ping():
@@ -103,6 +104,11 @@ def main():
     chart_brain = get_chart_brain()
     chart_brain.start()
     log.info("ChartBrain active - studying charts in real-time")
+    
+    # Start SPY 0DTE Scalper - hawk-like monitoring for quick gains
+    log.info("Starting SPY 0DTE Scalper (hawk mode)...")
+    spy_scalper.start()
+    log.info("SPY Scalper active - watching for 15-30% scalp opportunities")
     
     # Run historical training to calibrate engine weights
     log.info("Running historical training (6 weeks)...")

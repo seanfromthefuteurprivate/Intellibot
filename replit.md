@@ -31,6 +31,20 @@ The system incorporates 6 core engines:
 
 Additionally, a **Strategy Classifier** identifies opportunities across 7 different strategy types, and a **Multi-Day Scanner** focuses on longer-term setups (3-21 DTE).
 
+### SPY 0DTE Scalper (Primary Focus)
+The **SPY Scalper** is a dedicated hawk-like engine for 0DTE SPY options scalping, targeting quick 15-30% gains:
+- **Scan Frequency:** Every 30 seconds during market hours
+- **Pattern Detection:** 10 scalping patterns including:
+  - VWAP bounces, reclaims, and rejections
+  - Momentum surges (long and short)
+  - Breakouts and breakdowns (30-bar highs/lows)
+  - Failed breakout/breakdown traps (bear/bull traps)
+  - Squeeze fires (volatility expansion)
+- **AI Confirmation:** Uses specialized LangGraph workflow (`scalp_langgraph.py`) with GPT-4o Vision for pattern validation
+- **Learning Integration:** Applies Pattern Memory and Time-of-Day Learning boosts to confidence scores
+- **Alerts:** Sends complete Telegram signals with entry, target, stop, R:R ratio, and expected option gain
+- **Exit Tracking:** Automatically stalks positions and sends "BOOK PROFIT NOW" alerts when targets are hit
+
 ### Learning System
 The system includes 4 integrated learning modules that improve over time:
 1. **Pattern Memory:** Stores successful price action patterns (breakout, squeeze, reversal, momentum) and matches against new setups. Uses 70% price action + 30% volume matching for similarity scoring.
@@ -46,6 +60,12 @@ All modules persist to SQLite database (`wsb_snake_data/learning.db`) and integr
 
 ### AI & Analysis
 -   **ChartBrain AI:** Utilizes LangGraph and GPT-4o Vision for background AI chart analysis, validating algorithmic signals and providing visual insights.
+-   **Scalp LangGraph Analyzer:** Specialized 5-node LangGraph workflow for 0DTE scalp pattern confirmation:
+    1. VWAP Analysis - Assesses bounce/reclaim/rejection quality
+    2. Momentum Analysis - Confirms momentum is supporting entry
+    3. Trap Detection - Identifies failed breakout/breakdown opportunities
+    4. Entry Timing - Determines optimal entry point
+    5. Final Verdict - Decisive CALLS/PUTS/NO TRADE recommendation with confidence
 -   **Sentiment Analysis:** Processes text-based sentiment from news and social feeds.
 -   **Chart Generation:** Creates candlestick charts with integrated indicators for visual analysis.
 

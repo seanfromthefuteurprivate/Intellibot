@@ -64,6 +64,7 @@ from wsb_snake.learning.pattern_memory import pattern_memory
 from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.event_outcomes import event_outcome_db
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
+from wsb_snake.engines.spy_scalper import spy_scalper
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
