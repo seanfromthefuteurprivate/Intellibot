@@ -34,6 +34,7 @@ from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
+from wsb_snake.trading.alpaca_executor import alpaca_executor
 
 log = get_logger(__name__)
 
@@ -856,6 +857,25 @@ class SPYScalper:
             price_getter=self._get_current_price
         )
         log.info(f"🔪 Zero Greed Exit tracking: {position_id}")
+        
+        # Execute REAL paper trade on Alpaca
+        total_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
+        try:
+            alpaca_position = alpaca_executor.execute_scalp_entry(
+                underlying=self.symbol,
+                direction=setup.direction,
+                entry_price=setup.entry_price,
+                target_price=setup.target_price,
+                stop_loss=setup.stop_loss,
+                confidence=total_confidence,
+                pattern=setup.pattern.value
+            )
+            if alpaca_position:
+                log.info(f"📈 Alpaca paper trade placed: {alpaca_position.option_symbol}")
+            else:
+                log.warning("Alpaca paper trade not placed (max positions or error)")
+        except Exception as e:
+            log.error(f"Alpaca execution error: {e}")
         
         # Record in history
         self._record_signal(setup)

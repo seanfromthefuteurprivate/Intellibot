@@ -25,6 +25,7 @@ from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.engines.spy_scalper import spy_scalper
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
+from wsb_snake.trading.alpaca_executor import alpaca_executor
 
 
 def send_startup_ping():
@@ -33,7 +34,10 @@ def send_startup_ping():
     
     session_info = get_session_info()
     
-    message = f"""🐍 **WSB SNAKE v2.2 ONLINE**
+    account = alpaca_executor.get_account()
+    buying_power = float(account.get("buying_power", 0))
+    
+    message = f"""🐍 **WSB SNAKE v2.3 ONLINE**
 
 **0DTE Intelligence Engine Activated**
 
@@ -45,7 +49,13 @@ def send_startup_ping():
 • Engine 5: Self-Learning Memory
 • Engine 6: Paper Shadow Trader
 • 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
-• 📱 Reddit r/wallstreetbets: LIVE SCRAPING
+• 🦅 SPY Scalper: Hawk-mode (30s scans)
+• 📈 Alpaca Paper Trading: ACTIVE
+
+💰 **Paper Trading:**
+• Buying Power: ${buying_power:,.2f}
+• Max Per Trade: $1,000
+• Strategy: 0DTE Options Scalping
 
 📊 **Session Status:**
 • Session: {session_info['session'].upper()}
@@ -53,9 +63,9 @@ def send_startup_ping():
 • Power Hour: {'Yes' if session_info['is_power_hour'] else 'No'}
 • Time ET: {session_info['current_time_et']}
 
-🎯 **Monitoring:** SPY, QQQ, IWM + TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
+🎯 **Monitoring:** SPY (primary) + QQQ, IWM, TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
 
-⚡ Pipeline + AI charts + WSB sentiment running continuously.
+⚡ Real paper trades executing on signals!
 """
     
     send_alert(message)
@@ -115,6 +125,13 @@ def main():
     log.info("Starting Zero Greed Exit Protocol...")
     zero_greed_exit.start()
     log.info("Zero Greed Exit active - no mercy mode for exits")
+    
+    # Start Alpaca Paper Trading Executor - real paper trades
+    log.info("Starting Alpaca Paper Trading Executor...")
+    alpaca_executor.start_monitoring()
+    account = alpaca_executor.get_account()
+    buying_power = float(account.get("buying_power", 0))
+    log.info(f"Alpaca Paper Trading active - Buying Power: ${buying_power:,.2f}")
     
     # Run historical training to calibrate engine weights
     log.info("Running historical training (6 weeks)...")

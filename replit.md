@@ -100,6 +100,19 @@ All modules persist to SQLite database (`wsb_snake_data/learning.db`) and integr
 -   **Sentiment Analysis:** Processes text-based sentiment from news and social feeds.
 -   **Chart Generation:** Creates candlestick charts with integrated indicators for visual analysis.
 
+### Alpaca Paper Trading Executor
+Real paper trade execution through Alpaca API:
+- **Max Per Trade:** $1,000 position sizing
+- **Max Concurrent:** 3 positions at once
+- **Order Type:** Market orders for fast fills
+- **Auto-Exit:** Monitors positions every 5 seconds
+- **Target:** +20% (auto-close)
+- **Stop:** -15% (auto-close)
+- **Time Decay:** 45-minute max hold
+- **Buying Power:** $200,000 paper trading account
+- **Telegram Alerts:** Order placed, filled, and closed notifications
+- **Session Stats:** Win rate, total P&L tracking
+
 ### Zero Greed Exit Protocol
 Mechanical ruthless exit system with NO human override:
 - **Target Hit:** IMMEDIATE EXIT - "BOOK PROFIT NOW" alert sent
