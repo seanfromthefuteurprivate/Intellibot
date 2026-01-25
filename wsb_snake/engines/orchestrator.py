@@ -839,34 +839,39 @@ _Urgency: {alert.urgency}/5_
                     continue
                 
                 try:
-                    # Get recent bars for pattern matching
-                    levels = get_target_levels(ticker)
+                    # Get price bars from ignition signal (already computed)
+                    ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                    price_bars = ignition.get("price_bars", []) if ignition else []
                     
-                    # Try to match against stored patterns
-                    rsi = prob.get("features", {}).get("rsi", 50)
-                    matches = pattern_memory.find_matching_patterns(
-                        symbol=ticker,
-                        bars=[],  # We'd need bars from price data
-                        rsi=rsi,
-                        vwap_position="neutral"
-                    )
-                    
-                    if matches:
-                        best_match = matches[0]
-                        prob["pattern_match"] = {
-                            "pattern_type": best_match.pattern_type,
-                            "similarity": best_match.similarity_score,
-                            "historical_win_rate": best_match.historical_win_rate,
-                            "direction": best_match.direction
-                        }
+                    # Only attempt pattern matching if we have sufficient bar data
+                    if len(price_bars) >= 5:
+                        # Get context from ignition and pressure
+                        rsi = ignition.get("rsi", 50) if ignition else 50
+                        vwap_pos = "above" if ignition and ignition.get("above_vwap", False) else "below"
                         
-                        # Boost score based on pattern confidence
-                        if best_match.confidence >= 70 and best_match.historical_win_rate >= 0.6:
-                            current_score = prob.get("final_score", prob.get("combined_score", 0))
-                            boost = min(15, int(best_match.confidence * 0.15))
-                            prob["final_score"] = current_score + boost
-                            pattern_matches_found += 1
-                            log.info(f"   Pattern match: {ticker} {best_match.pattern_type} (sim={best_match.similarity_score:.0f}%, WR={best_match.historical_win_rate:.0%})")
+                        matches = pattern_memory.find_matching_patterns(
+                            symbol=ticker,
+                            bars=price_bars,
+                            rsi=rsi,
+                            vwap_position=vwap_pos
+                        )
+                        
+                        if matches:
+                            best_match = matches[0]
+                            prob["pattern_match"] = {
+                                "pattern_type": best_match.pattern_type,
+                                "similarity": best_match.similarity_score,
+                                "historical_win_rate": best_match.historical_win_rate,
+                                "direction": best_match.direction
+                            }
+                            
+                            # Only boost if pattern has sufficient historical samples and confidence
+                            if best_match.confidence >= 70 and best_match.historical_win_rate >= 0.6 and best_match.similarity_score >= 60:
+                                current_score = prob.get("final_score", prob.get("combined_score", 0))
+                                boost = min(15, int(best_match.confidence * 0.15))
+                                prob["final_score"] = current_score + boost
+                                pattern_matches_found += 1
+                                log.info(f"   Pattern match: {ticker} {best_match.pattern_type} (sim={best_match.similarity_score:.0f}%, WR={best_match.historical_win_rate:.0%})")
                             
                 except Exception as e:
                     log.debug(f"Pattern matching error for {ticker}: {e}")
@@ -892,6 +897,13 @@ _Urgency: {alert.urgency}/5_
                     tier = "B"
                 else:
                     tier = "C"
+                
+                # Add price bars for learning (from ignition signal)
+                ignition = next((s for s in results["ignition_signals"] if s.get("ticker") == ticker), None)
+                if ignition:
+                    prob["price_bars"] = ignition.get("price_bars", [])
+                    if not prob.get("strategy"):
+                        prob["strategy"] = prob.get("action", "UNKNOWN")
                 
                 # Get family classification for this ticker
                 ticker_families = [f for f in results["family_classifications"] if f.get("ticker") == ticker]

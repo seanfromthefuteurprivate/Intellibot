@@ -31,6 +31,15 @@ The system incorporates 6 core engines:
 
 Additionally, a **Strategy Classifier** identifies opportunities across 7 different strategy types, and a **Multi-Day Scanner** focuses on longer-term setups (3-21 DTE).
 
+### Learning System
+The system includes 4 integrated learning modules that improve over time:
+1. **Pattern Memory:** Stores successful price action patterns (breakout, squeeze, reversal, momentum) and matches against new setups. Uses 70% price action + 30% volume matching for similarity scoring.
+2. **Time-of-Day Learning:** Tracks hourly and session-based performance, provides quality scores (0-100) and optimal trading recommendations.
+3. **Event Outcome Database:** Records actual market moves after CPI, FOMC, earnings events. Generates expectations for future events based on historical data.
+4. **Stalking Mode:** Monitors up to 20 setups approaching trigger points, with 5-level urgency system (DORMANT → WATCHING → HEATING → HOT → IMMINENT). Tracks multi-day setups up to 72 hours.
+
+All modules persist to SQLite database (`wsb_snake_data/learning.db`) and integrate with paper trader for automatic outcome recording.
+
 ### AI & Analysis
 -   **ChartBrain AI:** Utilizes LangGraph and GPT-4o Vision for background AI chart analysis, validating algorithmic signals and providing visual insights.
 -   **Sentiment Analysis:** Processes text-based sentiment from news and social feeds.

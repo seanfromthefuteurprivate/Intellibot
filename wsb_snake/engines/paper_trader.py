@@ -35,6 +35,11 @@ class PaperPosition:
     position_size: int
     status: str  # "pending", "open", "closed"
     
+    # Signal metadata for learning
+    signal_score: float = 0.0
+    strategy: str = "UNKNOWN"
+    price_bars: Optional[list] = None
+    
     # Tracking
     entry_time: Optional[datetime] = None
     exit_price: Optional[float] = None
@@ -148,6 +153,10 @@ class PaperTrader:
         
         trade_id = save_paper_trade(trade_data)
         
+        # Extract signal metadata for learning
+        strategy = probability_output.get("strategy", action)
+        price_bars = probability_output.get("price_bars", [])
+        
         # Create position object
         position = PaperPosition(
             trade_id=trade_id,
@@ -159,6 +168,9 @@ class PaperTrader:
             target_2_price=target_2,
             position_size=position_size,
             status="pending",
+            signal_score=score,
+            strategy=strategy,
+            price_bars=price_bars,
         )
         
         self.active_positions[ticker] = position
@@ -331,25 +343,26 @@ class PaperTrader:
             time_learning.record_signal(
                 signal_time=position.entry_time,
                 symbol=position.ticker,
-                strategy=position.direction.upper(),
-                score=getattr(position, 'signal_score', 50),
+                strategy=position.strategy,
+                score=position.signal_score,
                 outcome=outcome_type,
                 pnl_pct=pnl_pct
             )
         except Exception as e:
             log.debug(f"Time learning record error: {e}")
         
-        # Store pattern for pattern memory
-        try:
-            pnl_pct = (position.pnl / (position.entry_price * position.position_size)) * 100 if position.entry_price > 0 else 0
-            pattern_memory.store_pattern(
-                symbol=position.ticker,
-                bars=[],  # Would need historical bars
-                outcome=outcome_type,
-                pnl_pct=pnl_pct
-            )
-        except Exception as e:
-            log.debug(f"Pattern memory store error: {e}")
+        # Store pattern for pattern memory (only if we have price bars)
+        if position.price_bars and len(position.price_bars) >= 5:
+            try:
+                pnl_pct = (position.pnl / (position.entry_price * position.position_size)) * 100 if position.entry_price > 0 else 0
+                pattern_memory.store_pattern(
+                    symbol=position.ticker,
+                    bars=position.price_bars,
+                    outcome=outcome_type,
+                    pnl_pct=pnl_pct
+                )
+            except Exception as e:
+                log.debug(f"Pattern memory store error: {e}")
         
         log.info(
             f"Paper trade closed: {position.ticker} | "
