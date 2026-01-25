@@ -362,36 +362,80 @@ class SnakeOrchestrator:
                         stalk_prices[ticker] = float(levels["current_price"])
                 
                 stalk_alerts = stalking_mode.check_all_setups(stalk_prices)
+                
+                # Also check for exit signals on filled positions
+                exit_alerts = stalking_mode.check_exits(stalk_prices)
+                stalk_alerts.extend(exit_alerts)
+                
                 results["learning"]["stalk_alerts"] = len(stalk_alerts)
                 
-                # Send alerts for triggered stalks
+                # Send alerts for triggered stalks (entry and exit signals)
                 for alert in stalk_alerts:
                     if alert.urgency >= 4:
-                        alert_msg = f"""
+                        # Use formatted message for actionable trade signals
+                        if alert.alert_type in ["entry", "exit"]:
+                            alert_msg = alert.format_telegram_message()
+                        else:
+                            # Null-safe formatting for non-entry/exit alerts
+                            entry = alert.entry_price or 0
+                            target = alert.target_price or 0
+                            stop = alert.stop_loss or 0
+                            trade_type = alert.trade_type or "STOCK"
+                            direction = (alert.direction or "long").upper()
+                            
+                            alert_msg = f"""
 *[STALKED SETUP {alert.alert_type.upper()}]*
 
 {alert.symbol} - {alert.message}
+
+Entry: ${entry:.2f} | Target: ${target:.2f} | Stop: ${stop:.2f}
+Type: {trade_type} ({direction})
 
 _Urgency: {alert.urgency}/5_
 """
                         send_telegram_alert(alert_msg)
                         log.info(f"   Stalk alert: {alert.symbol} - {alert.alert_type}")
                 
-                # Add new setups to stalk from multi-day scanner
+                # Add new setups to stalk from multi-day scanner with trade details
                 for setup in multi_day_scanner.active_setups[:5]:
                     if setup.confidence >= 60:
                         # Check if not already stalking
                         existing = [s for s in stalking_mode.get_active_setups() 
                                     if s.symbol == setup.symbol and s.setup_type == setup.setup_type]
                         if not existing:
-                            stalking_mode.add_setup(
-                                symbol=setup.symbol,
-                                setup_type=setup.setup_type,
-                                catalyst=setup.catalyst,
-                                expected_move=5.0,
-                                expires_hours=72
-                            )
-                            log.info(f"   Now stalking: {setup.symbol} ({setup.setup_type})")
+                            # Get current price for trade level calculation
+                            current = stalk_prices.get(setup.symbol, 0)
+                            if current > 0:
+                                # Calculate trade levels based on expected move
+                                expected_pct = getattr(setup, 'expected_move_pct', None) or getattr(setup, 'expected_move', 3.0)
+                                direction = "long" if setup.direction == "bullish" else "short"
+                                
+                                if direction == "long":
+                                    entry_price = current
+                                    target_price = current * (1 + expected_pct / 100)
+                                    stop_loss = current * (1 - expected_pct / 200)  # 2:1 R:R
+                                    trade_type = "CALLS"
+                                else:
+                                    entry_price = current
+                                    target_price = current * (1 - expected_pct / 100)
+                                    stop_loss = current * (1 + expected_pct / 200)
+                                    trade_type = "PUTS"
+                                
+                                stalking_mode.add_setup(
+                                    symbol=setup.symbol,
+                                    setup_type=setup.setup_type,
+                                    trigger_price=entry_price,
+                                    trigger_condition="above" if direction == "long" else "below",
+                                    catalyst=setup.catalyst,
+                                    expected_move=expected_pct,
+                                    expires_hours=72,
+                                    entry_price=entry_price,
+                                    target_price=target_price,
+                                    stop_loss=stop_loss,
+                                    direction=direction,
+                                    trade_type=trade_type
+                                )
+                                log.info(f"   Stalking: {setup.symbol} {trade_type} Entry ${entry_price:.2f} Target ${target_price:.2f}")
                 
                 log.info(f"   Active stalks: {len(stalking_mode.get_active_setups())}")
                 

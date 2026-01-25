@@ -61,6 +61,22 @@ class StalkedSetup:
     catalyst: str = ""  # What's the catalyst
     notes: str = ""
     expected_move: float = 0.0
+    
+    # Trade Details (for actionable signals)
+    entry_price: Optional[float] = None  # Exact entry price
+    target_price: Optional[float] = None  # Take profit price
+    stop_loss: Optional[float] = None  # Stop loss price
+    direction: str = "long"  # "long" or "short"
+    trade_type: str = "CALLS"  # "CALLS", "PUTS", "STOCK"
+    position_size_pct: float = 2.0  # Suggested position size %
+    max_risk_pct: float = 1.0  # Max risk %
+    
+    # Entry/Exit tracking
+    entry_alerted: bool = False  # Entry signal sent
+    entry_filled_price: Optional[float] = None  # Actual fill price
+    entry_filled_at: Optional[str] = None  # When filled
+    exit_alerted: bool = False  # Exit signal sent
+    trailing_stop: bool = False  # Use trailing stop
 
 
 @dataclass
@@ -68,10 +84,59 @@ class StalkAlert:
     """Alert for a stalked setup."""
     setup_id: str
     symbol: str
-    alert_type: str  # "approaching", "ready", "triggered"
+    alert_type: str  # "approaching", "ready", "triggered", "entry", "exit"
     message: str
     urgency: int  # 1-5
     timestamp: str
+    
+    # Trade details (for actionable alerts)
+    ticker: str = ""
+    entry_price: Optional[float] = None
+    target_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    direction: str = ""  # "long" or "short"
+    trade_type: str = ""  # "CALLS", "PUTS", "STOCK"
+    action: str = ""  # "BUY", "SELL"
+    
+    def format_telegram_message(self) -> str:
+        """Format as complete Telegram alert."""
+        if self.alert_type == "entry":
+            risk_reward = 0
+            entry = self.entry_price or 0
+            target = self.target_price or 0
+            stop = self.stop_loss or 0
+            
+            if entry and target and stop:
+                reward = abs(target - entry)
+                risk = abs(entry - stop)
+                risk_reward = reward / risk if risk > 0 else 0
+            
+            return (
+                f"{'=' * 40}\n"
+                f"{'BUY' if self.direction == 'long' else 'SELL'} {self.trade_type or 'STOCK'} - {self.symbol}\n"
+                f"{'=' * 40}\n"
+                f"ENTRY: ${entry:.2f}\n"
+                f"TARGET: ${target:.2f}\n"
+                f"STOP: ${stop:.2f}\n"
+                f"R:R = 1:{risk_reward:.1f}\n"
+                f"{'=' * 40}\n"
+                f"{self.message}\n"
+                f"{'=' * 40}"
+            )
+        elif self.alert_type == "exit":
+            exit_price = self.target_price or 0
+            return (
+                f"{'=' * 40}\n"
+                f"EXIT {self.trade_type or 'STOCK'} - {self.symbol}\n"
+                f"{'=' * 40}\n"
+                f"CLOSE @ ${exit_price:.2f}\n"
+                f"ACTION: BOOK PROFIT NOW\n"
+                f"{'=' * 40}\n"
+                f"{self.message}\n"
+                f"{'=' * 40}"
+            )
+        else:
+            return self.message
 
 
 class StalkingMode:
@@ -113,9 +178,71 @@ class StalkingMode:
                 last_updated TEXT,
                 catalyst TEXT,
                 notes TEXT,
-                expected_move REAL DEFAULT 0
+                expected_move REAL DEFAULT 0,
+                entry_price REAL,
+                target_price REAL,
+                stop_loss REAL,
+                direction TEXT DEFAULT 'long',
+                trade_type TEXT DEFAULT 'CALLS',
+                position_size_pct REAL DEFAULT 2.0,
+                max_risk_pct REAL DEFAULT 1.0,
+                entry_alerted INTEGER DEFAULT 0,
+                entry_filled_price REAL,
+                entry_filled_at TEXT,
+                exit_alerted INTEGER DEFAULT 0,
+                trailing_stop INTEGER DEFAULT 0
             )
         """)
+        
+        # Add new columns if they don't exist (for migration)
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN entry_price REAL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN target_price REAL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN stop_loss REAL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN direction TEXT DEFAULT 'long'")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN trade_type TEXT DEFAULT 'CALLS'")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN entry_alerted INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN entry_filled_price REAL")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN entry_filled_at TEXT")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN exit_alerted INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN position_size_pct REAL DEFAULT 2.0")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN max_risk_pct REAL DEFAULT 1.0")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE stalked_setups ADD COLUMN trailing_stop INTEGER DEFAULT 0")
+        except:
+            pass
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS stalk_history (
@@ -164,7 +291,19 @@ class StalkingMode:
                 last_updated=row["last_updated"],
                 catalyst=row["catalyst"] or "",
                 notes=row["notes"] or "",
-                expected_move=row["expected_move"]
+                expected_move=row["expected_move"],
+                entry_price=row["entry_price"] if "entry_price" in row.keys() else None,
+                target_price=row["target_price"] if "target_price" in row.keys() else None,
+                stop_loss=row["stop_loss"] if "stop_loss" in row.keys() else None,
+                direction=row["direction"] if "direction" in row.keys() else "long",
+                trade_type=row["trade_type"] if "trade_type" in row.keys() else "CALLS",
+                entry_alerted=bool(row["entry_alerted"]) if "entry_alerted" in row.keys() else False,
+                entry_filled_price=row["entry_filled_price"] if "entry_filled_price" in row.keys() else None,
+                entry_filled_at=row["entry_filled_at"] if "entry_filled_at" in row.keys() else None,
+                exit_alerted=bool(row["exit_alerted"]) if "exit_alerted" in row.keys() else False,
+                position_size_pct=row["position_size_pct"] if "position_size_pct" in row.keys() else 2.0,
+                max_risk_pct=row["max_risk_pct"] if "max_risk_pct" in row.keys() else 1.0,
+                trailing_stop=bool(row["trailing_stop"]) if "trailing_stop" in row.keys() else False
             )
             self.stalked[setup.setup_id] = setup
         
@@ -181,10 +320,17 @@ class StalkingMode:
         catalyst: str = "",
         expected_move: float = 0.0,
         alert_at_pct: float = 5.0,
-        expires_hours: int = 24
+        expires_hours: int = 24,
+        entry_price: Optional[float] = None,
+        target_price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        direction: str = "long",
+        trade_type: str = "CALLS",
+        position_size_pct: float = 2.0,
+        max_risk_pct: float = 1.0
     ) -> str:
         """
-        Add a setup to stalk.
+        Add a setup to stalk with complete trade details.
         
         Args:
             symbol: Ticker symbol
@@ -196,6 +342,13 @@ class StalkingMode:
             expected_move: Expected % move if triggered
             alert_at_pct: Alert when X% away from trigger
             expires_hours: Hours until setup expires
+            entry_price: Exact entry price for trade
+            target_price: Take profit target
+            stop_loss: Stop loss price
+            direction: "long" or "short"
+            trade_type: "CALLS", "PUTS", or "STOCK"
+            position_size_pct: Suggested position size
+            max_risk_pct: Maximum risk percentage
             
         Returns:
             setup_id
@@ -221,7 +374,14 @@ class StalkingMode:
             expires_at=(now + timedelta(hours=expires_hours)).isoformat(),
             last_updated=now.isoformat(),
             catalyst=catalyst,
-            expected_move=expected_move
+            expected_move=expected_move,
+            entry_price=entry_price or trigger_price,
+            target_price=target_price,
+            stop_loss=stop_loss,
+            direction=direction,
+            trade_type=trade_type,
+            position_size_pct=position_size_pct,
+            max_risk_pct=max_risk_pct
         )
         
         self.stalked[setup_id] = setup
@@ -298,26 +458,43 @@ class StalkingMode:
         # Generate alert if needed
         alert = None
         
-        if setup.state == StalkState.TRIGGERED and not setup.alerted:
+        if setup.state == StalkState.TRIGGERED and not setup.entry_alerted:
+            # ENTRY SIGNAL - complete trade details
             alert = StalkAlert(
                 setup_id=setup_id,
                 symbol=setup.symbol,
-                alert_type="triggered",
-                message=f"TRIGGERED: {setup.symbol} {setup.setup_type} - {setup.catalyst}",
+                alert_type="entry",
+                message=f"ENTRY SIGNAL: {setup.symbol} {setup.setup_type} - {setup.catalyst}",
                 urgency=5,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
+                ticker=setup.symbol,
+                entry_price=setup.entry_price,
+                target_price=setup.target_price,
+                stop_loss=setup.stop_loss,
+                direction=setup.direction,
+                trade_type=setup.trade_type,
+                action="BUY" if setup.direction == "long" else "SELL"
             )
+            setup.entry_alerted = True
             setup.alerted = True
             self._save_setup(setup)
             
         elif setup.state == StalkState.READY and not setup.alerted:
+            # IMMINENT - give full trade plan
             alert = StalkAlert(
                 setup_id=setup_id,
                 symbol=setup.symbol,
                 alert_type="ready",
-                message=f"READY: {setup.symbol} {setup.distance_to_trigger:.1f}% from trigger",
+                message=f"IMMINENT: {setup.symbol} {setup.distance_to_trigger:.1f}% from trigger - PREPARE TO ENTER",
                 urgency=4,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
+                ticker=setup.symbol,
+                entry_price=setup.entry_price,
+                target_price=setup.target_price,
+                stop_loss=setup.stop_loss,
+                direction=setup.direction,
+                trade_type=setup.trade_type,
+                action="WATCH"
             )
             
         elif setup.distance_to_trigger <= setup.alert_at_pct and not setup.alerted:
@@ -327,7 +504,14 @@ class StalkingMode:
                 alert_type="approaching",
                 message=f"APPROACHING: {setup.symbol} {setup.distance_to_trigger:.1f}% from trigger",
                 urgency=3,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
+                ticker=setup.symbol,
+                entry_price=setup.entry_price,
+                target_price=setup.target_price,
+                stop_loss=setup.stop_loss,
+                direction=setup.direction,
+                trade_type=setup.trade_type,
+                action="WATCH"
             )
         
         if alert:
@@ -361,6 +545,108 @@ class StalkingMode:
                     alerts.append(alert)
         
         return alerts
+    
+    def confirm_entry(self, setup_id: str, fill_price: float) -> None:
+        """
+        Confirm that entry was filled for a setup.
+        
+        Args:
+            setup_id: Setup ID
+            fill_price: Actual fill price
+        """
+        if setup_id not in self.stalked:
+            return
+        
+        setup = self.stalked[setup_id]
+        setup.entry_filled_price = fill_price
+        setup.entry_filled_at = datetime.utcnow().isoformat()
+        self._save_setup(setup)
+        
+        log.info(f"Entry confirmed for {setup.symbol} @ ${fill_price:.2f}")
+    
+    def check_exits(self, prices: Dict[str, float]) -> List[StalkAlert]:
+        """
+        Check if any filled positions should exit (hit target).
+        
+        Args:
+            prices: Dict of symbol -> current price
+            
+        Returns:
+            List of exit alerts
+        """
+        exit_alerts = []
+        
+        for setup_id, setup in list(self.stalked.items()):
+            # Check setups that have entry alert sent (use entry_price if fill not confirmed)
+            if not setup.entry_alerted or setup.exit_alerted:
+                continue
+            
+            # Use filled price if available, otherwise use entry price
+            reference_price = setup.entry_filled_price or setup.entry_price
+            if not reference_price:
+                continue
+            
+            if setup.symbol not in prices:
+                continue
+            
+            current_price = prices[setup.symbol]
+            
+            # Check if target hit
+            should_exit = False
+            exit_reason = ""
+            
+            if setup.direction == "long":
+                if setup.target_price and current_price >= setup.target_price:
+                    should_exit = True
+                    exit_reason = "TARGET HIT - BOOK PROFIT"
+                elif setup.stop_loss and current_price <= setup.stop_loss:
+                    should_exit = True
+                    exit_reason = "STOP HIT - EXIT NOW"
+            else:  # short
+                if setup.target_price and current_price <= setup.target_price:
+                    should_exit = True
+                    exit_reason = "TARGET HIT - BOOK PROFIT"
+                elif setup.stop_loss and current_price >= setup.stop_loss:
+                    should_exit = True
+                    exit_reason = "STOP HIT - EXIT NOW"
+            
+            if should_exit and not setup.exit_alerted:
+                # Calculate P&L using reference price
+                if setup.direction == "long":
+                    pnl_pct = ((current_price - reference_price) / reference_price) * 100
+                else:
+                    pnl_pct = ((reference_price - current_price) / reference_price) * 100
+                
+                alert = StalkAlert(
+                    setup_id=setup_id,
+                    symbol=setup.symbol,
+                    alert_type="exit",
+                    message=f"{exit_reason} | P&L: {pnl_pct:+.1f}%",
+                    urgency=5,
+                    timestamp=datetime.utcnow().isoformat(),
+                    ticker=setup.symbol,
+                    entry_price=setup.entry_filled_price,
+                    target_price=current_price,
+                    stop_loss=setup.stop_loss,
+                    direction=setup.direction,
+                    trade_type=setup.trade_type,
+                    action="CLOSE"
+                )
+                
+                setup.exit_alerted = True
+                self._save_setup(setup)
+                exit_alerts.append(alert)
+                
+                log.info(f"EXIT SIGNAL: {setup.symbol} @ ${current_price:.2f} | {exit_reason}")
+        
+        return exit_alerts
+    
+    def get_active_positions(self) -> List[StalkedSetup]:
+        """Get all setups that have been entered but not exited."""
+        return [
+            setup for setup in self.stalked.values()
+            if setup.entry_filled_price and not setup.exit_alerted
+        ]
     
     def record_outcome(self, setup_id: str, outcome: str, pnl_pct: float):
         """Record the outcome of a triggered setup."""
@@ -406,8 +692,11 @@ class StalkingMode:
             (setup_id, symbol, setup_type, trigger_price, trigger_condition,
              trigger_time, state, distance_to_trigger, coil_score,
              pressure_direction, volume_building, alert_at_pct, alerted,
-             created_at, expires_at, last_updated, catalyst, notes, expected_move)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, expires_at, last_updated, catalyst, notes, expected_move,
+             entry_price, target_price, stop_loss, direction, trade_type,
+             entry_alerted, entry_filled_price, entry_filled_at, exit_alerted,
+             position_size_pct, max_risk_pct, trailing_stop)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             setup.setup_id,
             setup.symbol,
@@ -427,7 +716,19 @@ class StalkingMode:
             setup.last_updated,
             setup.catalyst,
             setup.notes,
-            setup.expected_move
+            setup.expected_move,
+            setup.entry_price,
+            setup.target_price,
+            setup.stop_loss,
+            setup.direction,
+            setup.trade_type,
+            1 if setup.entry_alerted else 0,
+            setup.entry_filled_price,
+            setup.entry_filled_at,
+            1 if setup.exit_alerted else 0,
+            setup.position_size_pct,
+            setup.max_risk_pct,
+            1 if setup.trailing_stop else 0
         ))
         
         conn.commit()
