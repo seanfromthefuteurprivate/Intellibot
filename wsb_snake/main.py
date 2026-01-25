@@ -36,6 +36,7 @@ def send_startup_ping():
     
     account = alpaca_executor.get_account()
     buying_power = float(account.get("buying_power", 0))
+    trading_mode = "🔴 LIVE" if alpaca_executor.LIVE_TRADING else "📝 PAPER"
     
     message = f"""🐍 **WSB SNAKE v2.3 ONLINE**
 
@@ -50,9 +51,10 @@ def send_startup_ping():
 • Engine 6: Paper Shadow Trader
 • 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
 • 🦅 SPY Scalper: Hawk-mode (30s scans)
-• 📈 Alpaca Paper Trading: ACTIVE
+• 📈 Alpaca Trading: {trading_mode}
 
-💰 **Paper Trading:**
+💰 **Trading Account:**
+• Mode: {trading_mode}
 • Buying Power: ${buying_power:,.2f}
 • Max Per Trade: $1,000
 • Strategy: 0DTE Options Scalping

@@ -61,7 +61,7 @@ class AlpacaPosition:
 
 class AlpacaExecutor:
     """
-    Paper trading executor for Alpaca.
+    Trading executor for Alpaca (Paper or Live).
     
     Features:
     - $1,000 max per trade
@@ -69,9 +69,18 @@ class AlpacaExecutor:
     - Automatic position monitoring
     - Real-time exit execution
     - Telegram notifications for fills
+    
+    Set ALPACA_LIVE_TRADING=true environment variable to switch to live trading.
+    Default is paper trading (safe).
     """
     
-    BASE_URL = "https://paper-api.alpaca.markets"
+    # Toggle between paper and live trading via environment variable
+    LIVE_TRADING = os.environ.get("ALPACA_LIVE_TRADING", "false").lower() == "true"
+    
+    # API endpoints - switches based on LIVE_TRADING flag
+    PAPER_URL = "https://paper-api.alpaca.markets"
+    LIVE_URL = "https://api.alpaca.markets"
+    BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
     MAX_POSITION_VALUE = 1000  # $1,000 max per trade
@@ -90,7 +99,11 @@ class AlpacaExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
-        logger.info("AlpacaExecutor initialized - Paper trading mode")
+        mode = "LIVE" if self.LIVE_TRADING else "Paper"
+        logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
+        
+        if self.LIVE_TRADING:
+            logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
         
     @property
     def headers(self) -> Dict[str, str]:
