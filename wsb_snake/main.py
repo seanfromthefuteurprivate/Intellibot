@@ -24,6 +24,7 @@ from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary, run
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.engines.spy_scalper import spy_scalper
+from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 
 
 def send_startup_ping():
@@ -109,6 +110,11 @@ def main():
     log.info("Starting SPY 0DTE Scalper (hawk mode)...")
     spy_scalper.start()
     log.info("SPY Scalper active - watching for 15-30% scalp opportunities")
+    
+    # Start Zero Greed Exit Protocol - mechanical ruthless exit system
+    log.info("Starting Zero Greed Exit Protocol...")
+    zero_greed_exit.start()
+    log.info("Zero Greed Exit active - no mercy mode for exits")
     
     # Run historical training to calibrate engine weights
     log.info("Running historical training (6 weeks)...")

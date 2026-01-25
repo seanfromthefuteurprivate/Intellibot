@@ -66,8 +66,26 @@ All modules persist to SQLite database (`wsb_snake_data/learning.db`) and integr
     3. Trap Detection - Identifies failed breakout/breakdown opportunities
     4. Entry Timing - Determines optimal entry point
     5. Final Verdict - Decisive CALLS/PUTS/NO TRADE recommendation with confidence
+-   **Predator Stack (Multi-Model AI):** Apex predator vision analysis using multiple models:
+    - **Primary:** Gemini 2.0 Flash (fast, cost-effective, excellent chart vision)
+    - **Fallback:** DeepSeek (budget backup when Gemini unavailable)
+    - **Confirmation:** GPT-4o (validates high-confidence setups for double-check)
+    - Returns decisive STRIKE_CALLS/STRIKE_PUTS/NO_TRADE/ABORT verdicts with confidence scores
+-   **Surgical Precision Charts:** Enhanced chart generator for 0DTE scalping:
+    - VWAP Bands (±1σ, ±2σ) - Key bounce/rejection zones
+    - Volume Profile - Shows trapped buyers/sellers creating squeeze fuel
+    - Delta Bars - Net buying vs selling pressure per candle
+    - Combined Predator View - All-in-one chart for AI analysis
 -   **Sentiment Analysis:** Processes text-based sentiment from news and social feeds.
 -   **Chart Generation:** Creates candlestick charts with integrated indicators for visual analysis.
+
+### Zero Greed Exit Protocol
+Mechanical ruthless exit system with NO human override:
+- **Target Hit:** IMMEDIATE EXIT - "BOOK PROFIT NOW" alert sent
+- **Stop Hit:** IMMEDIATE EXIT - accept the loss, no averaging down
+- **Time Decay:** EXIT at 60-minute deadline - theta kills 0DTE options
+- **No Exceptions:** Pure machine execution, no "let it run" or "maybe it recovers"
+- Monitors all active positions every 5 seconds for real-time exit alerts
 
 ### System Flow
 The orchestrator integrates these components, applying "Alt Data Boosts" and "Session Multipliers" to refine signal scores. Signals are tiered (A+, A, B, C) based on their score, determining the action (immediate alert, watchlist, or log). Alerts are sent via Telegram.
@@ -79,6 +97,8 @@ The orchestrator integrates these components, applying "Alt Data Boosts" and "Se
 -   **Polygon.io API:** Comprehensive stock and options data, including real-time quotes, historical data, and options chains.
 -   **Benzinga API:** Financial news data.
 -   **OpenAI API:** For AI summarization and vision-based chart analysis (GPT-4o Vision via LangGraph).
+-   **Google Gemini API:** Primary vision model for chart analysis (Gemini 2.0 Flash).
+-   **DeepSeek API:** Budget fallback vision model for chart analysis.
 -   **Finnhub API:** Real-time news, sentiment, insider trading, and WebSocket streaming.
 -   **SEC EDGAR:** Publicly available insider trading data (Form 4 filings).
 -   **Finviz:** Unusual volume data (scraped).

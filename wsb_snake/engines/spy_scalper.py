@@ -23,9 +23,12 @@ from wsb_snake.utils.session_regime import is_market_open, get_session_info
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.analysis.scalp_langgraph import get_scalp_analyzer
 from wsb_snake.analysis.chart_generator import ChartGenerator
+from wsb_snake.analysis.scalp_chart_generator import scalp_chart_generator
+from wsb_snake.analysis.predator_stack import predator_stack, PredatorVerdict
 from wsb_snake.learning.pattern_memory import pattern_memory
 from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
+from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
 
@@ -78,7 +81,9 @@ class SPYScalper:
         self.running = False
         self.worker_thread: Optional[threading.Thread] = None
         self.chart_generator = ChartGenerator()
-        self.scalp_analyzer = get_scalp_analyzer()  # Specialized scalp analyzer
+        self.scalp_chart_generator = scalp_chart_generator  # Surgical precision charts
+        self.scalp_analyzer = get_scalp_analyzer()  # LangGraph analyzer
+        self.predator_stack = predator_stack  # Multi-model AI (Gemini + DeepSeek + GPT)
         
         # Recent price data cache
         self.price_cache: List[Dict] = []
@@ -547,54 +552,81 @@ class SPYScalper:
         return setup
     
     def _get_ai_confirmation(self, setup: ScalpSetup) -> ScalpSetup:
-        """Get AI confirmation via specialized scalp LangGraph analysis."""
+        """Get AI confirmation via multi-model Predator Stack (Gemini + DeepSeek + GPT)."""
         try:
-            # Generate chart
-            chart_base64 = self.chart_generator.generate_chart(
+            # Generate surgical precision predator chart with VWAP bands, delta, volume profile
+            chart_base64 = self.scalp_chart_generator.generate_predator_chart(
                 ticker=self.symbol,
                 ohlcv_data=self.price_cache,
                 timeframe="1min"
             )
             
             if not chart_base64:
+                # Fallback to basic chart
+                chart_base64 = self.chart_generator.generate_chart(
+                    ticker=self.symbol,
+                    ohlcv_data=self.price_cache,
+                    timeframe="1min"
+                )
+            
+            if not chart_base64:
                 return setup
             
-            # Use specialized scalp analyzer for better pattern recognition
-            analysis = self.scalp_analyzer.analyze_scalp_sync(
-                ticker=self.symbol,
+            # Use Predator Stack for multi-model AI confirmation
+            # Gemini (primary) -> DeepSeek (fallback) -> GPT (confirmation for high confidence)
+            analysis = self.predator_stack.analyze_sync(
                 chart_base64=chart_base64,
-                timeframe="1min",
+                ticker=self.symbol,
+                pattern=setup.pattern.value,
                 current_price=self.last_price,
                 vwap=setup.vwap,
-                momentum=setup.momentum,
-                volume_ratio=setup.volume_ratio,
-                detected_pattern=setup.pattern.value,
-                direction=setup.direction
+                require_confirmation=(setup.confidence >= 70)  # Get GPT confirmation for high-confidence setups
             )
             
             if analysis:
-                ai_confidence = analysis.get("confidence_score", 0.5)
-                confirms = analysis.get("confirms_direction", False)
+                # Map predator verdict to setup
+                if analysis.verdict == PredatorVerdict.STRIKE_CALLS:
+                    if setup.direction == "long":
+                        setup.ai_confirmed = True
+                        setup.confidence += 10
+                    else:
+                        # AI disagrees with direction
+                        setup.ai_confirmed = False
+                        setup.confidence -= 20
+                        
+                elif analysis.verdict == PredatorVerdict.STRIKE_PUTS:
+                    if setup.direction == "short":
+                        setup.ai_confirmed = True
+                        setup.confidence += 10
+                    else:
+                        setup.ai_confirmed = False
+                        setup.confidence -= 20
+                        
+                elif analysis.verdict == PredatorVerdict.ABORT:
+                    setup.ai_confirmed = False
+                    setup.confidence -= 25
+                    
+                else:  # NO_TRADE
+                    setup.ai_confirmed = False
+                    setup.confidence -= 15
                 
-                if confirms:
-                    setup.ai_confirmed = True
-                    # Add bonus for AI confirmation
+                setup.ai_confidence = analysis.confidence / 100
+                
+                # Extra boost if GPT confirmed
+                if analysis.confirmed_by:
                     setup.confidence += 5
-                elif "no trade" in analysis.get("scalp_recommendation", "").lower():
-                    setup.ai_confirmed = False
-                    setup.confidence -= 15  # AI says avoid
-                else:
-                    setup.ai_confirmed = False
-                
-                setup.ai_confidence = ai_confidence
+                    setup.notes += f" | GPT CONFIRMED"
                 
                 if setup.ai_confirmed:
-                    setup.notes += f" | AI CONFIRMS ({ai_confidence*100:.0f}%)"
+                    setup.notes += f" | {analysis.model_used.upper()} CONFIRMS ({analysis.confidence:.0f}%)"
+                    setup.notes += f" | Entry: {analysis.entry_quality} | Timing: {analysis.timing_score}/100"
                 else:
-                    setup.notes += f" | AI disagrees ({ai_confidence*100:.0f}%)"
+                    setup.notes += f" | AI: {analysis.verdict.value} ({analysis.confidence:.0f}%)"
+                    if analysis.trap_risk:
+                        setup.notes += f" | Trap risk: {analysis.trap_risk}"
         
         except Exception as e:
-            log.error(f"AI confirmation error: {e}")
+            log.error(f"Predator Stack AI confirmation error: {e}")
         
         return setup
     
@@ -667,6 +699,21 @@ class SPYScalper:
             stalking_mode._save_setup(stalking_mode.stalked[stalk_setup_id])
             log.info(f"Stalking mode tracking exit for {stalk_setup_id}")
         
+        # Add to Zero Greed Exit for mechanical ruthless exit tracking
+        position_id = f"spy_scalp_{datetime.utcnow().strftime('%H%M%S')}"
+        zero_greed_exit.add_position(
+            position_id=position_id,
+            ticker=self.symbol,
+            direction=setup.direction,
+            trade_type=trade_type,
+            entry_price=setup.entry_price,
+            target_price=setup.target_price,
+            stop_loss=setup.stop_loss,
+            max_hold_minutes=60,  # 1 hour max for 0DTE
+            price_getter=self._get_current_price
+        )
+        log.info(f"🔪 Zero Greed Exit tracking: {position_id}")
+        
         # Record in history
         self._record_signal(setup)
         
@@ -698,6 +745,20 @@ class SPYScalper:
         conn.commit()
         conn.close()
     
+    def _get_current_price(self, ticker: str) -> Optional[float]:
+        """Get current price for a ticker (used by zero greed exit)."""
+        try:
+            if self.last_price > 0:
+                return self.last_price
+            
+            # Fetch fresh price if cache is stale
+            bars = polygon_enhanced.get_intraday_bars(ticker, "1", limit=1)
+            if bars:
+                return bars[-1].get('c', bars[-1].get('close'))
+        except Exception as e:
+            log.error(f"Error getting current price for {ticker}: {e}")
+        return None
+    
     def get_stats(self) -> Dict[str, Any]:
         """Get scalper statistics."""
         return {
@@ -709,7 +770,8 @@ class SPYScalper:
             "last_price": self.last_price,
             "last_vwap": self.last_vwap,
             "cooldown_active": self.cooldown_until and datetime.utcnow() < self.cooldown_until,
-            "active_setup": self.active_setup.pattern.value if self.active_setup else None
+            "active_setup": self.active_setup.pattern.value if self.active_setup else None,
+            "zero_greed_stats": zero_greed_exit.get_stats()
         }
     
     def force_scan(self) -> Optional[ScalpSetup]:
