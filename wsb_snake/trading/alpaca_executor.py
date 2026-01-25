@@ -346,6 +346,27 @@ class AlpacaExecutor:
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
+        # Send BUY alert to Telegram in parallel with order execution
+        buy_message = f"""🟢 **BUY ORDER SENDING**
+
+**{trade_type}** {underlying}
+Strike: ${strike:.0f} | Exp: {expiry.strftime('%m/%d')}
+Contracts: {qty}
+Est. Price: ${option_price:.2f}
+Pattern: {pattern}
+Confidence: {confidence:.0f}%
+
+⏳ Executing on Alpaca...
+"""
+        # Send alert in parallel thread
+        alert_thread = threading.Thread(
+            target=send_telegram_alert,
+            args=(buy_message,),
+            daemon=True
+        )
+        alert_thread.start()
+        
+        # Execute order on Alpaca (runs in parallel with alert)
         order = self.place_option_order(
             underlying=underlying,
             expiry=expiry,
@@ -358,6 +379,7 @@ class AlpacaExecutor:
         
         if not order:
             logger.error("Failed to place entry order")
+            send_telegram_alert(f"❌ BUY ORDER FAILED: {trade_type} {underlying}")
             return None
         
         position_id = f"{underlying}_{datetime.now().strftime('%H%M%S')}"
@@ -379,7 +401,8 @@ class AlpacaExecutor:
         with self._lock:
             self.positions[position_id] = position
         
-        message = f"""🦅 **ALPACA PAPER TRADE PLACED**
+        # Confirmation alert after order placed
+        confirm_message = f"""✅ **BUY ORDER PLACED**
 
 **{trade_type}** {underlying}
 Strike: ${strike:.0f} | Exp: {expiry.strftime('%m/%d')}
@@ -388,12 +411,10 @@ Est. Entry: ${option_price:.2f}
 Target: ${position.target_price:.2f} (+20%)
 Stop: ${position.stop_loss:.2f} (-15%)
 
-Pattern: {pattern}
-Confidence: {confidence:.0f}%
-
 Order ID: `{order.get('id', 'N/A')[:8]}...`
+Status: PENDING FILL
 """
-        send_telegram_alert(message)
+        threading.Thread(target=send_telegram_alert, args=(confirm_message,), daemon=True).start()
         
         return position
     
@@ -401,6 +422,20 @@ Order ID: `{order.get('id', 'N/A')[:8]}...`
         """Execute exit for a position."""
         logger.info(f"Executing exit for {position.option_symbol}: {reason}")
         
+        # Send SELL alert to Telegram in parallel with order execution
+        sell_message = f"""🔴 **SELL ORDER SENDING**
+
+**{position.trade_type}** {position.symbol}
+Contracts: {position.qty}
+Entry: ${position.entry_price:.2f}
+Current: ${current_price:.2f}
+Reason: {reason}
+
+⏳ Closing on Alpaca...
+"""
+        threading.Thread(target=send_telegram_alert, args=(sell_message,), daemon=True).start()
+        
+        # Execute close on Alpaca (runs in parallel with alert)
         result = self.close_position(position.option_symbol)
         
         # Only mark closed if close was successful
