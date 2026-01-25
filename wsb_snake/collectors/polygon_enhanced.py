@@ -1,12 +1,16 @@
 """
 Enhanced Polygon.io Data Adapter
 
-Maximizes the basic plan by using all available endpoints:
-- Stock aggregates (1min bars for momentum)
+Maximizes the Polygon plan by using ALL available endpoints:
+- Stock aggregates (5s, 15s, 1min, 5min bars for multi-timeframe analysis)
 - Technical indicators (RSI, SMA, EMA, MACD)
 - Gainers/Losers (market regime)
 - Stock snapshots (real-time quotes)
 - Options contracts reference (strike structure)
+- Trades endpoint (recent trade flow)
+- Quotes/NBBO endpoint (bid-ask spread analysis)
+
+Optimized for 0DTE SPY scalping with surgical precision data.
 """
 
 import requests
@@ -34,8 +38,8 @@ class EnhancedPolygonAdapter:
         self._scan_cache_time: Optional[datetime] = None
         self._scan_cache_ttl = 60  # Per-scan cache valid for 60s
         
-    def _request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """Make authenticated request to Polygon API with caching."""
+    def _request(self, endpoint: str, params: Dict = None, cache_ttl_override: int = None) -> Optional[Dict]:
+        """Make authenticated request to Polygon API with caching and rate limiting."""
         if not self.api_key:
             log.error("POLYGON_API_KEY not set")
             return None
@@ -44,26 +48,57 @@ class EnhancedPolygonAdapter:
             params = {}
         params["apiKey"] = self.api_key
         
-        # Check cache
+        # Check cache first (use override TTL if provided)
+        cache_ttl = cache_ttl_override if cache_ttl_override is not None else self._cache_ttl
         cache_key = f"{endpoint}:{str(sorted(params.items()))}"
         if cache_key in self._cache:
             cached_time, cached_data = self._cache[cache_key]
-            if (datetime.now() - cached_time).seconds < self._cache_ttl:
+            if (datetime.now() - cached_time).seconds < cache_ttl:
                 return cached_data
+        
+        # Rate limiting - track requests and throttle if needed
+        now = datetime.now()
+        self._request_times = [t for t in self._request_times if (now - t).seconds < 60]
+        
+        if len(self._request_times) >= self.REQUESTS_PER_MINUTE:
+            # Too many requests - use cache even if expired, or wait
+            if cache_key in self._cache:
+                log.debug(f"Rate limited - using stale cache for {endpoint}")
+                return self._cache[cache_key][1]
+            else:
+                # Wait for rate limit to clear
+                oldest = min(self._request_times)
+                wait_time = 61 - (now - oldest).seconds
+                if wait_time > 0 and wait_time < 30:
+                    log.debug(f"Rate limit - waiting {wait_time}s")
+                    import time
+                    time.sleep(wait_time)
+                    self._request_times = []
         
         url = f"{self.base_url}{endpoint}"
         
         try:
             resp = requests.get(url, params=params, timeout=10)
+            self._request_times.append(datetime.now())
+            
             if resp.status_code == 200:
                 data = resp.json()
                 self._cache[cache_key] = (datetime.now(), data)
                 return data
+            elif resp.status_code == 429:
+                # Rate limited by API - use stale cache if available
+                log.warning(f"Polygon 429 rate limited: {endpoint}")
+                if cache_key in self._cache:
+                    return self._cache[cache_key][1]
+                return None
             else:
                 log.warning(f"Polygon API {resp.status_code}: {endpoint}")
                 return None
         except Exception as e:
             log.error(f"Polygon request failed: {e}")
+            # Return stale cache on network error
+            if cache_key in self._cache:
+                return self._cache[cache_key][1]
             return None
     
     # ========================
@@ -110,6 +145,181 @@ class EnhancedPolygonAdapter:
                 })
             return bars
         return []
+    
+    def get_ultra_fast_bars(
+        self, 
+        ticker: str, 
+        seconds: int = 5,
+        limit: int = 120
+    ) -> List[Dict]:
+        """
+        Get ultra-fast sub-minute bars for 0DTE scalping.
+        
+        Args:
+            ticker: Stock symbol
+            seconds: Bar size in seconds (5, 15, 30)
+            limit: Number of bars (default 120 = 10 minutes of 5s bars)
+            
+        Returns:
+            List of OHLCV bars with sub-minute granularity
+        """
+        now = datetime.now()
+        today = date.today().strftime("%Y-%m-%d")
+        
+        endpoint = f"/v2/aggs/ticker/{ticker}/range/{seconds}/second/{today}/{today}"
+        data = self._request(endpoint, {"limit": limit, "sort": "desc"})
+        
+        if data and "results" in data:
+            bars = []
+            for bar in data["results"]:
+                bars.append({
+                    "t": bar.get("t", 0),
+                    "timestamp": bar.get("t", 0),
+                    "open": bar.get("o", 0),
+                    "high": bar.get("h", 0),
+                    "low": bar.get("l", 0),
+                    "close": bar.get("c", 0),
+                    "volume": bar.get("v", 0),
+                    "vwap": bar.get("vw", 0),
+                    "trades": bar.get("n", 0),
+                })
+            log.debug(f"Got {len(bars)} ultra-fast {seconds}s bars for {ticker}")
+            return bars
+        return []
+    
+    def get_recent_trades(
+        self, 
+        ticker: str, 
+        limit: int = 100
+    ) -> List[Dict]:
+        """
+        Get recent trades for order flow analysis.
+        Shows actual executed trades with size, price, and exchange.
+        
+        Args:
+            ticker: Stock symbol
+            limit: Number of recent trades
+            
+        Returns:
+            List of recent trades
+        """
+        endpoint = f"/v3/trades/{ticker}"
+        data = self._request(endpoint, {"limit": limit, "order": "desc"})
+        
+        if data and "results" in data:
+            trades = []
+            for t in data["results"]:
+                trades.append({
+                    "timestamp": t.get("sip_timestamp", 0),
+                    "price": t.get("price", 0),
+                    "size": t.get("size", 0),
+                    "exchange": t.get("exchange", 0),
+                    "conditions": t.get("conditions", []),
+                    "tape": t.get("tape", ""),
+                })
+            log.debug(f"Got {len(trades)} recent trades for {ticker}")
+            return trades
+        return []
+    
+    def get_nbbo_quotes(
+        self, 
+        ticker: str, 
+        limit: int = 50
+    ) -> List[Dict]:
+        """
+        Get recent NBBO quotes for bid-ask spread analysis.
+        Shows best bid/ask across all exchanges.
+        
+        Args:
+            ticker: Stock symbol
+            limit: Number of recent quotes
+            
+        Returns:
+            List of NBBO quotes with bid/ask
+        """
+        endpoint = f"/v3/quotes/{ticker}"
+        data = self._request(endpoint, {"limit": limit, "order": "desc"})
+        
+        if data and "results" in data:
+            quotes = []
+            for q in data["results"]:
+                bid = q.get("bid_price", 0)
+                ask = q.get("ask_price", 0)
+                spread = ask - bid if bid and ask else 0
+                quotes.append({
+                    "timestamp": q.get("sip_timestamp", 0),
+                    "bid": bid,
+                    "bid_size": q.get("bid_size", 0),
+                    "ask": ask,
+                    "ask_size": q.get("ask_size", 0),
+                    "spread": spread,
+                    "spread_pct": (spread / bid * 100) if bid else 0,
+                })
+            log.debug(f"Got {len(quotes)} NBBO quotes for {ticker}")
+            return quotes
+        return []
+    
+    def analyze_order_flow(self, ticker: str) -> Dict[str, Any]:
+        """
+        Analyze order flow using trades and quotes for directional bias.
+        
+        Returns:
+            Order flow analysis with buy/sell pressure indicators
+        """
+        trades = self.get_recent_trades(ticker, limit=100)
+        quotes = self.get_nbbo_quotes(ticker, limit=50)
+        
+        if not trades:
+            return {"available": False, "error": "No trade data"}
+        
+        total_volume = sum(t["size"] for t in trades)
+        total_value = sum(t["price"] * t["size"] for t in trades)
+        avg_price = total_value / total_volume if total_volume else 0
+        
+        large_trades = [t for t in trades if t["size"] >= 100]
+        large_volume = sum(t["size"] for t in large_trades)
+        
+        prices = [t["price"] for t in trades]
+        price_direction = (prices[0] - prices[-1]) if len(prices) >= 2 else 0
+        
+        bid_ask_imbalance = 0
+        avg_spread = 0
+        if quotes:
+            total_bid_size = sum(q["bid_size"] for q in quotes)
+            total_ask_size = sum(q["ask_size"] for q in quotes)
+            bid_ask_imbalance = (total_bid_size - total_ask_size) / max(total_bid_size + total_ask_size, 1)
+            avg_spread = sum(q["spread"] for q in quotes) / len(quotes)
+        
+        if price_direction > 0 and bid_ask_imbalance > 0.1:
+            flow_signal = "STRONG_BUY"
+            flow_score = 2
+        elif price_direction > 0:
+            flow_signal = "BUY"
+            flow_score = 1
+        elif price_direction < 0 and bid_ask_imbalance < -0.1:
+            flow_signal = "STRONG_SELL"
+            flow_score = -2
+        elif price_direction < 0:
+            flow_signal = "SELL"
+            flow_score = -1
+        else:
+            flow_signal = "NEUTRAL"
+            flow_score = 0
+        
+        return {
+            "available": True,
+            "ticker": ticker,
+            "total_trades": len(trades),
+            "total_volume": total_volume,
+            "avg_price": avg_price,
+            "large_trades": len(large_trades),
+            "large_volume_pct": large_volume / max(total_volume, 1) * 100,
+            "price_direction": price_direction,
+            "bid_ask_imbalance": bid_ask_imbalance,
+            "avg_spread": avg_spread,
+            "flow_signal": flow_signal,
+            "flow_score": flow_score,
+        }
     
     def get_previous_day(self, ticker: str) -> Optional[Dict]:
         """Get previous day's aggregates for gap analysis."""

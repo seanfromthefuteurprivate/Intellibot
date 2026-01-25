@@ -21,6 +21,7 @@ from enum import Enum
 from wsb_snake.utils.logger import get_logger
 from wsb_snake.utils.session_regime import is_market_open, get_session_info
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
+from wsb_snake.collectors.scalp_data_collector import scalp_data_collector, ScalpDataPacket
 from wsb_snake.analysis.scalp_langgraph import get_scalp_analyzer
 from wsb_snake.analysis.chart_generator import ChartGenerator
 from wsb_snake.analysis.scalp_chart_generator import scalp_chart_generator
@@ -84,11 +85,13 @@ class SPYScalper:
         self.scalp_chart_generator = scalp_chart_generator  # Surgical precision charts
         self.scalp_analyzer = get_scalp_analyzer()  # LangGraph analyzer
         self.predator_stack = predator_stack  # Multi-model AI (Gemini + DeepSeek + GPT)
+        self.scalp_data = scalp_data_collector  # Ultra-fast data collector
         
         # Recent price data cache
         self.price_cache: List[Dict] = []
         self.last_vwap = 0.0
         self.last_price = 0.0
+        self.last_data_packet: Optional[ScalpDataPacket] = None
         
         # Pattern detection state
         self.active_setup: Optional[ScalpSetup] = None
@@ -177,19 +180,23 @@ class SPYScalper:
         if self.cooldown_until and datetime.utcnow() < self.cooldown_until:
             return
         
-        # Get fresh 1-minute bars
-        bars = polygon_enhanced.get_intraday_bars(
+        # Get comprehensive scalp data packet (includes 5s, 15s, 1m, 5m bars + order flow)
+        data_packet = self.scalp_data.get_scalp_data(self.symbol)
+        self.last_data_packet = data_packet
+        
+        # Use 1-minute bars for pattern detection (most reliable)
+        bars = data_packet.bars_1m if data_packet.is_valid else polygon_enhanced.get_intraday_bars(
             self.symbol, 
             timespan="minute", 
             multiplier=1, 
-            limit=60  # Last 60 minutes
+            limit=60
         )
         
         if not bars or len(bars) < 20:
             return
         
         self.price_cache = bars
-        self.last_price = bars[-1].get('c', 0)
+        self.last_price = data_packet.current_price if data_packet.current_price > 0 else bars[-1].get('c', 0)
         
         # Calculate VWAP
         self.last_vwap = self._calculate_vwap(bars)
@@ -554,11 +561,19 @@ class SPYScalper:
     def _get_ai_confirmation(self, setup: ScalpSetup) -> ScalpSetup:
         """Get AI confirmation via multi-model Predator Stack (Gemini + DeepSeek + GPT)."""
         try:
+            # Use faster 5s/15s bars if available for more granular charts
+            chart_data = self.price_cache
+            using_fast_bars = False
+            if self.last_data_packet and len(self.last_data_packet.bars_15s) >= 30:
+                chart_data = self.last_data_packet.bars_15s
+                using_fast_bars = True
+                log.debug("Using 15s bars for chart generation")
+            
             # Generate surgical precision predator chart with VWAP bands, delta, volume profile
             chart_base64 = self.scalp_chart_generator.generate_predator_chart(
                 ticker=self.symbol,
-                ohlcv_data=self.price_cache,
-                timeframe="1min"
+                ohlcv_data=chart_data,
+                timeframe="15s" if using_fast_bars else "1min"
             )
             
             if not chart_base64:
@@ -572,6 +587,17 @@ class SPYScalper:
             if not chart_base64:
                 return setup
             
+            # Build enhanced context with order flow data
+            extra_context = ""
+            if self.last_data_packet and self.last_data_packet.order_flow.get("available"):
+                flow = self.last_data_packet.order_flow
+                extra_context = (
+                    f"\nORDER FLOW: {flow.get('flow_signal', 'NEUTRAL')} "
+                    f"(score: {flow.get('flow_score', 0)}) | "
+                    f"Bid/Ask Imbalance: {flow.get('bid_ask_imbalance', 0):.2f} | "
+                    f"Large trades: {flow.get('large_volume_pct', 0):.0f}% of volume"
+                )
+            
             # Use Predator Stack for multi-model AI confirmation
             # Gemini (primary) -> DeepSeek (fallback) -> GPT (confirmation for high confidence)
             analysis = self.predator_stack.analyze_sync(
@@ -580,6 +606,7 @@ class SPYScalper:
                 pattern=setup.pattern.value,
                 current_price=self.last_price,
                 vwap=setup.vwap,
+                extra_context=extra_context,
                 require_confirmation=(setup.confidence >= 70)  # Get GPT confirmation for high-confidence setups
             )
             

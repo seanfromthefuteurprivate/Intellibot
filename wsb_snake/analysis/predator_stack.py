@@ -325,6 +325,7 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
         pattern: str = "",
         current_price: float = 0.0,
         vwap: float = 0.0,
+        extra_context: str = "",
         require_confirmation: bool = False
     ) -> PredatorAnalysis:
         """
@@ -336,12 +337,15 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
             pattern: Detected pattern name
             current_price: Current price
             vwap: Current VWAP value
+            extra_context: Additional context (order flow, etc.)
             require_confirmation: If True, get second opinion from GPT
             
         Returns:
             PredatorAnalysis with verdict and reasoning
         """
         context = f"Ticker: {ticker} | Pattern: {pattern} | Price: ${current_price:.2f} | VWAP: ${vwap:.2f}"
+        if extra_context:
+            context += f"\n{extra_context}"
         
         primary_response = await self._call_gemini(chart_base64, context)
         model_used = "gemini-2.0-flash"
@@ -394,6 +398,7 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
         pattern: str = "",
         current_price: float = 0.0,
         vwap: float = 0.0,
+        extra_context: str = "",
         require_confirmation: bool = False
     ) -> PredatorAnalysis:
         """Synchronous wrapper for analyze."""
@@ -404,12 +409,12 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
                         asyncio.run,
-                        self.analyze(chart_base64, ticker, pattern, current_price, vwap, require_confirmation)
+                        self.analyze(chart_base64, ticker, pattern, current_price, vwap, extra_context, require_confirmation)
                     )
                     return future.result(timeout=60)
             else:
                 return loop.run_until_complete(
-                    self.analyze(chart_base64, ticker, pattern, current_price, vwap, require_confirmation)
+                    self.analyze(chart_base64, ticker, pattern, current_price, vwap, extra_context, require_confirmation)
                 )
         except Exception as e:
             logger.error(f"Sync analyze error: {e}")

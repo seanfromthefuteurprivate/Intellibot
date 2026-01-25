@@ -14,6 +14,14 @@ The system is built around an orchestrator that coordinates various engines and 
 ### Data Collection & Processing
 A comprehensive suite of collectors gathers data from various sources:
 - **Market Data:** Polygon.io (options chain, GEX, max pain), Alpaca, Finnhub (real-time streaming via WebSocket).
+- **Ultra-Fast Scalp Data:** Enhanced Polygon data for 0DTE scalping:
+  - **5-second bars** - Micro-momentum detection for surgical entries
+  - **15-second bars** - Trend confirmation layer
+  - **1-minute bars** - VWAP context and pattern detection
+  - **5-minute bars** - Broader trend alignment
+  - **Recent trades** - Order flow analysis (large vs small trades)
+  - **NBBO quotes** - Bid/ask spread pressure and imbalance detection
+  - **Order Flow Analysis** - Buy/sell pressure scoring for AI context
 - **News & Sentiment:** Benzinga, Alpaca News, Finnhub (news sentiment, social sentiment), Alpha Vantage (AI news sentiment).
 - **Regulatory & Insider:** SEC EDGAR (insider trading Form 4), Congressional trading data.
 - **Economic & Volatility:** FRED economic data, VIX term structure.
