@@ -14,6 +14,12 @@ The system is built around an orchestrator that coordinates various engines and 
 ### Data Collection & Processing
 A comprehensive suite of collectors gathers data from various sources:
 - **Market Data:** Polygon.io (options chain, GEX, max pain), Alpaca, Finnhub (real-time streaming via WebSocket).
+- **Alpaca Real-Time Stream:** WebSocket streaming for sub-second latency:
+  - **Real-time trades** - Individual trade executions with price/size
+  - **Real-time quotes** - Bid/ask updates for spread analysis
+  - **Real-time bars** - Minute bars as they form
+  - **Trading halts** - Immediate halt detection for risk management
+  - **LULD bands** - Limit Up/Limit Down for volatility boundaries
 - **Ultra-Fast Scalp Data:** Enhanced Polygon data for 0DTE scalping:
   - **5-second bars** - Micro-momentum detection for surgical entries
   - **15-second bars** - Trend confirmation layer
@@ -22,7 +28,14 @@ A comprehensive suite of collectors gathers data from various sources:
   - **Recent trades** - Order flow analysis (large vs small trades)
   - **NBBO quotes** - Bid/ask spread pressure and imbalance detection
   - **Order Flow Analysis** - Buy/sell pressure scoring for AI context
+  - **Trade Classification** - Sweeps, blocks, odd lots for institutional detection
 - **News & Sentiment:** Benzinga, Alpaca News, Finnhub (news sentiment, social sentiment), Alpha Vantage (AI news sentiment).
+- **Finnhub Ruthless Context:** Enhanced sentiment and forward-looking data:
+  - **Earnings Calendar** - Upcoming earnings with estimates/actuals
+  - **Economic Calendar** - CPI, FOMC, Jobs reports with impact levels
+  - **Recommendation Trends** - Analyst buy/sell consensus with percentages
+  - **Price Targets** - High/low/mean analyst targets
+  - **Support/Resistance** - Technical levels from pattern recognition
 - **Regulatory & Insider:** SEC EDGAR (insider trading Form 4), Congressional trading data.
 - **Economic & Volatility:** FRED economic data, VIX term structure.
 - **Market Microstructure:** FINRA Dark Pool data, unusual options flow (scraped), simulated Level 2 data derived from options.

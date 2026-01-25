@@ -345,6 +345,280 @@ class FinnhubCollector:
         except Exception as e:
             log.warning(f"Finnhub boost calculation error: {e}")
             return 0
+    
+    # ========================
+    # NEW RUTHLESS METHODS
+    # ========================
+    
+    def get_earnings_calendar(self, from_date: str = None, to_date: str = None) -> List[Dict]:
+        """
+        Get upcoming earnings announcements.
+        CRITICAL for avoiding or exploiting earnings volatility.
+        """
+        if not self.client:
+            return []
+        
+        cache_key = f"earnings_calendar_{from_date}_{to_date}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            self._rate_limit()
+            
+            if not from_date:
+                from_date = datetime.now().strftime("%Y-%m-%d")
+            if not to_date:
+                to_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+            
+            calendar = self.client.earnings_calendar(
+                _from=from_date,
+                to=to_date,
+                symbol=None,
+                international=False
+            )
+            
+            earnings = []
+            for entry in calendar.get("earningsCalendar", []):
+                earnings.append({
+                    "symbol": entry.get("symbol", ""),
+                    "date": entry.get("date", ""),
+                    "hour": entry.get("hour", ""),
+                    "eps_estimate": entry.get("epsEstimate"),
+                    "eps_actual": entry.get("epsActual"),
+                    "revenue_estimate": entry.get("revenueEstimate"),
+                    "revenue_actual": entry.get("revenueActual"),
+                    "quarter": entry.get("quarter"),
+                    "year": entry.get("year"),
+                })
+            
+            self._set_cache(cache_key, earnings)
+            return earnings
+            
+        except Exception as e:
+            log.warning(f"Finnhub earnings calendar error: {e}")
+            return []
+    
+    def get_recommendation_trends(self, ticker: str) -> Dict:
+        """
+        Get analyst recommendation trends.
+        Strong buy/sell consensus = confirmation for our signals.
+        """
+        if not self.client:
+            return {"available": False}
+        
+        cache_key = f"recommendations_{ticker}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            self._rate_limit()
+            
+            recs = self.client.recommendation_trends(ticker)
+            
+            if not recs:
+                return {"available": False, "ticker": ticker}
+            
+            latest = recs[0] if recs else {}
+            
+            strong_buy = latest.get("strongBuy", 0)
+            buy = latest.get("buy", 0)
+            hold = latest.get("hold", 0)
+            sell = latest.get("sell", 0)
+            strong_sell = latest.get("strongSell", 0)
+            
+            total = strong_buy + buy + hold + sell + strong_sell
+            
+            if total > 0:
+                bullish_pct = (strong_buy + buy) / total
+                bearish_pct = (sell + strong_sell) / total
+            else:
+                bullish_pct = 0.5
+                bearish_pct = 0.5
+            
+            if bullish_pct > 0.7:
+                consensus = "STRONG_BUY"
+                score = 2
+            elif bullish_pct > 0.5:
+                consensus = "BUY"
+                score = 1
+            elif bearish_pct > 0.7:
+                consensus = "STRONG_SELL"
+                score = -2
+            elif bearish_pct > 0.5:
+                consensus = "SELL"
+                score = -1
+            else:
+                consensus = "HOLD"
+                score = 0
+            
+            result = {
+                "available": True,
+                "ticker": ticker,
+                "period": latest.get("period", ""),
+                "strong_buy": strong_buy,
+                "buy": buy,
+                "hold": hold,
+                "sell": sell,
+                "strong_sell": strong_sell,
+                "total_analysts": total,
+                "bullish_pct": bullish_pct,
+                "bearish_pct": bearish_pct,
+                "consensus": consensus,
+                "score": score,
+            }
+            
+            self._set_cache(cache_key, result)
+            return result
+            
+        except Exception as e:
+            log.warning(f"Finnhub recommendation trends error for {ticker}: {e}")
+            return {"available": False, "ticker": ticker}
+    
+    def get_price_target(self, ticker: str) -> Dict:
+        """
+        Get analyst price targets.
+        Useful for setting realistic profit targets.
+        """
+        if not self.client:
+            return {"available": False}
+        
+        cache_key = f"price_target_{ticker}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            self._rate_limit()
+            
+            target = self.client.price_target(ticker)
+            
+            if not target:
+                return {"available": False, "ticker": ticker}
+            
+            result = {
+                "available": True,
+                "ticker": ticker,
+                "target_high": target.get("targetHigh"),
+                "target_low": target.get("targetLow"),
+                "target_mean": target.get("targetMean"),
+                "target_median": target.get("targetMedian"),
+                "last_updated": target.get("lastUpdated", ""),
+            }
+            
+            self._set_cache(cache_key, result)
+            return result
+            
+        except Exception as e:
+            log.warning(f"Finnhub price target error for {ticker}: {e}")
+            return {"available": False, "ticker": ticker}
+    
+    def get_economic_calendar(self) -> List[Dict]:
+        """
+        Get upcoming economic events (CPI, FOMC, Jobs, etc.).
+        CRITICAL for avoiding or exploiting macro volatility.
+        """
+        if not self.client:
+            return []
+        
+        cache_key = "economic_calendar"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            self._rate_limit()
+            
+            calendar = self.client.calendar_economic()
+            
+            events = []
+            for entry in calendar.get("economicCalendar", [])[:50]:
+                events.append({
+                    "event": entry.get("event", ""),
+                    "country": entry.get("country", ""),
+                    "time": entry.get("time", ""),
+                    "impact": entry.get("impact", ""),
+                    "prev": entry.get("prev"),
+                    "estimate": entry.get("estimate"),
+                    "actual": entry.get("actual"),
+                    "unit": entry.get("unit", ""),
+                })
+            
+            self._set_cache(cache_key, events)
+            return events
+            
+        except Exception as e:
+            log.warning(f"Finnhub economic calendar error: {e}")
+            return []
+    
+    def get_support_resistance(self, ticker: str, resolution: str = "D") -> Dict:
+        """
+        Get technical support/resistance levels.
+        Uses Finnhub's pattern recognition.
+        """
+        if not self.client:
+            return {"available": False}
+        
+        cache_key = f"support_resistance_{ticker}_{resolution}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        try:
+            self._rate_limit()
+            
+            levels = self.client.support_resistance(ticker, resolution)
+            
+            result = {
+                "available": True,
+                "ticker": ticker,
+                "levels": levels.get("levels", []),
+            }
+            
+            self._set_cache(cache_key, result)
+            return result
+            
+        except Exception as e:
+            log.warning(f"Finnhub support/resistance error for {ticker}: {e}")
+            return {"available": False, "ticker": ticker}
+    
+    def is_earnings_soon(self, ticker: str, days: int = 3) -> Dict:
+        """
+        Check if ticker has earnings within N days.
+        Returns warning for 0DTE plays near earnings.
+        """
+        earnings = self.get_earnings_calendar()
+        
+        today = datetime.now().date()
+        cutoff = today + timedelta(days=days)
+        
+        for entry in earnings:
+            if entry.get("symbol", "").upper() == ticker.upper():
+                earnings_date = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+                if today <= earnings_date <= cutoff:
+                    return {
+                        "has_earnings": True,
+                        "date": entry["date"],
+                        "hour": entry.get("hour", "unknown"),
+                        "days_away": (earnings_date - today).days,
+                        "warning": f"EARNINGS IN {(earnings_date - today).days} DAYS - HIGH VOLATILITY"
+                    }
+        
+        return {"has_earnings": False}
+    
+    def get_ruthless_context(self, ticker: str) -> Dict:
+        """
+        Get ALL available Finnhub data for maximum ruthlessness.
+        Combines all sentiment + recommendations + price targets.
+        """
+        return {
+            "sentiment": self.get_all_sentiment(ticker),
+            "recommendations": self.get_recommendation_trends(ticker),
+            "price_target": self.get_price_target(ticker),
+            "earnings_warning": self.is_earnings_soon(ticker),
+            "support_resistance": self.get_support_resistance(ticker),
+        }
 
 
 finnhub_collector = FinnhubCollector()

@@ -259,6 +259,134 @@ class EnhancedPolygonAdapter:
             return quotes
         return []
     
+    # Trade condition codes for ruthless classification
+    CONDITION_CODES = {
+        # Regular trades
+        0: "regular",
+        # Odd lot
+        37: "odd_lot",
+        # Average price trade
+        52: "average_price",
+        # Cash trade
+        53: "cash",
+        # Intermarket sweep
+        12: "intermarket_sweep",
+        15: "intermarket_sweep",
+        # Opening trade
+        17: "opening",
+        # Closing trade
+        6: "closing",
+        # Contingent trade
+        40: "contingent",
+        # Derivatively priced
+        30: "derivative",
+        # Form T (after hours)
+        29: "form_t",
+        14: "form_t",
+    }
+    
+    def classify_trade(self, trade: Dict) -> Dict:
+        """
+        Classify a trade based on its condition codes.
+        
+        Intermarket sweeps = aggressive institutional orders
+        Large odd lots = retail panic
+        Blocks = big institutional interest
+        """
+        conditions = trade.get("conditions", [])
+        size = trade.get("size", 0)
+        price = trade.get("price", 0)
+        
+        classifications = []
+        for cond in conditions:
+            if cond in self.CONDITION_CODES:
+                classifications.append(self.CONDITION_CODES[cond])
+        
+        if not classifications:
+            classifications = ["regular"]
+        
+        # Determine trade type
+        trade_type = "regular"
+        is_sweep = "intermarket_sweep" in classifications
+        is_odd_lot = size < 100
+        is_block = size >= 10000
+        is_large = size >= 1000
+        
+        if is_sweep:
+            trade_type = "SWEEP"  # Aggressive institutional
+        elif is_block:
+            trade_type = "BLOCK"  # Large institutional
+        elif is_large:
+            trade_type = "LARGE"  # Notable size
+        elif is_odd_lot:
+            trade_type = "ODD_LOT"  # Retail
+        
+        notional = price * size
+        
+        return {
+            **trade,
+            "trade_type": trade_type,
+            "classifications": classifications,
+            "is_sweep": is_sweep,
+            "is_block": is_block,
+            "is_large": is_large,
+            "is_odd_lot": is_odd_lot,
+            "notional": notional,
+        }
+    
+    def get_classified_trades(self, ticker: str, limit: int = 200) -> Dict[str, Any]:
+        """
+        Get trades with classification for order flow analysis.
+        Returns breakdown of sweeps, blocks, and retail activity.
+        """
+        trades = self.get_recent_trades(ticker, limit)
+        
+        if not trades:
+            return {"available": False}
+        
+        classified = [self.classify_trade(t) for t in trades]
+        
+        sweeps = [t for t in classified if t["is_sweep"]]
+        blocks = [t for t in classified if t["is_block"]]
+        large = [t for t in classified if t["is_large"] and not t["is_block"]]
+        odd_lots = [t for t in classified if t["is_odd_lot"]]
+        
+        total_volume = sum(t["size"] for t in classified)
+        sweep_volume = sum(t["size"] for t in sweeps)
+        block_volume = sum(t["size"] for t in blocks)
+        
+        sweep_pct = sweep_volume / max(total_volume, 1) * 100
+        block_pct = block_volume / max(total_volume, 1) * 100
+        institutional_pct = (sweep_volume + block_volume) / max(total_volume, 1) * 100
+        
+        # Determine institutional bias
+        if sweeps:
+            avg_sweep_price = sum(t["price"] for t in sweeps) / len(sweeps)
+            recent_price = classified[0]["price"] if classified else 0
+            sweep_direction = "BUY" if avg_sweep_price <= recent_price else "SELL"
+        else:
+            sweep_direction = "NONE"
+        
+        return {
+            "available": True,
+            "ticker": ticker,
+            "total_trades": len(classified),
+            "total_volume": total_volume,
+            "sweep_count": len(sweeps),
+            "sweep_volume": sweep_volume,
+            "sweep_pct": sweep_pct,
+            "sweep_direction": sweep_direction,
+            "block_count": len(blocks),
+            "block_volume": block_volume,
+            "block_pct": block_pct,
+            "large_count": len(large),
+            "odd_lot_count": len(odd_lots),
+            "institutional_pct": institutional_pct,
+            "is_institutional_active": institutional_pct > 20,
+            "trades": classified[:50],  # Return first 50 for context
+        }
+        return []
+    
     def analyze_order_flow(self, ticker: str) -> Dict[str, Any]:
         """
         Analyze order flow using trades and quotes for directional bias.

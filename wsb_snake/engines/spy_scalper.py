@@ -22,6 +22,8 @@ from wsb_snake.utils.logger import get_logger
 from wsb_snake.utils.session_regime import is_market_open, get_session_info
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.collectors.scalp_data_collector import scalp_data_collector, ScalpDataPacket
+from wsb_snake.collectors.finnhub_collector import finnhub_collector
+from wsb_snake.collectors.alpaca_stream import alpaca_stream
 from wsb_snake.analysis.scalp_langgraph import get_scalp_analyzer
 from wsb_snake.analysis.chart_generator import ChartGenerator
 from wsb_snake.analysis.scalp_chart_generator import scalp_chart_generator
@@ -103,6 +105,15 @@ class SPYScalper:
         self.entries_today = 0
         self.exits_today = 0
         
+        # Alpaca stream for real-time data
+        self.alpaca_stream = alpaca_stream
+        self._stream_started = False
+        
+        # Cached classified trades to avoid rate limit issues
+        self._classified_trades_cache: Optional[Dict] = None
+        self._classified_trades_time: Optional[datetime] = None
+        self._classified_trades_ttl = 30  # 30 second cache
+        
         # Initialize database table
         self._init_db()
         
@@ -142,16 +153,61 @@ class SPYScalper:
             return
         
         self.running = True
+        
+        # Start Alpaca WebSocket for real-time data
+        if not self._stream_started:
+            try:
+                self.alpaca_stream.subscribe([self.symbol], trades=True, quotes=True, bars=True)
+                self.alpaca_stream.on_halt(self._on_halt_callback)
+                self.alpaca_stream.on_luld(self._on_luld_callback)
+                self.alpaca_stream.start()
+                self._stream_started = True
+                log.info(f"Started Alpaca real-time stream for {self.symbol}")
+            except Exception as e:
+                log.warning(f"Alpaca stream start failed (will use polling): {e}")
+        
         self.worker_thread = threading.Thread(target=self._scan_loop, daemon=True)
         self.worker_thread.start()
         log.info("🦅 SPY Scalper started - watching for 0DTE opportunities")
+    
+    def _on_halt_callback(self, halt_info: Dict):
+        """Handle trading halt alerts."""
+        if halt_info.get("is_halted"):
+            log.warning(f"⚠️ TRADING HALT: {halt_info.get('symbol')} - {halt_info.get('status_message')}")
+            # Could send Telegram alert here for halt
+    
+    def _on_luld_callback(self, luld_info: Dict):
+        """Handle LULD band updates for volatility detection."""
+        log.debug(f"LULD update: {luld_info.get('symbol')} up={luld_info.get('limit_up')} down={luld_info.get('limit_down')}")
     
     def stop(self):
         """Stop the scalper."""
         self.running = False
         if self.worker_thread:
             self.worker_thread.join(timeout=5)
+        if self._stream_started:
+            try:
+                self.alpaca_stream.stop()
+            except:
+                pass
         log.info("SPY Scalper stopped")
+    
+    def _get_classified_trades_cached(self) -> Dict:
+        """Get classified trades with caching to avoid rate limits."""
+        now = datetime.now()
+        
+        if (self._classified_trades_cache and self._classified_trades_time and 
+            (now - self._classified_trades_time).total_seconds() < self._classified_trades_ttl):
+            return self._classified_trades_cache
+        
+        try:
+            classified = polygon_enhanced.get_classified_trades(self.symbol, limit=100)
+            self._classified_trades_cache = classified
+            self._classified_trades_time = now
+            return classified
+        except Exception as e:
+            log.debug(f"Classified trades fetch error: {e}")
+            return self._classified_trades_cache or {"available": False}
     
     def _scan_loop(self):
         """Main scanning loop - runs every 30 seconds during market hours."""
@@ -587,16 +643,76 @@ class SPYScalper:
             if not chart_base64:
                 return setup
             
-            # Build enhanced context with order flow data
+            # Build RUTHLESS enhanced context with ALL data sources
             extra_context = ""
+            
+            # Order flow data
             if self.last_data_packet and self.last_data_packet.order_flow.get("available"):
                 flow = self.last_data_packet.order_flow
-                extra_context = (
+                extra_context += (
                     f"\nORDER FLOW: {flow.get('flow_signal', 'NEUTRAL')} "
                     f"(score: {flow.get('flow_score', 0)}) | "
                     f"Bid/Ask Imbalance: {flow.get('bid_ask_imbalance', 0):.2f} | "
                     f"Large trades: {flow.get('large_volume_pct', 0):.0f}% of volume"
                 )
+            
+            # Classified trades (sweeps, blocks) for institutional detection - CACHED
+            classified = self._get_classified_trades_cached()
+            if classified.get("available"):
+                extra_context += (
+                    f"\nINSTITUTIONAL: Sweeps={classified.get('sweep_count', 0)} "
+                    f"({classified.get('sweep_pct', 0):.1f}%), "
+                    f"Blocks={classified.get('block_count', 0)} "
+                    f"({classified.get('block_pct', 0):.1f}%), "
+                    f"Sweep Direction: {classified.get('sweep_direction', 'NONE')}"
+                )
+            
+            # Alpaca real-time order flow if stream is active
+            if self._stream_started:
+                try:
+                    stream_flow = self.alpaca_stream.get_order_flow_summary(self.symbol)
+                    if stream_flow.get("available"):
+                        extra_context += (
+                            f"\nREAL-TIME FLOW: {stream_flow.get('flow_signal', 'NEUTRAL')} "
+                            f"(buy_ratio: {stream_flow.get('buy_ratio', 0.5):.1%})"
+                        )
+                        if stream_flow.get("is_halted"):
+                            extra_context += " ⚠️ HALTED"
+                except:
+                    pass
+            
+            # Finnhub ruthless context - ALL available data
+            try:
+                # Analyst consensus
+                recs = finnhub_collector.get_recommendation_trends(self.symbol)
+                if recs.get("available"):
+                    extra_context += (
+                        f"\nANALYST CONSENSUS: {recs.get('consensus', 'HOLD')} "
+                        f"({recs.get('total_analysts', 0)} analysts, "
+                        f"{recs.get('bullish_pct', 0.5)*100:.0f}% bullish)"
+                    )
+                
+                # Price targets for context
+                targets = finnhub_collector.get_price_target(self.symbol)
+                if targets.get("available") and targets.get("target_mean"):
+                    target_vs_current = ((targets["target_mean"] - self.last_price) / self.last_price * 100) if self.last_price else 0
+                    extra_context += f"\nPRICE TARGET: ${targets.get('target_mean', 0):.2f} ({target_vs_current:+.1f}% from current)"
+                
+                # Support/resistance levels
+                sr_levels = finnhub_collector.get_support_resistance(self.symbol)
+                if sr_levels.get("available") and sr_levels.get("levels"):
+                    levels = sr_levels["levels"][:5]  # Top 5 levels
+                    extra_context += f"\nS/R LEVELS: {', '.join(f'${l:.2f}' for l in levels)}"
+            except Exception as e:
+                log.debug(f"Finnhub context fetch error: {e}")
+            
+            # Earnings warning check
+            try:
+                earnings_check = finnhub_collector.is_earnings_soon(self.symbol, days=2)
+                if earnings_check.get("has_earnings"):
+                    extra_context += f"\n⚠️ EARNINGS WARNING: {earnings_check.get('warning', '')}"
+            except:
+                pass
             
             # Use Predator Stack for multi-model AI confirmation
             # Gemini (primary) -> DeepSeek (fallback) -> GPT (confirmation for high confidence)
