@@ -38,26 +38,30 @@ def send_startup_ping():
     buying_power = float(account.get("buying_power", 0))
     trading_mode = "🔴 LIVE" if alpaca_executor.LIVE_TRADING else "📝 PAPER"
     
-    message = f"""🐍 **WSB SNAKE v2.3 ONLINE**
+    from wsb_snake.engines.spy_scalper import spy_scalper
+    predator_status = "🔥 ACTIVE" if spy_scalper.PREDATOR_MODE else "OFF"
+    
+    message = f"""🐍 **WSB SNAKE v2.4 ONLINE**
 
-**0DTE Intelligence Engine Activated**
+**APEX PREDATOR MODE: {predator_status}**
+
+🦅 **Predator Configuration:**
+• Min Confidence: {spy_scalper.MIN_CONFIDENCE_FOR_ALERT}%
+• AI Confirmation: REQUIRED
+• Predator Stack: REQUIRED
+• Cooldown: {spy_scalper.trade_cooldown_minutes} min
 
 🔧 **Engines Loaded:**
-• Engine 1: Ignition Detector
-• Engine 2: 0DTE Pressure Engine  
-• Engine 3: Late-Day Surge Hunter
-• Engine 4: Probability Generator
-• Engine 5: Self-Learning Memory
-• Engine 6: Paper Shadow Trader
 • 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
-• 🦅 SPY Scalper: Hawk-mode (30s scans)
+• 🦅 SPY Scalper: PREDATOR MODE (30s scans)
+• 🔪 Zero Greed Exit: NO MERCY
 • 📈 Alpaca Trading: {trading_mode}
 
 💰 **Trading Account:**
 • Mode: {trading_mode}
 • Buying Power: ${buying_power:,.2f}
 • Max Per Trade: $1,000
-• Strategy: 0DTE Options Scalping
+• Target: +20% | Stop: -15% | Max Hold: 45min
 
 📊 **Session Status:**
 • Session: {session_info['session'].upper()}
@@ -65,9 +69,9 @@ def send_startup_ping():
 • Power Hour: {'Yes' if session_info['is_power_hour'] else 'No'}
 • Time ET: {session_info['current_time_et']}
 
-🎯 **Monitoring:** SPY (primary) + QQQ, IWM, TSLA, NVDA, AAPL, META, AMD, AMZN, GOOGL, MSFT
+🎯 **Hunting:** SPY 0DTE Options
 
-⚡ Real paper trades executing on signals!
+⚡ Apex predator watching. Strike only on high-conviction prey.
 """
     
     send_alert(message)

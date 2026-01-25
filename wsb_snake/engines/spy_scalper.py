@@ -75,9 +75,21 @@ class ScalpSetup:
 
 class SPYScalper:
     """
-    Hawk-like 0DTE SPY scalper that monitors for quick profit opportunities.
+    Apex predator 0DTE SPY scalper - strikes only on highest-conviction setups.
     Runs continuously during market hours, scanning every 30 seconds.
+    
+    PREDATOR MODE: No failed attempts. Only strike when prey is in sight.
+    Swoop in, execute, exit smoothly. No waiting for volatility.
     """
+    
+    # ========== APEX PREDATOR CONFIGURATION ==========
+    # These thresholds ensure we only strike on the highest quality setups
+    PREDATOR_MODE = True  # Enable apex predator behavior
+    MIN_CONFIDENCE_FOR_AI = 65  # Minimum to even bother with AI confirmation
+    MIN_CONFIDENCE_FOR_ALERT = 75  # Minimum final confidence to trigger entry
+    REQUIRE_AI_CONFIRMATION = True  # Must have AI blessing to strike
+    REQUIRE_PREDATOR_STRIKE = True  # Must have Predator Stack STRIKE verdict
+    # =================================================
     
     def __init__(self):
         self.symbol = "SPY"
@@ -99,7 +111,7 @@ class SPYScalper:
         # Pattern detection state
         self.active_setup: Optional[ScalpSetup] = None
         self.cooldown_until: Optional[datetime] = None
-        self.trade_cooldown_minutes = 10  # Cooldown after entry signal
+        self.trade_cooldown_minutes = 15  # Longer cooldown in predator mode
         
         # Statistics
         self.signals_today = 0
@@ -270,22 +282,40 @@ class SPYScalper:
         # Apply learning boosts
         best_setup = self._apply_learning_boosts(best_setup, bars)
         
-        # AI confirmation if confidence is borderline
-        if best_setup.confidence >= 60:
-            best_setup = self._get_ai_confirmation(best_setup)
-        
-        # Final decision: alert if confidence >= 70 or (>= 60 and AI confirms)
+        # Calculate final confidence score
         final_confidence = best_setup.confidence + best_setup.pattern_memory_boost + best_setup.time_quality_score
         
-        should_alert = (
-            final_confidence >= 70 or 
-            (final_confidence >= 60 and best_setup.ai_confirmed)
-        )
+        # ========== APEX PREDATOR DECISION LOGIC ==========
+        # Only proceed if base confidence is high enough
+        if final_confidence < self.MIN_CONFIDENCE_FOR_AI:
+            log.debug(f"Prey too weak ({final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_AI}%) - passing")
+            return
+        
+        # Get AI confirmation (required in predator mode)
+        best_setup = self._get_ai_confirmation(best_setup)
+        
+        # Predator mode requirements:
+        # 1. Final confidence >= 75%
+        # 2. AI must confirm (if REQUIRE_AI_CONFIRMATION is True)
+        # 3. Predator Stack must give STRIKE verdict (checked in _get_ai_confirmation)
+        
+        ai_passed = (not self.REQUIRE_AI_CONFIRMATION) or best_setup.ai_confirmed
+        confidence_passed = final_confidence >= self.MIN_CONFIDENCE_FOR_ALERT
+        
+        should_alert = ai_passed and confidence_passed
         
         if should_alert:
+            log.info(f"🎯 APEX PREDATOR STRIKE: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence")
             self._send_entry_alert(best_setup)
             self.cooldown_until = datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes)
             self.signals_today += 1
+        else:
+            reason = []
+            if not confidence_passed:
+                reason.append(f"confidence {final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_ALERT}%")
+            if not ai_passed:
+                reason.append("AI not confirmed")
+            log.debug(f"Predator passed on {best_setup.pattern.value}: {', '.join(reason)}")
     
     def _calculate_vwap(self, bars: List[Dict]) -> float:
         """Calculate VWAP from bars."""
