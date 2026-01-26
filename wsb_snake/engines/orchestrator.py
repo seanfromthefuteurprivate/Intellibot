@@ -1081,6 +1081,13 @@ _Urgency: {alert.urgency}/5_
             
             log.info(f"   Filled: {len(filled)} | Closed: {len(closed)}")
             
+            # Stage 4.5: MANDATORY 0DTE EOD CLOSE
+            # All 0DTE positions MUST close before market close (3:55 PM ET)
+            if alpaca_executor.should_close_for_eod():
+                log.info("⏰ Stage 4.5: MANDATORY EOD CLOSE - All 0DTE positions must close!")
+                eod_closed = alpaca_executor.close_all_0dte_positions()
+                log.info(f"   EOD positions closed: {eod_closed}")
+            
             # Summary
             duration = (datetime.utcnow() - start_time).total_seconds()
             log.info("=" * 50)

@@ -84,8 +84,10 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    MAX_POSITION_VALUE = 1000  # $1,000 max per trade
-    MAX_CONCURRENT_POSITIONS = 3  # Max 3 positions at once
+    MAX_DAILY_DEPLOYED = 1000  # $1,000 TOTAL per day (not per trade!)
+    MAX_CONCURRENT_POSITIONS = 3  # Max 3 positions at once (split from $1000)
+    MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
+    CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
     
     def __init__(self):
         self.api_key = os.environ.get("ALPACA_API_KEY", "")
@@ -100,8 +102,13 @@ class AlpacaExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
+        # Track daily deployed capital
+        self.daily_deployed = 0.0
+        self.daily_reset_date = datetime.utcnow().date()
+        
         mode = "LIVE" if self.LIVE_TRADING else "Paper"
         logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
+        logger.info(f"Daily limit: ${self.MAX_DAILY_DEPLOYED} | Max positions: {self.MAX_CONCURRENT_POSITIONS}")
         
         if self.LIVE_TRADING:
             logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
@@ -236,18 +243,39 @@ class AlpacaExecutor:
             logger.debug(f"Option quote error: {e}")
             return {}
     
+    def get_remaining_daily_capital(self) -> float:
+        """Get remaining capital available for today."""
+        # Reset daily tracker if new day
+        today = datetime.utcnow().date()
+        if today != self.daily_reset_date:
+            self.daily_deployed = 0.0
+            self.daily_reset_date = today
+            logger.info(f"Daily capital reset: ${self.MAX_DAILY_DEPLOYED} available")
+        
+        # Calculate currently deployed capital from open positions
+        positions = self.get_options_positions()
+        current_deployed = sum(
+            float(p.get('cost_basis', 0)) or 
+            (float(p.get('qty', 0)) * float(p.get('avg_entry_price', 0)) * 100)
+            for p in positions
+        )
+        
+        remaining = self.MAX_DAILY_DEPLOYED - current_deployed
+        return max(0, remaining)
+    
     def calculate_position_size(
         self,
         option_price: float,
         max_value: Optional[float] = None
     ) -> int:
         """
-        Calculate number of contracts to buy with max $1,000.
+        Calculate number of contracts to buy.
+        Uses remaining daily capital (total $1000/day limit).
         Options are 100 shares per contract.
-        HARD CAP: Never exceed max_value.
         """
         if max_value is None:
-            max_value = self.MAX_POSITION_VALUE
+            # Use remaining daily capital, not fixed max
+            max_value = min(self.get_remaining_daily_capital(), self.MAX_DAILY_DEPLOYED)
         
         if option_price <= 0:
             return 0
@@ -256,11 +284,55 @@ class AlpacaExecutor:
         
         # Hard cap: if single contract > max_value, return 0 (skip trade)
         if contract_cost > max_value:
-            logger.warning(f"Option price ${option_price:.2f} too expensive (${contract_cost:.2f}/contract > ${max_value})")
+            logger.warning(f"Option price ${option_price:.2f} too expensive (${contract_cost:.2f}/contract > ${max_value:.2f} remaining)")
             return 0
         
         num_contracts = int(max_value / contract_cost)
         return num_contracts
+    
+    def close_all_0dte_positions(self) -> int:
+        """
+        MANDATORY: Close ALL 0DTE positions before market close.
+        Called automatically at 3:55 PM ET.
+        Returns number of positions closed.
+        """
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        
+        positions = self.get_options_positions()
+        closed = 0
+        
+        for p in positions:
+            symbol = p.get('symbol', '')
+            try:
+                self.close_position(symbol)
+                closed += 1
+                logger.info(f"0DTE EOD close: {symbol}")
+            except Exception as e:
+                logger.error(f"Failed to close 0DTE position {symbol}: {e}")
+        
+        if closed > 0:
+            send_telegram_alert(f"""⏰ **END OF DAY - 0DTE POSITIONS CLOSED**
+
+Closed {closed} position(s) before market close.
+Time: {now_et.strftime('%I:%M %p ET')}
+
+No overnight risk. Fresh start tomorrow!
+""")
+        
+        return closed
+    
+    def should_close_for_eod(self) -> bool:
+        """Check if we should close all 0DTE positions for end of day."""
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        
+        # Close at 3:55 PM ET (5 minutes before market close)
+        close_time = now_et.replace(hour=15, minute=55, second=0, microsecond=0)
+        
+        return now_et >= close_time and now_et.hour < 17  # Before 5 PM
     
     def place_option_order(
         self,
@@ -522,18 +594,22 @@ class AlpacaExecutor:
         qty = self.calculate_position_size(option_price)
         estimated_cost = qty * option_price * 100  # Total cost in dollars
         
-        # HARD CAP: Double-check we're under $1K
-        if estimated_cost > self.MAX_POSITION_VALUE:
-            logger.error(f"Position size ${estimated_cost:.2f} exceeds ${self.MAX_POSITION_VALUE} - ABORTING")
+        # Check remaining daily capital
+        remaining_capital = self.get_remaining_daily_capital()
+        
+        # HARD CAP: Double-check we're under daily limit
+        if estimated_cost > remaining_capital:
+            logger.error(f"Position size ${estimated_cost:.2f} exceeds ${remaining_capital:.2f} remaining daily capital - ABORTING")
+            send_telegram_alert(f"❌ Trade skipped: ${estimated_cost:.2f} exceeds ${remaining_capital:.2f} remaining today")
             return None
         
         # Skip if position size is 0 (too expensive)
         if qty == 0:
-            logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive for ${self.MAX_POSITION_VALUE} max")
+            logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive for ${remaining_capital:.2f} remaining")
             send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} too expensive")
             return None
         
-        logger.info(f"POSITION SIZE CHECK: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (max ${self.MAX_POSITION_VALUE})")
+        logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (${remaining_capital:.2f} remaining of ${self.MAX_DAILY_DEPLOYED})")
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
@@ -718,16 +794,16 @@ Total P&L: ${self.total_pnl:+.2f}
                     
                     # CRITICAL: Verify actual cost is within limits
                     actual_cost = position.entry_price * position.qty * 100
-                    if actual_cost > self.MAX_POSITION_VALUE * 1.5:  # 50% tolerance = EMERGENCY CLOSE
-                        logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_POSITION_VALUE * 1.5}!")
+                    if actual_cost > self.MAX_DAILY_DEPLOYED * 1.5:  # 50% tolerance = EMERGENCY CLOSE
+                        logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_DAILY_DEPLOYED * 1.5}!")
                         send_telegram_alert(f"🚨 EMERGENCY: Position ${actual_cost:.2f} > limit - AUTO-CLOSING!")
                         # Immediately close the oversized position
                         self.close_position(position.option_symbol)
                         position.status = PositionStatus.CLOSED
                         position.exit_reason = "OVERSIZED_POSITION_CLOSED"
                         continue
-                    elif actual_cost > self.MAX_POSITION_VALUE * 1.1:  # 10% tolerance = WARNING
-                        logger.warning(f"WARNING: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_POSITION_VALUE} by >10%")
+                    elif actual_cost > self.MAX_DAILY_DEPLOYED * 0.5:  # Using more than half daily limit = WARNING
+                        logger.warning(f"NOTE: Single trade ${actual_cost:.2f} using >{50}% of daily ${self.MAX_DAILY_DEPLOYED} limit")
                         send_telegram_alert(f"⚠️ WARNING: Position cost ${actual_cost:.2f} slightly over limit")
                     
                     position.target_price = position.entry_price * 1.20  # +20% target
