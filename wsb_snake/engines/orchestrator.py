@@ -66,7 +66,11 @@ from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.event_outcomes import event_outcome_db
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.engines.spy_scalper import spy_scalper
+from wsb_snake.trading.alpaca_executor import AlpacaExecutor
 from wsb_snake.config import ZERO_DTE_UNIVERSE
+
+# Initialize Alpaca executor for REAL paper trading
+alpaca_executor = AlpacaExecutor()
 
 
 class SnakeOrchestrator:
@@ -1022,10 +1026,44 @@ _Urgency: {alert.urgency}/5_
                             # Record family signal for learning
                             record_family_signal(ticker, family_name)
                             
-                            # Paper trade high-conviction signals
+                            # EXECUTE REAL ALPACA PAPER TRADE - CRITICAL CONNECTION
+                            entry_price = prob.get("entry_price") or prob.get("price", 0)
+                            direction_raw = prob.get("direction", "long")
+                            direction = "long" if direction_raw in ["bullish", "long", "calls"] else "short"
+                            
+                            # Calculate targets based on direction
+                            if direction == "long":
+                                target = entry_price * 1.004  # 0.4% target
+                                stop = entry_price * 0.997   # 0.3% stop
+                            else:
+                                target = entry_price * 0.996
+                                stop = entry_price * 1.003
+                            
+                            confidence = score  # Use probability score as confidence
+                            
+                            try:
+                                if entry_price > 0:
+                                    alpaca_position = alpaca_executor.execute_scalp_entry(
+                                        underlying=ticker,
+                                        direction=direction,
+                                        entry_price=entry_price,
+                                        target_price=target,
+                                        stop_loss=stop,
+                                        confidence=confidence,
+                                        pattern=f"orchestrator_{family_name}"
+                                    )
+                                    if alpaca_position:
+                                        log.info(f"🚀 ALPACA EXECUTED: {ticker} {direction} via orchestrator")
+                                        results["paper_trades"] += 1
+                                    else:
+                                        log.warning(f"Alpaca trade not placed for {ticker}")
+                            except Exception as e:
+                                log.error(f"Alpaca execution error for {ticker}: {e}")
+                            
+                            # Legacy paper trader (keep for compatibility)
                             position = paper_trader.evaluate_signal(prob)
                             if position:
-                                results["paper_trades"] += 1
+                                log.debug(f"Legacy paper trader also opened {ticker}")
                     elif should_strike(ticker):
                         # State machine ready but no viable family
                         log.info(f"👁️ WATCH: {ticker} score {score:.0f} - no viable family")
