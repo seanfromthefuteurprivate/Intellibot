@@ -32,6 +32,7 @@ from wsb_snake.learning.pattern_memory import pattern_memory
 from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
+from wsb_snake.learning.session_learnings import session_learnings, battle_plan
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
 from wsb_snake.trading.alpaca_executor import alpaca_executor

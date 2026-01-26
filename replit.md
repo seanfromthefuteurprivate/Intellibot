@@ -146,8 +146,29 @@ Battle-tested trading desk knowledge encoded into `wsb_snake/engines/institution
 - 2-3 PM: 1.1-1.3x (power hour buildup)
 - 3-4 PM: 1.3x (power hour - best volume)
 
+### Session Learnings Module (NEW)
+Battle-tested wisdom from live trading sessions encoded in `wsb_snake/learning/session_learnings.py`:
+
+**Key Learnings Encoded:**
+1. **RKLB +23.2%:** Patience through drawdown pays. Position was -4% before recovering.
+2. **AAPL +4.1%:** Quick profit taking at first target. Small gains compound.
+3. **QQQ -24.6%:** 0DTE theta decay is brutal. Need 12% stops on 0DTE.
+4. **Signal-Execution Connection:** Alerts MUST trigger immediate execution.
+5. **Power Hour Prime:** 3-4 PM ET is optimal time (1.3x multiplier).
+6. **Prefer Multi-day:** 2-4 DTE outperforms 0DTE (less theta decay).
+
+**Tomorrow's Battle Plan:**
+- Confidence threshold: 58%
+- Daily limit: $1,000 split into 2-3 trades
+- 0DTE stops: 12% (tight due to theta)
+- Multi-day stops: 18%
+- 0DTE targets: 8% (quick in/out)
+- Multi-day targets: 15% (let winners run)
+- Power hour: Increase position size
+- EOD close: 3:55 PM ET (mandatory)
+
 ### System Flow
-The orchestrator integrates these components, applying "Alt Data Boosts" and "Session Multipliers" to refine signal scores. Signals are tiered (A+, A, B, C) based on their score, determining the action (immediate alert, watchlist, or log). Alerts are sent via Telegram.
+The orchestrator integrates these components, applying "Alt Data Boosts" and "Session Multipliers" to refine signal scores. Signals are tiered (A+, A, B, C) based on their score, determining the action (immediate alert, watchlist, or log). Alerts are sent via Telegram. **Alerts now automatically execute trades on Alpaca.**
 
 ## External Dependencies
 
