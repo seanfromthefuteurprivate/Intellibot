@@ -261,6 +261,7 @@ class SPYScalper:
         cooldown_key = f"cooldown_{ticker}"
         ticker_cooldown = getattr(self, cooldown_key, None)
         if ticker_cooldown and datetime.utcnow() < ticker_cooldown:
+            log.debug(f"{ticker} on cooldown")
             return
         
         # Get comprehensive scalp data packet (includes 5s, 15s, 1m, 5m bars + order flow)
@@ -275,6 +276,7 @@ class SPYScalper:
         )
         
         if not bars or len(bars) < 20:
+            log.debug(f"{ticker}: insufficient bars ({len(bars) if bars else 0})")
             return
         
         current_price = data_packet.current_price if data_packet.current_price > 0 else bars[-1].get('c', 0)
@@ -282,11 +284,21 @@ class SPYScalper:
         # Calculate VWAP
         vwap = self._calculate_vwap(bars)
         
+        log.info(f"🔍 {ticker}: ${current_price:.2f} | VWAP ${vwap:.2f} | {len(bars)} bars")
+        
+        # Set price cache for this ticker so AI confirmation can use it
+        self.price_cache = bars
+        self.last_vwap = vwap
+        self.last_price = current_price
+        
         # Detect patterns for this ticker
         setups = self._detect_patterns_for_ticker(bars, ticker, current_price, vwap)
         
         if not setups:
+            log.debug(f"{ticker}: no patterns detected")
             return
+        
+        log.info(f"🎯 {ticker}: {len(setups)} patterns detected")
         
         # Get best setup
         best_setup = max(setups, key=lambda s: s.confidence)
@@ -305,7 +317,7 @@ class SPYScalper:
         
         log.info(f"🔍 {ticker} detected {best_setup.pattern.value} @ {final_confidence:.0f}% - getting AI confirmation...")
         
-        # Get AI confirmation (required in predator mode)
+        # Get AI confirmation (required in predator mode) - price_cache is already set above
         best_setup = self._get_ai_confirmation(best_setup, ticker)
         
         # Predator mode requirements:
@@ -337,13 +349,24 @@ class SPYScalper:
         total_pv = 0
         total_vol = 0
         
+        if bars and len(bars) > 0:
+            sample = bars[0]
+            log.debug(f"VWAP calc - sample bar keys: {list(sample.keys())}")
+        
         for bar in bars:
-            typical_price = (bar.get('h', 0) + bar.get('l', 0) + bar.get('c', 0)) / 3
-            volume = bar.get('v', 0)
+            high = bar.get('h') or bar.get('high') or bar.get('High') or 0
+            low = bar.get('l') or bar.get('low') or bar.get('Low') or 0
+            close = bar.get('c') or bar.get('close') or bar.get('Close') or 0
+            volume = bar.get('v') or bar.get('volume') or bar.get('Volume') or 0
+            
+            typical_price = (high + low + close) / 3 if (high + low + close) > 0 else 0
             total_pv += typical_price * volume
             total_vol += volume
         
-        return total_pv / total_vol if total_vol > 0 else 0
+        vwap = total_pv / total_vol if total_vol > 0 else 0
+        if vwap == 0 and bars:
+            log.warning(f"VWAP=0! Sample bar: {bars[0] if bars else 'none'}")
+        return vwap
     
     def _detect_patterns_for_ticker(self, bars: List[Dict], ticker: str, current_price: float, vwap: float) -> List[ScalpSetup]:
         """Detect patterns for a specific ticker."""
@@ -364,6 +387,21 @@ class SPYScalper:
             self.last_price = old_price
             self.price_cache = old_cache
     
+    def _get_bar_value(self, bar: Dict, key: str) -> float:
+        """Get value from bar with flexible key lookup."""
+        key_map = {
+            'c': ['c', 'close', 'Close'],
+            'h': ['h', 'high', 'High'],
+            'l': ['l', 'low', 'Low'],
+            'o': ['o', 'open', 'Open'],
+            'v': ['v', 'volume', 'Volume', 'vol'],
+        }
+        for k in key_map.get(key, [key]):
+            val = bar.get(k)
+            if val is not None:
+                return float(val)
+        return 0.0
+    
     def _detect_patterns(self, bars: List[Dict]) -> List[ScalpSetup]:
         """Detect all scalping patterns in current price action."""
         setups = []
@@ -375,22 +413,22 @@ class SPYScalper:
         prev = bars[-2]
         prev2 = bars[-3] if len(bars) > 2 else prev
         
-        price = current.get('c', 0)
-        high = current.get('h', 0)
-        low = current.get('l', 0)
-        volume = current.get('v', 0)
+        price = self._get_bar_value(current, 'c')
+        high = self._get_bar_value(current, 'h')
+        low = self._get_bar_value(current, 'l')
+        volume = self._get_bar_value(current, 'v')
         
-        prev_close = prev.get('c', 0)
-        prev_volume = prev.get('v', 0)
+        prev_close = self._get_bar_value(prev, 'c')
+        prev_volume = self._get_bar_value(prev, 'v')
         
         vwap = self.last_vwap
         
         # Calculate averages
-        avg_volume = sum(b.get('v', 0) for b in bars[-20:]) / 20
+        avg_volume = sum(self._get_bar_value(b, 'v') for b in bars[-20:]) / 20
         volume_ratio = volume / avg_volume if avg_volume > 0 else 1
         
         # Calculate momentum (price change rate)
-        prices_5min = [b.get('c', 0) for b in bars[-5:]]
+        prices_5min = [self._get_bar_value(b, 'c') for b in bars[-5:]]
         if len(prices_5min) >= 2:
             momentum = (prices_5min[-1] - prices_5min[0]) / prices_5min[0] * 100 if prices_5min[0] > 0 else 0
         else:
@@ -587,9 +625,9 @@ class SPYScalper:
         
         trs = []
         for i in range(1, len(bars)):
-            high = bars[i].get('h', 0)
-            low = bars[i].get('l', 0)
-            prev_close = bars[i-1].get('c', 0)
+            high = self._get_bar_value(bars[i], 'h')
+            low = self._get_bar_value(bars[i], 'l')
+            prev_close = self._get_bar_value(bars[i-1], 'c')
             
             tr = max(
                 high - low,
@@ -926,7 +964,7 @@ class SPYScalper:
         total_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
         try:
             alpaca_position = alpaca_executor.execute_scalp_entry(
-                underlying=self.symbol,
+                underlying=ticker,
                 direction=setup.direction,
                 entry_price=setup.entry_price,
                 target_price=setup.target_price,
@@ -935,9 +973,9 @@ class SPYScalper:
                 pattern=setup.pattern.value
             )
             if alpaca_position:
-                log.info(f"📈 Alpaca paper trade placed: {alpaca_position.option_symbol}")
+                log.info(f"📈 Alpaca paper trade placed for {ticker}: {alpaca_position.option_symbol}")
             else:
-                log.warning("Alpaca paper trade not placed (max positions or error)")
+                log.warning(f"Alpaca paper trade not placed for {ticker} (max positions or error)")
         except Exception as e:
             log.error(f"Alpaca execution error: {e}")
         

@@ -401,21 +401,13 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
         extra_context: str = "",
         require_confirmation: bool = False
     ) -> PredatorAnalysis:
-        """Synchronous wrapper for analyze."""
+        """Synchronous wrapper for analyze. Thread-safe for worker threads."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.analyze(chart_base64, ticker, pattern, current_price, vwap, extra_context, require_confirmation)
-                    )
-                    return future.result(timeout=60)
-            else:
-                return loop.run_until_complete(
-                    self.analyze(chart_base64, ticker, pattern, current_price, vwap, extra_context, require_confirmation)
-                )
+            # Always use asyncio.run() for simplicity - it creates its own event loop
+            # This works safely from any thread (main or worker)
+            return asyncio.run(
+                self.analyze(chart_base64, ticker, pattern, current_price, vwap, extra_context, require_confirmation)
+            )
         except Exception as e:
             logger.error(f"Sync analyze error: {e}")
             return PredatorAnalysis(
