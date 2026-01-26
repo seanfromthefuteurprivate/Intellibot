@@ -414,16 +414,60 @@ class AlpacaExecutor:
             "C" if option_type == "call" else "P"
         )
         
+        # CRITICAL: Get real quote - NEVER assume a price
         quote = self.get_option_quote(option_symbol)
-        option_price = float(quote.get("ap", 0)) or 2.0
+        if not quote:
+            logger.error(f"No quote available for {option_symbol} - ABORTING trade")
+            send_telegram_alert(f"❌ Trade aborted: No quote for {option_symbol}")
+            return None
+        
+        # Validate quote freshness (must be within 30 seconds)
+        quote_timestamp = quote.get("t", "")
+        if quote_timestamp:
+            try:
+                from dateutil import parser as date_parser
+                quote_time = date_parser.parse(quote_timestamp)
+                quote_age = (datetime.now(quote_time.tzinfo) - quote_time).total_seconds()
+                if quote_age > 60:  # More than 60 seconds old
+                    logger.warning(f"Quote for {option_symbol} is {quote_age:.0f}s old - may be stale")
+            except Exception as e:
+                logger.debug(f"Could not parse quote timestamp: {e}")
+        
+        # Use ask price (what we pay to buy)
+        option_price = float(quote.get("ap", 0))
+        if option_price <= 0:
+            logger.error(f"Invalid option price ${option_price} for {option_symbol} - ABORTING")
+            send_telegram_alert(f"❌ Trade aborted: Invalid price for {option_symbol}")
+            return None
+        
+        # Verify option exists and is tradeable
+        bid_price = float(quote.get("bp", 0))
+        if bid_price <= 0:
+            logger.error(f"No bid for {option_symbol} - option may be illiquid - ABORTING")
+            send_telegram_alert(f"❌ Trade aborted: No bid for {option_symbol} (illiquid)")
+            return None
+        
+        # Verify bid-ask spread is reasonable (< 20% of mid-price)
+        mid_price = (option_price + bid_price) / 2
+        spread_pct = (option_price - bid_price) / mid_price * 100
+        if spread_pct > 20:
+            logger.warning(f"Wide spread {spread_pct:.1f}% on {option_symbol} - may be illiquid")
         
         qty = self.calculate_position_size(option_price)
+        estimated_cost = qty * option_price * 100  # Total cost in dollars
+        
+        # HARD CAP: Double-check we're under $1K
+        if estimated_cost > self.MAX_POSITION_VALUE:
+            logger.error(f"Position size ${estimated_cost:.2f} exceeds ${self.MAX_POSITION_VALUE} - ABORTING")
+            return None
         
         # Skip if position size is 0 (too expensive)
         if qty == 0:
-            logger.warning(f"Skipping trade - option too expensive for $1K max")
-            send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} too expensive (>${self.MAX_POSITION_VALUE} per contract)")
+            logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive for ${self.MAX_POSITION_VALUE} max")
+            send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} too expensive")
             return None
+        
+        logger.info(f"POSITION SIZE CHECK: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (max ${self.MAX_POSITION_VALUE})")
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
@@ -605,19 +649,37 @@ Total P&L: ${self.total_pnl:+.2f}
                     position.status = PositionStatus.OPEN
                     position.entry_time = datetime.now()
                     position.entry_price = float(order.get("filled_avg_price", position.entry_price))
-                    position.target_price = position.entry_price * 1.20
-                    position.stop_loss = position.entry_price * 0.85
+                    
+                    # CRITICAL: Verify actual cost is within limits
+                    actual_cost = position.entry_price * position.qty * 100
+                    if actual_cost > self.MAX_POSITION_VALUE * 1.5:  # 50% tolerance = EMERGENCY CLOSE
+                        logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_POSITION_VALUE * 1.5}!")
+                        send_telegram_alert(f"🚨 EMERGENCY: Position ${actual_cost:.2f} > limit - AUTO-CLOSING!")
+                        # Immediately close the oversized position
+                        self.close_position(position.option_symbol)
+                        position.status = PositionStatus.CLOSED
+                        position.exit_reason = "OVERSIZED_POSITION_CLOSED"
+                        continue
+                    elif actual_cost > self.MAX_POSITION_VALUE * 1.1:  # 10% tolerance = WARNING
+                        logger.warning(f"WARNING: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_POSITION_VALUE} by >10%")
+                        send_telegram_alert(f"⚠️ WARNING: Position cost ${actual_cost:.2f} slightly over limit")
+                    
+                    position.target_price = position.entry_price * 1.20  # +20% target
+                    position.stop_loss = position.entry_price * 0.85     # -15% stop
                     
                     logger.info(f"Order filled: {position.option_symbol} @ ${position.entry_price:.2f}")
+                    logger.info(f"  Total Cost: ${actual_cost:.2f} | Target: ${position.target_price:.2f} | Stop: ${position.stop_loss:.2f}")
                     
                     message = f"""✅ **ORDER FILLED**
 
 **{position.trade_type}** {position.symbol}
 Filled: {position.qty}x @ ${position.entry_price:.2f}
-Total Cost: ${position.entry_price * position.qty * 100:.2f}
+Total Cost: ${actual_cost:.2f}
 
+**EXIT LEVELS (AUTOMATIC):**
 Target: ${position.target_price:.2f} (+20%)
 Stop: ${position.stop_loss:.2f} (-15%)
+Max Hold: 45 minutes
 """
                     send_telegram_alert(message)
                 
