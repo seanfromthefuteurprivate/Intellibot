@@ -121,6 +121,31 @@ Mechanical ruthless exit system with NO human override:
 - **No Exceptions:** Pure machine execution, no "let it run" or "maybe it recovers"
 - Monitors all active positions every 5 seconds for real-time exit alerts
 
+### Institutional Scalper Module (NEW)
+Battle-tested trading desk knowledge encoded into `wsb_snake/engines/institutional_scalper.py`:
+
+**Core Philosophy:** "Small gains compound, big losses destroy"
+
+**Prop Desk Rules Encoded:**
+1. **Citadel Rule:** "Speed + Edge = Alpha" - Execute fast on high-probability setups only
+2. **Jane Street Rule:** "Statistical edge > gut feeling" - Only trade when probability favors you
+3. **Bridgewater Rule:** "Radical transparency in risk" - Know max loss before entering
+4. **Market Maker Rule:** "Scalp with trend, fade extreme" - Follow momentum, take profits at resistance
+5. **Day Trader Rule:** "Take +5-10% wins, cut at -15%" - Small gains compound
+
+**Risk Parameters:**
+- Stop: 0.3% on underlying (~15-20% on option)
+- Target: 0.4% on underlying (~20-25% on option)
+- R:R: Minimum 1.3:1
+- Max hold: 30 minutes
+
+**Time-of-Day Multipliers:**
+- 9 AM: 1.0x (open volatility)
+- 10-11 AM: 1.0-1.2x (good flows)
+- 12-1 PM: 0.8-0.9x (lunch chop)
+- 2-3 PM: 1.1-1.3x (power hour buildup)
+- 3-4 PM: 1.3x (power hour - best volume)
+
 ### System Flow
 The orchestrator integrates these components, applying "Alt Data Boosts" and "Session Multipliers" to refine signal scores. Signals are tiered (A+, A, B, C) based on their score, determining the action (immediate alert, watchlist, or log). Alerts are sent via Telegram.
 
