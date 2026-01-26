@@ -2,53 +2,68 @@
   "insights": [
     {
       "category": "winner",
-      "lesson": "RKLB +23.2%: Patience through drawdown pays. Position was -4% before recovering to +23%. Don't panic sell on initial losses.",
-      "weight": 0.95,
-      "date_learned": "2026-01-26",
-      "trade_context": {
-        "ticker": "RKLB",
-        "entry_pnl": -4.0,
-        "exit_pnl": 23.2,
-        "pattern": "bearish_momentum",
-        "hold_time_minutes": 45,
-        "key_insight": "winners_run_after_initial_drawdown"
-      }
-    },
-    {
-      "category": "winner",
-      "lesson": "AAPL +4.1%: Quick profit taking at first target hit. Book 4-5% gains immediately - don't wait for 10%+. Small gains compound.",
-      "weight": 0.9,
+      "lesson": "AAPL +4.1%: ONLY WINNER TODAY. Quick profit taking at first target hit. Book 4-5% gains immediately - this is the ONLY strategy that worked.",
+      "weight": 0.98,
       "date_learned": "2026-01-26",
       "trade_context": {
         "ticker": "AAPL",
         "exit_pnl": 4.1,
+        "dollar_pnl": 35,
         "pattern": "institutional_momentum",
         "hold_time_minutes": 15,
-        "key_insight": "quick_profits_compound"
+        "key_insight": "quick_profits_only_winner"
       }
     },
     {
       "category": "loser",
-      "lesson": "QQQ -24.6%: 0DTE theta decay is BRUTAL. Wide stops on 0DTE = death. Need tighter stops (10-15%) on 0DTE specifically.",
-      "weight": 0.95,
+      "lesson": "LOSING DAY: Net -$82. Only 1 winner (AAPL +$35) vs 3 losers (QQQ -$62, SPY -$23, ONDS -$32). Win rate too low. Need HIGHER confidence threshold, not lower.",
+      "weight": 1.0,
+      "date_learned": "2026-01-26",
+      "trade_context": {
+        "net_pnl": -82,
+        "winners": 1,
+        "losers": 3,
+        "win_rate": 0.25,
+        "key_insight": "losing_day_win_rate_too_low"
+      }
+    },
+    {
+      "category": "loser",
+      "lesson": "QQQ -24.6% (-$62): 0DTE theta decay is BRUTAL. Wide stops on 0DTE = death. Need MUCH tighter stops (8-10%) or AVOID 0DTE entirely.",
+      "weight": 0.98,
       "date_learned": "2026-01-26",
       "trade_context": {
         "ticker": "QQQ",
         "exit_pnl": -24.6,
+        "dollar_pnl": -62,
         "pattern": "0dte_calls",
-        "key_insight": "0dte_needs_tight_stops"
+        "key_insight": "0dte_kills_avoid_it"
       }
     },
     {
       "category": "loser",
-      "lesson": "SPY -9%: Time decay exit (60 min rule) saved us from bigger loss. Mechanical exits work. Never override the machine.",
-      "weight": 0.85,
+      "lesson": "SPY -9% (-$23): Even with mechanical 60-min exit, still a loss. 0DTE options are too risky. AVOID 0DTE unless A+ setup.",
+      "weight": 0.9,
       "date_learned": "2026-01-26",
       "trade_context": {
         "ticker": "SPY",
         "exit_pnl": -9.0,
+        "dollar_pnl": -23,
         "exit_reason": "time_decay_60min",
-        "key_insight": "mechanical_exits_save_capital"
+        "key_insight": "0dte_even_with_stops_loses"
+      }
+    },
+    {
+      "category": "loser",
+      "lesson": "ONDS -4% (-$32): Closed at EOD for a loss. Swing trade forced exit. Don't enter swing positions late in day if EOD close mandatory.",
+      "weight": 0.85,
+      "date_learned": "2026-01-26",
+      "trade_context": {
+        "ticker": "ONDS",
+        "exit_pnl": -4.0,
+        "dollar_pnl": -32,
+        "exit_reason": "eod_mandatory_close",
+        "key_insight": "no_swings_near_eod"
       }
     },
     {
@@ -64,13 +79,13 @@
     },
     {
       "category": "execution",
-      "lesson": "Confidence threshold 65% too conservative. Lowered to 58%. More trades = more opportunities. Edge compounds over volume.",
-      "weight": 0.85,
+      "lesson": "WRONG: Lowering confidence to 58% LOST MONEY. 25% win rate is unacceptable. RAISE threshold to 70%+ for quality over quantity.",
+      "weight": 1.0,
       "date_learned": "2026-01-26",
       "trade_context": {
-        "old_threshold": 65,
-        "new_threshold": 58,
-        "key_insight": "more_trades_better"
+        "old_threshold": 58,
+        "new_threshold": 70,
+        "key_insight": "quality_over_quantity"
       }
     },
     {
@@ -96,13 +111,12 @@
     },
     {
       "category": "pattern",
-      "lesson": "Multi-day options (RKLB, ONDS) outperformed 0DTE (QQQ, SPY). Less theta decay = more room to be right. Prefer 2-4 DTE.",
-      "weight": 0.9,
+      "lesson": "0DTE KILLED US: QQQ -$62, SPY -$23. 0DTE theta decay destroyed positions. STRONGLY prefer 2-4 DTE or AVOID 0DTE entirely.",
+      "weight": 0.98,
       "date_learned": "2026-01-26",
       "trade_context": {
         "0dte_pnl": -85,
-        "multiday_pnl": 198,
-        "key_insight": "prefer_multiday_over_0dte"
+        "key_insight": "0dte_is_death_prefer_multiday"
       }
     },
     {
@@ -151,5 +165,5 @@
       }
     }
   ],
-  "last_updated": "2026-01-26T20:55:53.893096"
+  "last_updated": "2026-01-26T20:59:22.227487"
 }

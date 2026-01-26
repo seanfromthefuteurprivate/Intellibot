@@ -89,58 +89,74 @@ class SessionLearnings:
         
         self.add_insight(TradingInsight(
             category="winner",
-            lesson="RKLB +23.2%: Patience through drawdown pays. Position was -4% before recovering to +23%. Don't panic sell on initial losses.",
-            weight=0.95,
-            date_learned=today,
-            trade_context={
-                "ticker": "RKLB",
-                "entry_pnl": -4.0,
-                "exit_pnl": 23.2,
-                "pattern": "bearish_momentum",
-                "hold_time_minutes": 45,
-                "key_insight": "winners_run_after_initial_drawdown"
-            }
-        ))
-        
-        self.add_insight(TradingInsight(
-            category="winner",
-            lesson="AAPL +4.1%: Quick profit taking at first target hit. Book 4-5% gains immediately - don't wait for 10%+. Small gains compound.",
-            weight=0.90,
+            lesson="AAPL +4.1%: ONLY WINNER TODAY. Quick profit taking at first target hit. Book 4-5% gains immediately - this is the ONLY strategy that worked.",
+            weight=0.98,
             date_learned=today,
             trade_context={
                 "ticker": "AAPL",
                 "exit_pnl": 4.1,
+                "dollar_pnl": 35,
                 "pattern": "institutional_momentum",
                 "hold_time_minutes": 15,
-                "key_insight": "quick_profits_compound"
+                "key_insight": "quick_profits_only_winner"
             }
         ))
         
-        # ========== WHAT DIDN'T WORK ==========
+        # ========== WHAT DIDN'T WORK - LOSING DAY ==========
         
         self.add_insight(TradingInsight(
             category="loser",
-            lesson="QQQ -24.6%: 0DTE theta decay is BRUTAL. Wide stops on 0DTE = death. Need tighter stops (10-15%) on 0DTE specifically.",
-            weight=0.95,
+            lesson="LOSING DAY: Net -$82. Only 1 winner (AAPL +$35) vs 3 losers (QQQ -$62, SPY -$23, ONDS -$32). Win rate too low. Need HIGHER confidence threshold, not lower.",
+            weight=1.0,  # HIGHEST WEIGHT - critical lesson
+            date_learned=today,
+            trade_context={
+                "net_pnl": -82,
+                "winners": 1,
+                "losers": 3,
+                "win_rate": 0.25,
+                "key_insight": "losing_day_win_rate_too_low"
+            }
+        ))
+        
+        self.add_insight(TradingInsight(
+            category="loser",
+            lesson="QQQ -24.6% (-$62): 0DTE theta decay is BRUTAL. Wide stops on 0DTE = death. Need MUCH tighter stops (8-10%) or AVOID 0DTE entirely.",
+            weight=0.98,
             date_learned=today,
             trade_context={
                 "ticker": "QQQ",
                 "exit_pnl": -24.6,
+                "dollar_pnl": -62,
                 "pattern": "0dte_calls",
-                "key_insight": "0dte_needs_tight_stops"
+                "key_insight": "0dte_kills_avoid_it"
             }
         ))
         
         self.add_insight(TradingInsight(
             category="loser",
-            lesson="SPY -9%: Time decay exit (60 min rule) saved us from bigger loss. Mechanical exits work. Never override the machine.",
-            weight=0.85,
+            lesson="SPY -9% (-$23): Even with mechanical 60-min exit, still a loss. 0DTE options are too risky. AVOID 0DTE unless A+ setup.",
+            weight=0.90,
             date_learned=today,
             trade_context={
                 "ticker": "SPY",
                 "exit_pnl": -9.0,
+                "dollar_pnl": -23,
                 "exit_reason": "time_decay_60min",
-                "key_insight": "mechanical_exits_save_capital"
+                "key_insight": "0dte_even_with_stops_loses"
+            }
+        ))
+        
+        self.add_insight(TradingInsight(
+            category="loser",
+            lesson="ONDS -4% (-$32): Closed at EOD for a loss. Swing trade forced exit. Don't enter swing positions late in day if EOD close mandatory.",
+            weight=0.85,
+            date_learned=today,
+            trade_context={
+                "ticker": "ONDS",
+                "exit_pnl": -4.0,
+                "dollar_pnl": -32,
+                "exit_reason": "eod_mandatory_close",
+                "key_insight": "no_swings_near_eod"
             }
         ))
         
@@ -160,13 +176,13 @@ class SessionLearnings:
         
         self.add_insight(TradingInsight(
             category="execution",
-            lesson="Confidence threshold 65% too conservative. Lowered to 58%. More trades = more opportunities. Edge compounds over volume.",
-            weight=0.85,
+            lesson="WRONG: Lowering confidence to 58% LOST MONEY. 25% win rate is unacceptable. RAISE threshold to 70%+ for quality over quantity.",
+            weight=1.0,  # Critical correction
             date_learned=today,
             trade_context={
-                "old_threshold": 65,
-                "new_threshold": 58,
-                "key_insight": "more_trades_better"
+                "old_threshold": 58,
+                "new_threshold": 70,
+                "key_insight": "quality_over_quantity"
             }
         ))
         
@@ -199,13 +215,12 @@ class SessionLearnings:
         
         self.add_insight(TradingInsight(
             category="pattern",
-            lesson="Multi-day options (RKLB, ONDS) outperformed 0DTE (QQQ, SPY). Less theta decay = more room to be right. Prefer 2-4 DTE.",
-            weight=0.90,
+            lesson="0DTE KILLED US: QQQ -$62, SPY -$23. 0DTE theta decay destroyed positions. STRONGLY prefer 2-4 DTE or AVOID 0DTE entirely.",
+            weight=0.98,
             date_learned=today,
             trade_context={
                 "0dte_pnl": -85,
-                "multiday_pnl": 198,
-                "key_insight": "prefer_multiday_over_0dte"
+                "key_insight": "0dte_is_death_prefer_multiday"
             }
         ))
         
@@ -395,28 +410,31 @@ class TomorrowsBattlePlan:
     Encoded strategy for tomorrow based on today's learnings.
     """
     
+    # CORRECTED AFTER LOSING DAY (-$82, 25% win rate)
     RULES = {
         "entry": {
-            "confidence_threshold": 58,  # Lowered from 65
-            "prefer_multiday": True,  # 2-4 DTE over 0DTE
-            "power_hour_multiplier": 1.3,  # Increase size during power hour
+            "confidence_threshold": 70,  # RAISED from 58 - quality over quantity
+            "prefer_multiday": True,  # 2-4 DTE MANDATORY - 0DTE killed us
+            "avoid_0dte": True,  # 0DTE lost -$85 today
+            "power_hour_multiplier": 1.2,  # Reduced from 1.3
             "require_ai_confirmation": True,
             "execute_on_alert": True,  # FIXED: alerts trigger execution
+            "fewer_trades_higher_quality": True,  # Only A+ setups
         },
         "position_sizing": {
             "daily_limit": 1000,
-            "max_positions": 3,
-            "min_position": 200,  # At least $200 per trade
-            "diversify": True,  # Split capital across trades
+            "max_positions": 2,  # Reduced from 3 - focus on quality
+            "min_position": 300,  # Increased - bigger bets on fewer trades
+            "diversify": False,  # Focus on 1-2 high conviction plays
         },
         "stops": {
-            "0dte_stop": 0.12,  # 12% stop for 0DTE
-            "multiday_stop": 0.18,  # 18% stop for 2-4 DTE
-            "time_stop_minutes": 45,  # 45 min max hold for 0DTE
+            "0dte_stop": 0.08,  # TIGHTER 8% stop for 0DTE (if we must trade it)
+            "multiday_stop": 0.15,  # Tighter 15% stop for 2-4 DTE
+            "time_stop_minutes": 30,  # Reduced from 45 - get out faster
         },
         "targets": {
-            "0dte_target": 0.08,  # 8% quick profit for 0DTE
-            "multiday_target": 0.15,  # 15% for multi-day
+            "0dte_target": 0.05,  # LOWER 5% target - book profits FAST
+            "multiday_target": 0.10,  # Lower 10% - don't get greedy
             "scale_out": False,  # For now, all-or-nothing exits
         },
         "timing": {
@@ -424,13 +442,15 @@ class TomorrowsBattlePlan:
             "eod_close_time": "15:55",  # All 0DTE close by 3:55 PM
             "avoid_lunch": True,  # 12-1 PM is choppy
             "avoid_first_5_min": True,  # Opening chaos
+            "no_new_positions_after_3pm": True,  # Don't enter late
         },
         "mindset": {
             "trust_the_system": True,
             "no_emotional_overrides": True,
-            "small_gains_compound": True,
-            "patience_through_drawdown": True,  # RKLB lesson
+            "small_gains_compound": True,  # AAPL +4% was only winner
+            "quality_over_quantity": True,  # NEW: fewer, better trades
             "mechanical_discipline": True,
+            "accept_losing_days": True,  # Learn and improve
         }
     }
     
@@ -441,42 +461,46 @@ class TomorrowsBattlePlan:
     
     @classmethod
     def format_battle_plan(cls) -> str:
-        """Format the battle plan for tomorrow."""
+        """Format the battle plan for tomorrow - CORRECTED AFTER LOSING DAY."""
         return f"""
-🎯 TOMORROW'S BATTLE PLAN
+🎯 TOMORROW'S BATTLE PLAN (CORRECTED)
+{'=' * 50}
+⚠️  LEARNED FROM LOSING DAY: -$82 (25% win rate)
 {'=' * 50}
 
-📈 ENTRY RULES:
-  • Confidence threshold: {cls.RULES['entry']['confidence_threshold']}%
-  • Prefer 2-4 DTE over 0DTE
-  • Power hour: 1.3x position size
-  • Execute immediately on alert
+📈 ENTRY RULES (STRICTER):
+  • Confidence threshold: {cls.RULES['entry']['confidence_threshold']}% (RAISED from 58%)
+  • AVOID 0DTE - it killed us today (-$85)
+  • Only 2-4 DTE multi-day options
+  • Power hour: 1.2x position size
+  • QUALITY over quantity - fewer, better trades
 
-💰 POSITION SIZING:
+💰 POSITION SIZING (FOCUSED):
   • Daily limit: ${cls.RULES['position_sizing']['daily_limit']}
-  • Split into 2-3 positions
-  • Minimum $200 per trade
+  • MAX 2 positions (not 3) - focus on quality
+  • Minimum $300 per trade (bigger conviction bets)
 
-🛑 STOPS:
-  • 0DTE: {cls.RULES['stops']['0dte_stop']*100:.0f}% stop
+🛑 STOPS (TIGHTER):
+  • 0DTE: {cls.RULES['stops']['0dte_stop']*100:.0f}% stop (if we must trade it)
   • Multi-day: {cls.RULES['stops']['multiday_stop']*100:.0f}% stop
-  • 45-min time stop on 0DTE
+  • 30-min time stop (reduced from 45)
 
-🎯 TARGETS:
+🎯 TARGETS (LOWER - BOOK PROFITS FAST):
   • 0DTE: {cls.RULES['targets']['0dte_target']*100:.0f}% quick profit
-  • Multi-day: {cls.RULES['targets']['multiday_target']*100:.0f}% let run
+  • Multi-day: {cls.RULES['targets']['multiday_target']*100:.0f}% target
+  • AAPL +4% was our ONLY winner - small gains work!
 
-⏰ TIMING:
-  • Power hour (3-4 PM) is prime time
+⏰ TIMING (CONSERVATIVE):
+  • Power hour (3-4 PM) still prime time
   • All 0DTE close by 3:55 PM
+  • NO new positions after 3 PM
   • Avoid lunch hour chop
 
-🧠 MINDSET:
-  • Trust the system
-  • No emotional overrides
-  • Small gains compound
-  • Patience through drawdowns
-  • Mechanical discipline
+🧠 MINDSET (HUMBLE):
+  • Accept losing days - learn and improve
+  • Quality over quantity
+  • Small gains compound - AAPL proved it
+  • Mechanical discipline - no revenge trading
 
 {'=' * 50}
 """

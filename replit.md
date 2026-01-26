@@ -146,25 +146,31 @@ Battle-tested trading desk knowledge encoded into `wsb_snake/engines/institution
 - 2-3 PM: 1.1-1.3x (power hour buildup)
 - 3-4 PM: 1.3x (power hour - best volume)
 
-### Session Learnings Module (NEW)
+### Session Learnings Module (CORRECTED)
 Battle-tested wisdom from live trading sessions encoded in `wsb_snake/learning/session_learnings.py`:
 
-**Key Learnings Encoded:**
-1. **RKLB +23.2%:** Patience through drawdown pays. Position was -4% before recovering.
-2. **AAPL +4.1%:** Quick profit taking at first target. Small gains compound.
-3. **QQQ -24.6%:** 0DTE theta decay is brutal. Need 12% stops on 0DTE.
-4. **Signal-Execution Connection:** Alerts MUST trigger immediate execution.
-5. **Power Hour Prime:** 3-4 PM ET is optimal time (1.3x multiplier).
-6. **Prefer Multi-day:** 2-4 DTE outperforms 0DTE (less theta decay).
+**Jan 26, 2026 - LOSING DAY: Net -$82 (25% win rate)**
+- AAPL: +$35 (+4.1%) - ONLY WINNER
+- QQQ: -$62 (-24.6%) - 0DTE theta killed us
+- SPY: -$23 (-9%) - 0DTE loss
+- ONDS: -$32 (-4%) - EOD forced close
 
-**Tomorrow's Battle Plan:**
-- Confidence threshold: 58%
-- Daily limit: $1,000 split into 2-3 trades
-- 0DTE stops: 12% (tight due to theta)
-- Multi-day stops: 18%
-- 0DTE targets: 8% (quick in/out)
-- Multi-day targets: 15% (let winners run)
-- Power hour: Increase position size
+**Critical Learnings:**
+1. **AAPL +4.1%:** Quick profit taking was the ONLY thing that worked today.
+2. **0DTE is DEATH:** QQQ -$62, SPY -$23. Avoid 0DTE or use 8% stops.
+3. **Quality > Quantity:** 25% win rate is unacceptable. Raise thresholds.
+4. **Signal-Execution Fixed:** Alerts now trigger immediate execution.
+5. **Book Profits FAST:** Small gains compound. Don't wait for 10%+.
+
+**Tomorrow's Battle Plan (CORRECTED):**
+- Confidence threshold: 70% (RAISED from 58%)
+- Daily limit: $1,000 split into MAX 2 trades
+- AVOID 0DTE - prefer 2-4 DTE
+- 0DTE stops: 8% (much tighter)
+- Multi-day stops: 15%
+- 0DTE targets: 5% (book fast)
+- Multi-day targets: 10%
+- No new positions after 3 PM
 - EOD close: 3:55 PM ET (mandatory)
 
 ### System Flow
