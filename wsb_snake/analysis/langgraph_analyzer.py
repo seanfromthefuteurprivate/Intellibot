@@ -1,8 +1,10 @@
 """
-LangGraph AI Chart Analyzer - Uses GPT-4o vision to analyze candlestick charts
-and provide pattern recognition, trend analysis, and trade recommendations.
+LangGraph AI Chart Analyzer - Uses GPT-4o vision (primary) or Gemini (fallback)
+to analyze candlestick charts with pattern recognition and trade recommendations.
 """
 import asyncio
+import os
+import httpx
 from typing import Dict, Any, List, Optional, TypedDict, Annotated
 from datetime import datetime
 import operator
@@ -15,6 +17,8 @@ from wsb_snake.config import OPENAI_API_KEY
 from wsb_snake.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 
 class ChartAnalysisState(TypedDict):
@@ -95,7 +99,8 @@ class LangGraphChartAnalyzer:
         return workflow.compile()
     
     async def _call_vision(self, image_base64: str, prompt: str) -> str:
-        """Call GPT-4o vision with the chart image."""
+        """Call GPT-4o vision with Gemini fallback."""
+        # Try OpenAI first
         try:
             message = HumanMessage(
                 content=[
@@ -118,8 +123,51 @@ class LangGraphChartAnalyzer:
             return response.content
             
         except Exception as e:
-            logger.error(f"Vision API error: {e}")
-            return f"Analysis unavailable: {e}"
+            logger.warning(f"OpenAI Vision failed, trying Gemini fallback: {e}")
+            return await self._call_gemini_fallback(image_base64, prompt)
+    
+    async def _call_gemini_fallback(self, image_base64: str, prompt: str) -> str:
+        """Fallback to Gemini 2.0 Flash when OpenAI fails."""
+        if not GEMINI_API_KEY:
+            logger.error("Gemini API key not available for fallback")
+            return "Analysis unavailable: No AI API available"
+        
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": f"{CHART_ANALYST_PROMPT}\n\n{prompt}"},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/png",
+                                "data": image_base64
+                            }
+                        }
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 1000
+                }
+            }
+            
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                
+                if "candidates" in result and result["candidates"]:
+                    text = result["candidates"][0]["content"]["parts"][0]["text"]
+                    logger.info("Gemini fallback successful")
+                    return text
+                    
+            return "Analysis unavailable: Gemini returned no content"
+            
+        except Exception as e:
+            logger.error(f"Gemini fallback also failed: {e}")
+            return f"Analysis unavailable: Both OpenAI and Gemini failed"
     
     async def _analyze_patterns(self, state: ChartAnalysisState) -> Dict:
         """Node 1: Identify chart patterns."""

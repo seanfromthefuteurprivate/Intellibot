@@ -84,9 +84,10 @@ class SPYScalper:
     
     # ========== APEX PREDATOR CONFIGURATION ==========
     # These thresholds ensure we only strike on the highest quality setups
+    # Balanced for real market conditions - not too loose, not too tight
     PREDATOR_MODE = True  # Enable apex predator behavior
-    MIN_CONFIDENCE_FOR_AI = 65  # Minimum to even bother with AI confirmation
-    MIN_CONFIDENCE_FOR_ALERT = 75  # Minimum final confidence to trigger entry
+    MIN_CONFIDENCE_FOR_AI = 55  # Minimum to bother with AI confirmation
+    MIN_CONFIDENCE_FOR_ALERT = 65  # Minimum final confidence to trigger entry (was 75, too strict)
     REQUIRE_AI_CONFIRMATION = True  # Must have AI blessing to strike
     REQUIRE_PREDATOR_STRIKE = True  # Must have Predator Stack STRIKE verdict
     # =================================================
