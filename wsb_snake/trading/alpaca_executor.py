@@ -386,6 +386,52 @@ class AlpacaExecutor:
         trade_type = "CALLS" if direction == "long" else "PUTS"
         option_type = "call" if direction == "long" else "put"
         
+        # CRITICAL VALIDATION: Reject trades with invalid parameters
+        if stop_loss <= 0:
+            logger.error(f"INVALID STOP LOSS ${stop_loss:.2f} - ABORTING (must be positive)")
+            send_telegram_alert(f"❌ Trade REJECTED: Invalid stop loss ${stop_loss:.2f} for {underlying}")
+            return None
+        
+        if target_price <= 0:
+            logger.error(f"INVALID TARGET ${target_price:.2f} - ABORTING (must be positive)")
+            send_telegram_alert(f"❌ Trade REJECTED: Invalid target ${target_price:.2f} for {underlying}")
+            return None
+        
+        if entry_price <= 0:
+            logger.error(f"INVALID ENTRY ${entry_price:.2f} - ABORTING (must be positive)")
+            return None
+        
+        # Validate direction matches stop/target relationship
+        if direction == "long":
+            if stop_loss >= entry_price:
+                logger.error(f"INVALID LONG SETUP: Stop ${stop_loss:.2f} >= Entry ${entry_price:.2f}")
+                send_telegram_alert(f"❌ Trade REJECTED: Bad stop for LONG {underlying}")
+                return None
+            if target_price <= entry_price:
+                logger.error(f"INVALID LONG SETUP: Target ${target_price:.2f} <= Entry ${entry_price:.2f}")
+                send_telegram_alert(f"❌ Trade REJECTED: Bad target for LONG {underlying}")
+                return None
+        else:  # short
+            if stop_loss <= entry_price:
+                logger.error(f"INVALID SHORT SETUP: Stop ${stop_loss:.2f} <= Entry ${entry_price:.2f}")
+                send_telegram_alert(f"❌ Trade REJECTED: Bad stop for SHORT {underlying}")
+                return None
+            if target_price >= entry_price:
+                logger.error(f"INVALID SHORT SETUP: Target ${target_price:.2f} >= Entry ${entry_price:.2f}")
+                send_telegram_alert(f"❌ Trade REJECTED: Bad target for SHORT {underlying}")
+                return None
+        
+        # Validate R:R ratio is reasonable (at least 1:1)
+        risk = abs(entry_price - stop_loss)
+        reward = abs(target_price - entry_price)
+        rr_ratio = reward / risk if risk > 0 else 0
+        if rr_ratio < 0.5:
+            logger.error(f"BAD R:R RATIO {rr_ratio:.2f} - Risk ${risk:.2f} vs Reward ${reward:.2f}")
+            send_telegram_alert(f"❌ Trade REJECTED: Bad R:R {rr_ratio:.2f} for {underlying}")
+            return None
+        
+        logger.info(f"Validated trade: {underlying} {direction} Entry=${entry_price:.2f} Target=${target_price:.2f} Stop=${stop_loss:.2f} R:R={rr_ratio:.2f}")
+        
         # ETFs with daily 0DTE options - import from config or use default
         from wsb_snake.config import DAILY_0DTE_TICKERS
         daily_0dte_tickers = DAILY_0DTE_TICKERS
