@@ -35,6 +35,7 @@ from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
 from wsb_snake.trading.alpaca_executor import alpaca_executor
+from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 log = get_logger(__name__)
 
@@ -226,11 +227,17 @@ class SPYScalper:
     def _scan_loop(self):
         """Main scanning loop - runs every 30 seconds during market hours."""
         log.info("SPY Scalper scan loop started")
+        log.info(f"Monitoring {len(ZERO_DTE_UNIVERSE)} tickers: {', '.join(ZERO_DTE_UNIVERSE)}")
         
         while self.running:
             try:
                 if is_market_open():
-                    self._run_scan()
+                    # Scan ALL tickers in universe, not just SPY
+                    for ticker in ZERO_DTE_UNIVERSE:
+                        try:
+                            self._run_scan_for_ticker(ticker)
+                        except Exception as te:
+                            log.debug(f"Error scanning {ticker}: {te}")
                 else:
                     # During off-hours, check less frequently
                     time.sleep(60)
@@ -239,24 +246,29 @@ class SPYScalper:
                 time.sleep(self.scan_interval)
                 
             except Exception as e:
-                log.error(f"SPY Scalper scan error: {e}")
+                log.error(f"Scalper scan error: {e}")
                 time.sleep(10)
         
-        log.info("SPY Scalper scan loop ended")
+        log.info("Scalper scan loop ended")
     
     def _run_scan(self):
-        """Execute a single scan for scalping opportunities."""
-        # Check cooldown
-        if self.cooldown_until and datetime.utcnow() < self.cooldown_until:
+        """Execute a single scan for SPY (legacy method for compatibility)."""
+        self._run_scan_for_ticker(self.symbol)
+    
+    def _run_scan_for_ticker(self, ticker: str):
+        """Execute a single scan for scalping opportunities on a specific ticker."""
+        # Check cooldown per ticker
+        cooldown_key = f"cooldown_{ticker}"
+        ticker_cooldown = getattr(self, cooldown_key, None)
+        if ticker_cooldown and datetime.utcnow() < ticker_cooldown:
             return
         
         # Get comprehensive scalp data packet (includes 5s, 15s, 1m, 5m bars + order flow)
-        data_packet = self.scalp_data.get_scalp_data(self.symbol)
-        self.last_data_packet = data_packet
+        data_packet = self.scalp_data.get_scalp_data(ticker)
         
         # Use 1-minute bars for pattern detection (most reliable)
         bars = data_packet.bars_1m if data_packet.is_valid else polygon_enhanced.get_intraday_bars(
-            self.symbol, 
+            ticker, 
             timespan="minute", 
             multiplier=1, 
             limit=60
@@ -265,14 +277,13 @@ class SPYScalper:
         if not bars or len(bars) < 20:
             return
         
-        self.price_cache = bars
-        self.last_price = data_packet.current_price if data_packet.current_price > 0 else bars[-1].get('c', 0)
+        current_price = data_packet.current_price if data_packet.current_price > 0 else bars[-1].get('c', 0)
         
         # Calculate VWAP
-        self.last_vwap = self._calculate_vwap(bars)
+        vwap = self._calculate_vwap(bars)
         
-        # Detect patterns
-        setups = self._detect_patterns(bars)
+        # Detect patterns for this ticker
+        setups = self._detect_patterns_for_ticker(bars, ticker, current_price, vwap)
         
         if not setups:
             return
@@ -289,14 +300,16 @@ class SPYScalper:
         # ========== APEX PREDATOR DECISION LOGIC ==========
         # Only proceed if base confidence is high enough
         if final_confidence < self.MIN_CONFIDENCE_FOR_AI:
-            log.debug(f"Prey too weak ({final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_AI}%) - passing")
+            log.debug(f"{ticker} prey too weak ({final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_AI}%) - passing")
             return
         
+        log.info(f"🔍 {ticker} detected {best_setup.pattern.value} @ {final_confidence:.0f}% - getting AI confirmation...")
+        
         # Get AI confirmation (required in predator mode)
-        best_setup = self._get_ai_confirmation(best_setup)
+        best_setup = self._get_ai_confirmation(best_setup, ticker)
         
         # Predator mode requirements:
-        # 1. Final confidence >= 75%
+        # 1. Final confidence >= 65%
         # 2. AI must confirm (if REQUIRE_AI_CONFIRMATION is True)
         # 3. Predator Stack must give STRIKE verdict (checked in _get_ai_confirmation)
         
@@ -306,9 +319,10 @@ class SPYScalper:
         should_alert = ai_passed and confidence_passed
         
         if should_alert:
-            log.info(f"🎯 APEX PREDATOR STRIKE: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence")
-            self._send_entry_alert(best_setup)
-            self.cooldown_until = datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes)
+            log.info(f"🎯 APEX PREDATOR STRIKE on {ticker}: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence")
+            self._send_entry_alert(best_setup, ticker)
+            # Set per-ticker cooldown
+            setattr(self, f"cooldown_{ticker}", datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes))
             self.signals_today += 1
         else:
             reason = []
@@ -316,7 +330,7 @@ class SPYScalper:
                 reason.append(f"confidence {final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_ALERT}%")
             if not ai_passed:
                 reason.append("AI not confirmed")
-            log.debug(f"Predator passed on {best_setup.pattern.value}: {', '.join(reason)}")
+            log.info(f"❌ {ticker} passed on {best_setup.pattern.value}: {', '.join(reason)}")
     
     def _calculate_vwap(self, bars: List[Dict]) -> float:
         """Calculate VWAP from bars."""
@@ -330,6 +344,25 @@ class SPYScalper:
             total_vol += volume
         
         return total_pv / total_vol if total_vol > 0 else 0
+    
+    def _detect_patterns_for_ticker(self, bars: List[Dict], ticker: str, current_price: float, vwap: float) -> List[ScalpSetup]:
+        """Detect patterns for a specific ticker."""
+        # Temporarily set context for pattern detection
+        old_vwap = self.last_vwap
+        old_price = self.last_price
+        old_cache = self.price_cache
+        
+        self.last_vwap = vwap
+        self.last_price = current_price
+        self.price_cache = bars
+        
+        try:
+            return self._detect_patterns(bars)
+        finally:
+            # Restore context
+            self.last_vwap = old_vwap
+            self.last_price = old_price
+            self.price_cache = old_cache
     
     def _detect_patterns(self, bars: List[Dict]) -> List[ScalpSetup]:
         """Detect all scalping patterns in current price action."""
@@ -646,7 +679,7 @@ class SPYScalper:
         
         return setup
     
-    def _get_ai_confirmation(self, setup: ScalpSetup) -> ScalpSetup:
+    def _get_ai_confirmation(self, setup: ScalpSetup, ticker: str = "SPY") -> ScalpSetup:
         """Get AI confirmation via multi-model Predator Stack (Gemini + DeepSeek + GPT)."""
         try:
             # Use faster 5s/15s bars if available for more granular charts
@@ -659,7 +692,7 @@ class SPYScalper:
             
             # Generate surgical precision predator chart with VWAP bands, delta, volume profile
             chart_base64 = self.scalp_chart_generator.generate_predator_chart(
-                ticker=self.symbol,
+                ticker=ticker,
                 ohlcv_data=chart_data,
                 timeframe="15s" if using_fast_bars else "1min"
             )
@@ -667,7 +700,7 @@ class SPYScalper:
             if not chart_base64:
                 # Fallback to basic chart
                 chart_base64 = self.chart_generator.generate_chart(
-                    ticker=self.symbol,
+                    ticker=ticker,
                     ohlcv_data=self.price_cache,
                     timeframe="1min"
                 )
@@ -805,7 +838,7 @@ class SPYScalper:
         
         return setup
     
-    def _send_entry_alert(self, setup: ScalpSetup):
+    def _send_entry_alert(self, setup: ScalpSetup, ticker: str = "SPY"):
         """Send entry alert to Telegram and add to stalking mode."""
         trade_type = "CALLS" if setup.direction == "long" else "PUTS"
         
@@ -814,14 +847,14 @@ class SPYScalper:
         reward = abs(setup.target_price - setup.entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
-        # Expected option move (simplified: 3x leverage on SPY)
+        # Expected option move (simplified: 3x leverage)
         underlying_move_pct = reward / setup.entry_price * 100
         expected_option_gain = underlying_move_pct * 3  # Rough 0DTE delta
         
         # Format alert
         alert_msg = f"""
 {'='*40}
-🦅 SPY 0DTE SCALP ALERT 🦅
+🦅 {ticker} 0DTE SCALP ALERT 🦅
 {'='*40}
 
 📊 Pattern: {setup.pattern.value.upper()}
@@ -850,11 +883,11 @@ class SPYScalper:
 """
         
         send_telegram_alert(alert_msg)
-        log.info(f"🦅 SPY Scalp alert: {setup.pattern.value} {setup.direction} @ ${setup.entry_price:.2f}")
+        log.info(f"🦅 {ticker} Scalp alert: {setup.pattern.value} {setup.direction} @ ${setup.entry_price:.2f}")
         
         # Add to stalking mode for exit tracking
         stalk_setup_id = stalking_mode.add_setup(
-            symbol=self.symbol,
+            symbol=ticker,
             setup_type=f"0DTE_{setup.pattern.value}",
             trigger_price=setup.entry_price,
             trigger_condition=f"Scalp {setup.direction}",
@@ -875,10 +908,10 @@ class SPYScalper:
             log.info(f"Stalking mode tracking exit for {stalk_setup_id}")
         
         # Add to Zero Greed Exit for mechanical ruthless exit tracking
-        position_id = f"spy_scalp_{datetime.utcnow().strftime('%H%M%S')}"
+        position_id = f"{ticker.lower()}_scalp_{datetime.utcnow().strftime('%H%M%S')}"
         zero_greed_exit.add_position(
             position_id=position_id,
-            ticker=self.symbol,
+            ticker=ticker,
             direction=setup.direction,
             trade_type=trade_type,
             entry_price=setup.entry_price,
