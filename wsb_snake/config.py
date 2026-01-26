@@ -32,7 +32,9 @@ BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 
 # 0DTE Universe - Tickers to monitor for options activity
 ZERO_DTE_UNIVERSE = [
-    "SPY", "QQQ", "IWM",  # ETFs
+    "SPY", "QQQ", "IWM",  # Index ETFs with daily 0DTE
+    "SLV", "GLD", "GDX", "GDXJ",  # Metals ETFs - high volatility plays
+    "USO", "XLE",  # Energy ETFs
     "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT",  # Mega caps
     "THH",  # Reddit watchlist - potential breakout
     # WSB core holdings (space/AI/autonomous)
@@ -40,6 +42,9 @@ ZERO_DTE_UNIVERSE = [
     # WSB YOLO plays
     "POET", "ENPH", "USAR", "PYPL"
 ]
+
+# ETFs with daily 0DTE options (not just Friday weeklies)
+DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM", "SLV", "GLD", "USO", "XLE"]
 
 # Session time windows (Eastern Time)
 SESSION_WINDOWS = {

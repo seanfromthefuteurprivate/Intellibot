@@ -159,9 +159,27 @@ class AlpacaExecutor:
         - Stocks $25-$100: $2.50 strikes
         - Stocks < $25: $1 strikes
         """
-        # ETFs with $1 strikes
+        # Index ETFs with $1 strikes
         if underlying in ["SPY", "QQQ", "IWM"]:
             return 1.0
+        
+        # Metals/Commodity ETFs - varies by price
+        if underlying == "SLV":
+            # SLV now ~$100, uses $1 strikes at high prices
+            return 0.50 if price < 50 else 1.0
+        if underlying == "GLD":
+            # GLD now ~$466, uses $5 strikes at very high prices
+            if price > 300:
+                return 5.0
+            elif price > 150:
+                return 2.0
+            return 1.0
+        if underlying in ["GDX", "GDXJ"]:
+            # Miners at higher prices now, $1 strikes
+            return 0.50 if price < 30 else 1.0
+        if underlying in ["USO", "XLE"]:
+            # Energy ETFs
+            return 0.50 if price < 30 else 1.0
         
         # High-priced stocks with $5 strikes
         if underlying in ["TSLA", "NVDA", "META", "GOOGL", "AMZN", "MSFT"]:
@@ -368,8 +386,9 @@ class AlpacaExecutor:
         trade_type = "CALLS" if direction == "long" else "PUTS"
         option_type = "call" if direction == "long" else "put"
         
-        # ETFs have daily 0DTE options, individual stocks have weekly Friday options
-        daily_0dte_tickers = ["SPY", "QQQ", "IWM"]
+        # ETFs with daily 0DTE options - import from config or use default
+        from wsb_snake.config import DAILY_0DTE_TICKERS
+        daily_0dte_tickers = DAILY_0DTE_TICKERS
         
         # Use Eastern Time for market hours (server may be UTC)
         import pytz
