@@ -33,7 +33,8 @@ BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 # 0DTE Universe - Tickers to monitor for options activity
 ZERO_DTE_UNIVERSE = [
     "SPY", "QQQ", "IWM",  # ETFs
-    "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT"  # Mega caps
+    "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT",  # Mega caps
+    "THH"  # Reddit watchlist - potential breakout
 ]
 
 # Session time windows (Eastern Time)
