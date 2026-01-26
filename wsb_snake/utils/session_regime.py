@@ -161,15 +161,17 @@ def should_scan_for_signals() -> bool:
     """
     Determine if we should actively scan for signals.
     
-    Returns False during lunch chop and closed hours.
+    Returns False only when market is closed.
+    Lunch hour is included - opportunities exist, just need higher confidence.
     """
     session = get_session_type()
     
-    # Don't scan during lunch (too choppy) or when closed
-    if session in [SessionType.LUNCH, SessionType.CLOSED, SessionType.AFTERHOURS]:
+    # Only skip when market is completely closed
+    if session in [SessionType.CLOSED, SessionType.AFTERHOURS, SessionType.PREMARKET]:
         return False
     
-    # For 0DTE, we especially want power hour
+    # Scan during ALL market hours including lunch
+    # Lunch may be choppy but real setups still happen
     return True
 
 
