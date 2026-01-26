@@ -57,6 +57,7 @@ class AlpacaPosition:
     pnl_pct: float = 0.0
     alpaca_order_id: Optional[str] = None
     exit_order_id: Optional[str] = None
+    exit_reason: Optional[str] = None
 
 
 class AlpacaExecutor:
@@ -238,7 +239,7 @@ class AlpacaExecutor:
     def calculate_position_size(
         self,
         option_price: float,
-        max_value: float = None
+        max_value: Optional[float] = None
     ) -> int:
         """
         Calculate number of contracts to buy with max $1,000.
@@ -270,7 +271,7 @@ class AlpacaExecutor:
         side: str,  # 'buy' or 'sell'
         qty: int,
         order_type: str = "market",
-        limit_price: float = None
+        limit_price: Optional[float] = None
     ) -> Optional[Dict]:
         """
         Place an option order on Alpaca paper trading.
@@ -750,13 +751,14 @@ Max Hold: 45 minutes
                 
                 elif order.get("status") in ["cancelled", "expired", "rejected"]:
                     position.status = PositionStatus.CANCELLED
-                    logger.warning(f"Order {order.get('status')}: {position.option_symbol}")
+                    order_status = order.get('status', 'unknown')
+                    logger.warning(f"Order {order_status}: {position.option_symbol}")
                     
-                    send_telegram_alert(f"""⚠️ **ORDER {order.get('status').upper()}**
+                    send_telegram_alert(f"""⚠️ **ORDER {order_status.upper()}**
                     
 {position.trade_type} {position.symbol}
 Symbol: {position.option_symbol}
-Reason: Order was {order.get('status')}
+Reason: Order was {order_status}
 """)
     
     def _check_exits(self):

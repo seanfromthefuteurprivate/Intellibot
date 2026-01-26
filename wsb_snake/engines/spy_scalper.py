@@ -516,72 +516,92 @@ class SPYScalper:
             ))
         
         # 6. Breakout - price makes new high of last 30 bars
-        highs_30 = [b.get('h', 0) for b in bars[-30:-1]]
+        # BUGFIX: Filter out zero/invalid values before taking max
+        highs_30 = [b.get('h', 0) for b in bars[-30:-1] if b.get('h', 0) > 0]
         if highs_30 and price > max(highs_30) and volume_ratio > 1.3:
-            setups.append(ScalpSetup(
-                pattern=ScalpPattern.BREAKOUT,
-                direction="long",
-                entry_price=price,
-                target_price=price + (atr * 2.5),
-                stop_loss=max(highs_30) - (atr * 0.3),
-                confidence=72 + (volume_ratio * 4),
-                vwap=vwap,
-                volume_ratio=volume_ratio,
-                momentum=momentum,
-                notes="30-bar high breakout"
-            ))
-        
-        # 7. Breakdown
-        lows_30 = [b.get('l', 0) for b in bars[-30:-1]]
-        if lows_30 and price < min(lows_30) and volume_ratio > 1.3:
-            setups.append(ScalpSetup(
-                pattern=ScalpPattern.BREAKDOWN,
-                direction="short",
-                entry_price=price,
-                target_price=price - (atr * 2.5),
-                stop_loss=min(lows_30) + (atr * 0.3),
-                confidence=72 + (volume_ratio * 4),
-                vwap=vwap,
-                volume_ratio=volume_ratio,
-                momentum=momentum,
-                notes="30-bar low breakdown"
-            ))
-        
-        # 8. Failed Breakdown (Bear Trap - Long)
-        lows_10 = [b.get('l', 0) for b in bars[-10:-3]]
-        if lows_10:
-            recent_low = min(lows_10)
-            if prev.get('l', 0) < recent_low and price > recent_low * 1.002:
+            max_high = max(highs_30)
+            # CRITICAL: Ensure stop loss is valid (below entry, positive)
+            stop = max(max_high - (atr * 0.3), price * 0.995)  # At least 0.5% below entry
+            if stop > 0 and stop < price:  # Validate stop is sensible
                 setups.append(ScalpSetup(
-                    pattern=ScalpPattern.FAILED_BREAKDOWN,
+                    pattern=ScalpPattern.BREAKOUT,
                     direction="long",
                     entry_price=price,
-                    target_price=price + (atr * 2.0),
-                    stop_loss=prev.get('l', 0) - (atr * 0.2),
-                    confidence=75 + (volume_ratio * 3),
+                    target_price=price + (atr * 2.5),
+                    stop_loss=stop,
+                    confidence=72 + (volume_ratio * 4),
                     vwap=vwap,
                     volume_ratio=volume_ratio,
                     momentum=momentum,
-                    notes="Bear trap - failed breakdown recovery"
+                    notes="30-bar high breakout"
                 ))
         
-        # 9. Failed Breakout (Bull Trap - Short)
-        highs_10 = [b.get('h', 0) for b in bars[-10:-3]]
-        if highs_10:
-            recent_high = max(highs_10)
-            if prev.get('h', 0) > recent_high and price < recent_high * 0.998:
+        # 7. Breakdown
+        # BUGFIX: Filter out zero/invalid values before taking min
+        lows_30 = [b.get('l', 0) for b in bars[-30:-1] if b.get('l', 0) > 0]
+        if lows_30 and price < min(lows_30) and volume_ratio > 1.3:
+            min_low = min(lows_30)
+            # CRITICAL: Ensure stop loss is valid (above entry for shorts, positive)
+            stop = min(min_low + (atr * 0.3), price * 1.005)  # At least 0.5% above entry
+            if stop > 0 and stop > price:  # Validate stop is sensible for short
                 setups.append(ScalpSetup(
-                    pattern=ScalpPattern.FAILED_BREAKOUT,
+                    pattern=ScalpPattern.BREAKDOWN,
                     direction="short",
                     entry_price=price,
-                    target_price=price - (atr * 2.0),
-                    stop_loss=prev.get('h', 0) + (atr * 0.2),
-                    confidence=75 + (volume_ratio * 3),
+                    target_price=price - (atr * 2.5),
+                    stop_loss=stop,
+                    confidence=72 + (volume_ratio * 4),
                     vwap=vwap,
                     volume_ratio=volume_ratio,
                     momentum=momentum,
-                    notes="Bull trap - failed breakout rejection"
+                    notes="30-bar low breakdown"
                 ))
+        
+        # 8. Failed Breakdown (Bear Trap - Long)
+        # BUGFIX: Filter out zero/invalid values
+        lows_10 = [b.get('l', 0) for b in bars[-10:-3] if b.get('l', 0) > 0]
+        if lows_10:
+            recent_low = min(lows_10)
+            prev_low = prev.get('l', 0)
+            if prev_low > 0 and prev_low < recent_low and price > recent_low * 1.002:
+                # CRITICAL: Ensure stop is valid
+                stop = max(prev_low - (atr * 0.2), price * 0.995)
+                if stop > 0 and stop < price:
+                    setups.append(ScalpSetup(
+                        pattern=ScalpPattern.FAILED_BREAKDOWN,
+                        direction="long",
+                        entry_price=price,
+                        target_price=price + (atr * 2.0),
+                        stop_loss=stop,
+                        confidence=75 + (volume_ratio * 3),
+                        vwap=vwap,
+                        volume_ratio=volume_ratio,
+                        momentum=momentum,
+                        notes="Bear trap - failed breakdown recovery"
+                    ))
+        
+        # 9. Failed Breakout (Bull Trap - Short)
+        # BUGFIX: Filter out zero/invalid values
+        highs_10 = [b.get('h', 0) for b in bars[-10:-3] if b.get('h', 0) > 0]
+        if highs_10:
+            recent_high = max(highs_10)
+            prev_high = prev.get('h', 0)
+            if prev_high > 0 and prev_high > recent_high and price < recent_high * 0.998:
+                # CRITICAL: Ensure stop is valid for short
+                stop = min(prev_high + (atr * 0.2), price * 1.005)
+                if stop > 0 and stop > price:
+                    setups.append(ScalpSetup(
+                        pattern=ScalpPattern.FAILED_BREAKOUT,
+                        direction="short",
+                        entry_price=price,
+                        target_price=price - (atr * 2.0),
+                        stop_loss=stop,
+                        confidence=75 + (volume_ratio * 3),
+                        vwap=vwap,
+                        volume_ratio=volume_ratio,
+                        momentum=momentum,
+                        notes="Bull trap - failed breakout rejection"
+                    ))
         
         # 10. Squeeze Fire - detect low volatility followed by expansion
         volatility_recent = self._calculate_volatility(bars[-5:])
