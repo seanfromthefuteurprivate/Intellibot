@@ -79,8 +79,8 @@ class BenzingaNewsAdapter:
         if tickers:
             params["tickers"] = ",".join(tickers)
         
-        # Use v2.1 endpoint for JSON response
-        data = self._request("/v2.1/news", params)
+        # Use news endpoint (base URL already includes /api/v2)
+        data = self._request("/news", params)
         
         if data:
             articles = []

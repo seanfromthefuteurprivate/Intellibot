@@ -55,6 +55,7 @@ from wsb_snake.collectors.fred_collector import fred_collector
 from wsb_snake.collectors.vix_structure import vix_structure
 from wsb_snake.collectors.earnings_calendar import earnings_calendar
 from wsb_snake.collectors.alpha_vantage_collector import alpha_vantage
+from wsb_snake.collectors.benzinga_news import benzinga_news
 from wsb_snake.engines.strategy_classifier import strategy_classifier, StrategyType
 from wsb_snake.engines.multi_day_scanner import multi_day_scanner
 from wsb_snake.engines.zero_dte_volatility import zero_dte_volatility
@@ -157,6 +158,28 @@ class SnakeOrchestrator:
                     except Exception as e:
                         log.debug(f"   Finnhub error for {ticker}: {e}")
                         alt["finnhub"] = {"sentiment": 0, "direction": "neutral"}
+                    
+                    # Benzinga: Premium financial news
+                    try:
+                        benzinga_data = benzinga_news.get_news(tickers=[ticker], hours_back=4)
+                        # Simple sentiment: count positive vs negative words in headlines
+                        sentiment_score = 0
+                        for article in benzinga_data:
+                            title = article.get("title", "").lower()
+                            if any(w in title for w in ["surge", "jump", "rally", "beat", "upgrade"]):
+                                sentiment_score += 1
+                            elif any(w in title for w in ["drop", "fall", "miss", "downgrade", "warning"]):
+                                sentiment_score -= 1
+                        alt["benzinga"] = {
+                            "articles": len(benzinga_data),
+                            "sentiment": sentiment_score,
+                            "headlines": [a.get("title", "")[:50] for a in benzinga_data[:3]],
+                        }
+                        if benzinga_data:
+                            log.info(f"   Benzinga: {len(benzinga_data)} articles for {ticker}")
+                    except Exception as e:
+                        log.debug(f"   Benzinga error for {ticker}: {e}")
+                        alt["benzinga"] = {"articles": 0, "sentiment": 0}
                     
                     # SEC EDGAR: Insider activity
                     try:
