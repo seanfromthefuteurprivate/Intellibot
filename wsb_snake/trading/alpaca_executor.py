@@ -147,6 +147,45 @@ class AlpacaExecutor:
             logger.error(f"Failed to get positions: {e}")
             return []
     
+    def get_strike_interval(self, underlying: str, price: float) -> float:
+        """
+        Get the standard option strike interval for a given underlying.
+        
+        Strike intervals vary by:
+        - SPY/QQQ/IWM: $1 strikes
+        - TSLA/NVDA/META at high prices: $5 strikes
+        - AAPL/MSFT/AMD: $2.50 or $5 strikes
+        - Most other stocks > $100: $5 strikes
+        - Stocks $25-$100: $2.50 strikes
+        - Stocks < $25: $1 strikes
+        """
+        # ETFs with $1 strikes
+        if underlying in ["SPY", "QQQ", "IWM"]:
+            return 1.0
+        
+        # High-priced stocks with $5 strikes
+        if underlying in ["TSLA", "NVDA", "META", "GOOGL", "AMZN", "MSFT"]:
+            if price > 100:
+                return 5.0
+            return 2.5
+        
+        # General rules by price
+        if price > 100:
+            return 5.0
+        elif price > 25:
+            return 2.5
+        else:
+            return 1.0
+    
+    def round_to_strike(self, price: float, interval: float, direction: str = "nearest") -> float:
+        """Round price to valid strike based on interval and direction."""
+        if direction == "down":
+            return (price // interval) * interval
+        elif direction == "up":
+            return ((price // interval) + 1) * interval
+        else:  # nearest
+            return round(price / interval) * interval
+    
     def format_option_symbol(
         self,
         underlying: str,
@@ -238,6 +277,7 @@ class AlpacaExecutor:
                 order_data["limit_price"] = str(limit_price)
             
             logger.info(f"Placing order: {side} {qty}x {option_symbol}")
+            logger.debug(f"Order payload: {order_data}")
             
             resp = requests.post(
                 f"{self.BASE_URL}/v2/orders",
@@ -245,7 +285,11 @@ class AlpacaExecutor:
                 json=order_data,
                 timeout=10
             )
-            resp.raise_for_status()
+            
+            # Log response before raising for better debugging
+            if resp.status_code >= 400:
+                logger.error(f"Order failed with status {resp.status_code}: {resp.text}")
+                resp.raise_for_status()
             
             order = resp.json()
             logger.info(f"Order placed: {order.get('id')} status={order.get('status')}")
@@ -253,7 +297,14 @@ class AlpacaExecutor:
             return order
             
         except requests.exceptions.HTTPError as e:
-            logger.error(f"Order failed: {e.response.text if e.response else e}")
+            # Try to get actual error message from response
+            error_detail = ""
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.text
+                except:
+                    error_detail = str(e)
+            logger.error(f"Order HTTP error: {e} - Details: {error_detail}")
             return None
         except Exception as e:
             logger.error(f"Order error: {e}")
@@ -317,16 +368,46 @@ class AlpacaExecutor:
         trade_type = "CALLS" if direction == "long" else "PUTS"
         option_type = "call" if direction == "long" else "put"
         
-        expiry = datetime.now()
-        if expiry.hour >= 16:
-            expiry = expiry + timedelta(days=1)
-        while expiry.weekday() >= 5:
-            expiry = expiry + timedelta(days=1)
+        # ETFs have daily 0DTE options, individual stocks have weekly Friday options
+        daily_0dte_tickers = ["SPY", "QQQ", "IWM"]
+        
+        # Use Eastern Time for market hours (server may be UTC)
+        import pytz
+        et = pytz.timezone('US/Eastern')
+        now_et = datetime.now(et)
+        
+        if underlying in daily_0dte_tickers:
+            # For SPY/QQQ/IWM - use same-day 0DTE or next trading day if after hours
+            if now_et.hour >= 16:  # After 4 PM ET
+                expiry = now_et + timedelta(days=1)
+            else:
+                expiry = now_et
+            while expiry.weekday() >= 5:  # Skip weekends
+                expiry = expiry + timedelta(days=1)
+        else:
+            # For individual stocks - use next Friday expiration
+            # Find the next Friday (weekday 4)
+            days_until_friday = (4 - now_et.weekday()) % 7
+            if days_until_friday == 0 and now_et.hour >= 16:
+                days_until_friday = 7  # If it's Friday after hours, use next Friday
+            expiry = now_et + timedelta(days=days_until_friday)
+        
+        # Convert to naive datetime for formatting
+        expiry = expiry.replace(tzinfo=None)
+        
+        logger.info(f"Selected expiry {expiry.strftime('%Y-%m-%d')} for {underlying} (0DTE: {underlying in daily_0dte_tickers}, ET hour: {now_et.hour})")
+        
+        # Calculate strike at proper interval for this underlying
+        interval = self.get_strike_interval(underlying, entry_price)
         
         if direction == "long":
-            strike = round(entry_price - 1, 0)
+            # For calls, go slightly ITM (below current price)
+            strike = self.round_to_strike(entry_price - interval, interval, "down")
         else:
-            strike = round(entry_price + 1, 0)
+            # For puts, go slightly ITM (above current price)
+            strike = self.round_to_strike(entry_price + interval, interval, "up")
+        
+        logger.info(f"Selected strike ${strike:.0f} (interval: ${interval}) for {underlying} @ ${entry_price:.2f}")
         
         option_symbol = self.format_option_symbol(
             underlying, expiry, strike,
