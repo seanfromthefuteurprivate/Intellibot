@@ -34,7 +34,11 @@ BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 ZERO_DTE_UNIVERSE = [
     "SPY", "QQQ", "IWM",  # ETFs
     "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT",  # Mega caps
-    "THH"  # Reddit watchlist - potential breakout
+    "THH",  # Reddit watchlist - potential breakout
+    # WSB core holdings (space/AI/autonomous)
+    "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
+    # WSB YOLO plays
+    "POET", "ENPH", "USAR", "PYPL"
 ]
 
 # Session time windows (Eastern Time)
