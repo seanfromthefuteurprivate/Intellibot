@@ -410,47 +410,58 @@ class TomorrowsBattlePlan:
     Encoded strategy for tomorrow based on today's learnings.
     """
     
-    # CORRECTED AFTER LOSING DAY (-$82, 25% win rate)
+    # BALANCED APPROACH: Quality 0DTE for moonshots + Safe multi-day for base hits
     RULES = {
         "entry": {
-            "confidence_threshold": 70,  # RAISED from 58 - quality over quantity
-            "prefer_multiday": True,  # 2-4 DTE MANDATORY - 0DTE killed us
-            "avoid_0dte": True,  # 0DTE lost -$85 today
-            "power_hour_multiplier": 1.2,  # Reduced from 1.3
+            "confidence_threshold": 70,  # High bar for all trades
+            "0dte_confidence_threshold": 80,  # HIGHER bar for 0DTE moonshots
+            "prefer_multiday_for_base_hits": True,  # 2-4 DTE for consistent gains
+            "0dte_for_moonshots": True,  # 0DTE for explosive moves ($800 → $50k)
+            "power_hour_multiplier": 1.3,  # Power hour is prime for 0DTE
             "require_ai_confirmation": True,
             "execute_on_alert": True,  # FIXED: alerts trigger execution
-            "fewer_trades_higher_quality": True,  # Only A+ setups
         },
         "position_sizing": {
             "daily_limit": 1000,
-            "max_positions": 2,  # Reduced from 3 - focus on quality
-            "min_position": 300,  # Increased - bigger bets on fewer trades
-            "diversify": False,  # Focus on 1-2 high conviction plays
+            "max_positions": 3,
+            "0dte_allocation": 0.30,  # 30% of capital for 0DTE moonshots ($300)
+            "multiday_allocation": 0.70,  # 70% for safer multi-day plays ($700)
+            "0dte_moonshot_size": 300,  # Fixed $300 for 0DTE lottery tickets
+            "multiday_size": 500,  # $500-700 for multi-day positions
         },
         "stops": {
-            "0dte_stop": 0.08,  # TIGHTER 8% stop for 0DTE (if we must trade it)
-            "multiday_stop": 0.15,  # Tighter 15% stop for 2-4 DTE
-            "time_stop_minutes": 30,  # Reduced from 45 - get out faster
+            "0dte_stop": 0.50,  # WIDER 50% stop for 0DTE moonshots - let them run!
+            "0dte_scalp_stop": 0.15,  # 15% stop for quick 0DTE scalps
+            "multiday_stop": 0.15,  # 15% stop for 2-4 DTE
+            "time_stop_minutes": 45,  # 45-min for scalps, no time stop for moonshots
         },
         "targets": {
-            "0dte_target": 0.05,  # LOWER 5% target - book profits FAST
-            "multiday_target": 0.10,  # Lower 10% - don't get greedy
-            "scale_out": False,  # For now, all-or-nothing exits
+            "0dte_moonshot_target": 5.0,  # 500%+ for moonshots - $800 → $4k+
+            "0dte_scalp_target": 0.20,  # 20% for quick scalps
+            "multiday_target": 0.25,  # 25% for multi-day
+            "scale_out": True,  # Take 50% at 100%, let rest run for moonshots
         },
         "timing": {
-            "power_hour_start": 15,  # 3 PM ET
+            "power_hour_start": 15,  # 3 PM ET - PRIME for 0DTE
             "eod_close_time": "15:55",  # All 0DTE close by 3:55 PM
             "avoid_lunch": True,  # 12-1 PM is choppy
             "avoid_first_5_min": True,  # Opening chaos
-            "no_new_positions_after_3pm": True,  # Don't enter late
+            "0dte_best_times": ["09:30-10:00", "14:00-15:55"],  # Opening + Power hour
+        },
+        "moonshot_criteria": {
+            "require_unusual_options_flow": True,  # Big money coming in
+            "require_catalyst": True,  # News, earnings, macro event
+            "require_technical_breakout": True,  # Breaking key levels
+            "min_volume_spike": 3.0,  # 3x normal volume
+            "require_multi_model_consensus": True,  # All AI models agree
         },
         "mindset": {
             "trust_the_system": True,
             "no_emotional_overrides": True,
-            "small_gains_compound": True,  # AAPL +4% was only winner
-            "quality_over_quantity": True,  # NEW: fewer, better trades
+            "moonshots_are_lottery_tickets": True,  # Expect to lose some
+            "one_moonshot_pays_for_10_losses": True,  # $800 → $50k math
             "mechanical_discipline": True,
-            "accept_losing_days": True,  # Learn and improve
+            "let_winners_run": True,  # Don't cut moonshots early
         }
     }
     
