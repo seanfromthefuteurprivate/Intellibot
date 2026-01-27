@@ -84,11 +84,18 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    MAX_DAILY_DEPLOYED = 999999  # No daily cap - unlimited capital available
+    # ========== MARGIN UTILIZATION STRATEGY ==========
+    # $1,000 cash + $3,000 margin = $4,000 total daily exposure
+    # This maximizes profit potential while keeping risk controlled
+    MAX_DAILY_EXPOSURE = 4000  # Total exposure cap: $1k cash + $3k margin
     MAX_PER_TRADE = 1000  # $1,000 max per individual trade
-    MAX_CONCURRENT_POSITIONS = 5  # Max 5 trades per day
+    MAX_CONCURRENT_POSITIONS = 4  # Allow 4 x $1k trades = $4k max exposure
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
+    
+    # ETF Priority - focus on liquid, predictable instruments
+    ETF_TICKERS = ['SPY', 'QQQ', 'IWM', 'GLD', 'GDX', 'SLV', 'XLE', 'XLF', 'TLT', 'USO', 'UNG', 'HYG']
+    ETF_PRIORITY = True  # Prioritize ETFs for scalping (higher win rate)
     
     def __init__(self):
         self.api_key = os.environ.get("ALPACA_API_KEY", "")
@@ -103,13 +110,15 @@ class AlpacaExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
-        # Track daily trade count (not capital)
+        # Track daily exposure (cash + margin utilization)
+        self.daily_exposure_used = 0.0  # Running total of exposure deployed today
         self.daily_trade_count = 0
         self.daily_reset_date = datetime.utcnow().date()
         
         mode = "LIVE" if self.LIVE_TRADING else "Paper"
         logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
-        logger.info(f"Max per trade: ${self.MAX_PER_TRADE} | Max daily trades: {self.MAX_CONCURRENT_POSITIONS}")
+        logger.info(f"Max daily exposure: ${self.MAX_DAILY_EXPOSURE} ($1k cash + $3k margin)")
+        logger.info(f"Max per trade: ${self.MAX_PER_TRADE} | Max concurrent: {self.MAX_CONCURRENT_POSITIONS}")
         
         if self.LIVE_TRADING:
             logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
@@ -330,12 +339,13 @@ _Position picked up from restart - now monitoring_""")
             return {}
     
     def _reset_daily_count_if_needed(self):
-        """Reset daily trade count if new trading day."""
+        """Reset daily trade count and exposure if new trading day."""
         today = datetime.utcnow().date()
         if today != self.daily_reset_date:
             self.daily_trade_count = 0
+            self.daily_exposure_used = 0.0  # Reset margin utilization
             self.daily_reset_date = today
-            logger.info(f"Daily trade count reset: 0/{self.MAX_CONCURRENT_POSITIONS} trades today")
+            logger.info(f"Daily reset: 0/{self.MAX_CONCURRENT_POSITIONS} trades, $0/${self.MAX_DAILY_EXPOSURE} exposure")
     
     def get_remaining_daily_capital(self) -> float:
         """Get remaining capital available for today (legacy - no longer used for limiting)."""
@@ -709,7 +719,7 @@ No overnight risk. Fresh start tomorrow!
         if spread_pct > 20:
             logger.warning(f"Wide spread {spread_pct:.1f}% on {option_symbol} - may be illiquid")
         
-        # Check if we've hit daily trade limit (5 trades max)
+        # Check if we've hit daily trade limit
         self._reset_daily_count_if_needed()
         if self.daily_trade_count >= self.MAX_CONCURRENT_POSITIONS:
             logger.warning(f"Daily trade limit reached ({self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS}) - no more trades today")
@@ -725,7 +735,15 @@ No overnight risk. Fresh start tomorrow!
             send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} exceeds ${self.MAX_PER_TRADE}/trade max")
             return None
         
-        logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (trade {self.daily_trade_count + 1}/{self.MAX_CONCURRENT_POSITIONS} today)")
+        # Check daily exposure limit ($4,000 = $1k cash + $3k margin)
+        remaining_exposure = self.MAX_DAILY_EXPOSURE - self.daily_exposure_used
+        if estimated_cost > remaining_exposure:
+            logger.warning(f"Daily exposure limit reached: Used ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE} - only ${remaining_exposure:.0f} remaining")
+            send_telegram_alert(f"⏸️ Exposure cap: ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE} used (margin limit)")
+            return None
+        
+        logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f}")
+        logger.info(f"EXPOSURE: Trade {self.daily_trade_count + 1}/{self.MAX_CONCURRENT_POSITIONS} | ${self.daily_exposure_used + estimated_cost:.0f}/${self.MAX_DAILY_EXPOSURE} used")
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
@@ -784,8 +802,9 @@ Confidence: {confidence:.0f}%
         with self._lock:
             self.positions[position_id] = position
             self.daily_trade_count += 1  # Increment daily trade counter
+            self.daily_exposure_used += estimated_cost  # Track margin utilization
         
-        logger.info(f"Trade {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} placed today")
+        logger.info(f"Trade {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} | Exposure: ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE}")
         
         # Confirmation alert after order placed
         confirm_message = f"""✅ **BUY ORDER PLACED**
