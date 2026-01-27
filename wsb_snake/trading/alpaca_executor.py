@@ -557,13 +557,16 @@ No overnight risk. Fresh start tomorrow!
         option_symbol = ""
         quote = {}
         
-        for i in range(strikes_to_try):
+        # Strike offsets: [ITM, ATM, slight OTM, moderate OTM, far OTM]
+        strike_offsets = [-1, 0, 1, 2, 3]  # Number of intervals from ATM
+        
+        for offset in strike_offsets:
             if direction == "long":
-                # For calls: start slightly ITM, then go further OTM
-                strike = self.round_to_strike(entry_price - interval * (1 - i * 2), interval, "down")
+                # For calls: negative offset = ITM (cheaper delta), positive = OTM
+                strike = self.round_to_strike(entry_price - interval * offset, interval, "nearest")
             else:
-                # For puts: start slightly ITM, then go further OTM
-                strike = self.round_to_strike(entry_price + interval * (1 - i * 2), interval, "up")
+                # For puts: negative offset = ITM, positive = OTM (cheaper)
+                strike = self.round_to_strike(entry_price + interval * offset, interval, "nearest")
             
             option_symbol = self.format_option_symbol(
                 underlying, expiry, strike,
@@ -585,9 +588,17 @@ No overnight risk. Fresh start tomorrow!
                 else:
                     logger.info(f"Strike ${strike:.0f} too expensive (${contract_cost:.0f}/contract), trying further OTM...")
         
+        # Check if we found an affordable option
         if not quote or option_price <= 0:
             logger.error(f"No valid quote found for {underlying} options - ABORTING trade")
             send_telegram_alert(f"❌ Trade aborted: No valid {underlying} options available")
+            return None
+        
+        # Explicit check: did we find an affordable option?
+        contract_cost = option_price * 100
+        if contract_cost > max_contract_cost:
+            logger.error(f"No affordable {underlying} option found (cheapest: ${contract_cost:.0f}/contract > ${max_contract_cost:.0f} limit)")
+            send_telegram_alert(f"❌ Trade aborted: {underlying} options too expensive (cheapest ${contract_cost:.0f}/contract)")
             return None
         
         # Validate quote freshness (must be within 60 seconds)
