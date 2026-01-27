@@ -19,6 +19,7 @@ from wsb_snake.utils.logger import get_logger
 logger = get_logger(__name__)
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
 
 
 class ChartAnalysisState(TypedDict):
@@ -129,8 +130,8 @@ class LangGraphChartAnalyzer:
     async def _call_gemini_fallback(self, image_base64: str, prompt: str) -> str:
         """Fallback to Gemini 2.0 Flash when OpenAI fails."""
         if not GEMINI_API_KEY:
-            logger.error("Gemini API key not available for fallback")
-            return "Analysis unavailable: No AI API available"
+            logger.warning("Gemini API key not available, trying DeepSeek directly")
+            return await self._call_deepseek_fallback(image_base64, prompt)
         
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
@@ -163,11 +164,53 @@ class LangGraphChartAnalyzer:
                     logger.info("Gemini fallback successful")
                     return text
                     
-            return "Analysis unavailable: Gemini returned no content"
+            # Gemini returned no content - try DeepSeek
+            logger.warning("Gemini returned no content, trying DeepSeek fallback")
+            return await self._call_deepseek_fallback(image_base64, prompt)
             
         except Exception as e:
-            logger.error(f"Gemini fallback also failed: {e}")
-            return f"Analysis unavailable: Both OpenAI and Gemini failed"
+            logger.warning(f"Gemini fallback failed, trying DeepSeek: {e}")
+            return await self._call_deepseek_fallback(image_base64, prompt)
+    
+    async def _call_deepseek_fallback(self, image_base64: str, prompt: str) -> str:
+        """Third fallback to DeepSeek when both OpenAI and Gemini fail."""
+        if not DEEPSEEK_API_KEY:
+            logger.error("DeepSeek API key not available for fallback")
+            return "Analysis unavailable: All AI APIs unavailable"
+        
+        try:
+            url = "https://api.deepseek.com/v1/chat/completions"
+            
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": CHART_ANALYST_PROMPT},
+                    {"role": "user", "content": f"{prompt}\n\n[Note: Image analysis requested but DeepSeek text-only mode - provide general technical guidance based on the context provided.]"}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 1000
+            }
+            
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                
+                if "choices" in result and result["choices"]:
+                    text = result["choices"][0]["message"]["content"]
+                    logger.info("DeepSeek fallback successful")
+                    return text
+                    
+            return "Analysis unavailable: DeepSeek returned no content"
+            
+        except Exception as e:
+            logger.error(f"DeepSeek fallback also failed: {e}")
+            return f"Analysis unavailable: All AI models failed (OpenAI, Gemini, DeepSeek)"
     
     async def _analyze_patterns(self, state: ChartAnalysisState) -> Dict:
         """Node 1: Identify chart patterns."""

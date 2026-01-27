@@ -145,6 +145,12 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
                 if "candidates" in data and data["candidates"]:
                     return data["candidates"][0]["content"]["parts"][0]["text"]
                     
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.warning(f"Gemini rate limited (429) - will fallback to DeepSeek")
+            else:
+                logger.error(f"Gemini HTTP error: {e}")
+            return None
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
         
@@ -155,7 +161,11 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
         image_base64: str,
         context: str
     ) -> Optional[str]:
-        """Call DeepSeek API for vision analysis (fallback)."""
+        """Call DeepSeek API for text-only analysis (fallback when vision models fail).
+        
+        Note: DeepSeek-chat doesn't support vision, so we provide enhanced context
+        instead of image data. This is a best-effort fallback for when Gemini fails.
+        """
         if not self.deepseek_key:
             return None
         
@@ -167,14 +177,24 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
                 "Content-Type": "application/json"
             }
             
+            # DeepSeek doesn't support vision - use text-only with enhanced context
+            enhanced_prompt = f"""IMPORTANT: I cannot see the chart image, but based on the context provided, 
+analyze the setup and provide your verdict. Use the context data to make your decision.
+
+{context}
+
+Based on the context above (price, VWAP, pattern detected), provide your analysis.
+If the pattern is bullish (vwap_bounce, momentum_surge long, breakout), lean toward STRIKE_CALLS.
+If the pattern is bearish (vwap_rejection, momentum_surge short, breakdown), lean toward STRIKE_PUTS.
+If unclear, say NO_TRADE.
+
+Respond in the exact format required."""
+            
             payload = {
                 "model": "deepseek-chat",
                 "messages": [
                     {"role": "system", "content": self.scalp_system_prompt},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": f"CONTEXT: {context}"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
-                    ]}
+                    {"role": "user", "content": enhanced_prompt}
                 ],
                 "temperature": 0.1,
                 "max_tokens": 500
@@ -186,8 +206,11 @@ Be DECISIVE. No wishy-washy answers. Either it's a trade or it's not."""
                 
                 data = response.json()
                 if "choices" in data and data["choices"]:
+                    logger.info("DeepSeek fallback successful (text-only mode)")
                     return data["choices"][0]["message"]["content"]
                     
+        except httpx.HTTPStatusError as e:
+            logger.error(f"DeepSeek HTTP error {e.response.status_code}: {e}")
         except Exception as e:
             logger.error(f"DeepSeek API error: {e}")
         
