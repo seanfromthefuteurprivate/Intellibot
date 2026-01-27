@@ -41,37 +41,33 @@ def send_startup_ping():
     from wsb_snake.engines.spy_scalper import spy_scalper
     predator_status = "🔥 ACTIVE" if spy_scalper.PREDATOR_MODE else "OFF"
     
-    message = f"""🐍 **WSB SNAKE v2.4 ONLINE**
+    message = f"""🐍 **WSB SNAKE v2.5 ONLINE**
 
-**APEX PREDATOR MODE: {predator_status}**
+🔥 **AGGRESSIVE MODE ACTIVE** 🔥
 
 🦅 **Predator Configuration:**
 • Min Confidence: {spy_scalper.MIN_CONFIDENCE_FOR_ALERT}%
-• AI Confirmation: REQUIRED
-• Predator Stack: REQUIRED
+• AI Stack: Gemini + DeepSeek + GPT
+• Small Cap Filter: 75% + Candlestick
 • Cooldown: {spy_scalper.trade_cooldown_minutes} min
 
-🔧 **Engines Loaded:**
-• 🧠 ChartBrain: LangGraph AI (GPT-4o Vision)
-• 🦅 SPY Scalper: PREDATOR MODE (30s scans)
-• 🔪 Zero Greed Exit: NO MERCY
-• 📈 Alpaca Trading: {trading_mode}
-
-💰 **Trading Account:**
+💰 **AGGRESSIVE TRADING:**
 • Mode: {trading_mode}
 • Buying Power: ${buying_power:,.2f}
-• Max Per Trade: $1,000
-• Target: +20% | Stop: -15% | Max Hold: 45min
+• Daily Exposure: ${alpaca_executor.MAX_DAILY_EXPOSURE:,}
+• Per Trade: ${alpaca_executor.MAX_PER_TRADE:,}
+• Max Concurrent: {alpaca_executor.MAX_CONCURRENT_POSITIONS}
+• Target: +20% | Stop: -15%
 
-📊 **Session Status:**
-• Session: {session_info['session'].upper()}
-• Market Open: {'Yes' if session_info['is_open'] else 'No'}
-• Power Hour: {'Yes' if session_info['is_power_hour'] else 'No'}
+📊 **Session:**
+• {session_info['session'].upper()} | {'OPEN' if session_info['is_open'] else 'CLOSED'}
 • Time ET: {session_info['current_time_et']}
+• Power Hour: {'YES' if session_info['is_power_hour'] else 'No'}
 
-🎯 **Hunting:** SPY 0DTE Options
+🎯 **Focus:** ETF Scalping (SPY, QQQ, IWM, GDX)
+📍 **EOD Close:** 3:55 PM ET (automatic)
 
-⚡ Apex predator watching. Strike only on high-conviction prey.
+⚡ Hunting for 15%+ daily returns. Maximum aggression.
 """
     
     send_alert(message)
