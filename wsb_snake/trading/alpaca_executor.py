@@ -156,6 +156,91 @@ class AlpacaExecutor:
             logger.error(f"Failed to get positions: {e}")
             return []
     
+    def sync_existing_positions(self) -> int:
+        """
+        Sync existing Alpaca positions on startup.
+        
+        This ensures positions opened before a restart get tracked
+        and monitored for exit conditions (target, stop, time decay).
+        
+        Returns number of positions synced.
+        """
+        alpaca_positions = self.get_options_positions()
+        synced_count = 0
+        
+        for pos in alpaca_positions:
+            option_symbol = pos.get("symbol", "")
+            
+            # Skip if already tracking this position
+            if option_symbol in self.positions:
+                logger.debug(f"Already tracking {option_symbol}")
+                continue
+            
+            # Parse position details
+            qty = int(pos.get("qty", 0))
+            entry_price = float(pos.get("avg_entry_price", 0))
+            current_price = float(pos.get("current_price", 0))
+            unrealized_pnl = float(pos.get("unrealized_pl", 0))
+            side = pos.get("side", "long")
+            
+            # Extract underlying from option symbol (e.g., IWM260127C00262000 -> IWM)
+            underlying = ""
+            for i, c in enumerate(option_symbol):
+                if c.isdigit():
+                    underlying = option_symbol[:i]
+                    break
+            
+            # Determine if calls or puts from symbol
+            trade_type = "CALLS" if "C" in option_symbol[len(underlying):len(underlying)+7] else "PUTS"
+            
+            # Set conservative targets/stops for orphaned positions
+            # Default: +20% target, -15% stop (standard scalp settings)
+            target_price = entry_price * 1.20
+            stop_loss = entry_price * 0.85
+            
+            # Create tracked position
+            position_id = f"sync_{option_symbol}_{int(datetime.utcnow().timestamp())}"
+            new_pos = AlpacaPosition(
+                position_id=position_id,
+                symbol=underlying,
+                option_symbol=option_symbol,
+                side=side,
+                trade_type=trade_type,
+                qty=qty,
+                entry_price=entry_price,
+                target_price=target_price,
+                stop_loss=stop_loss,
+                status=PositionStatus.OPEN,
+                entry_time=datetime.utcnow(),  # Approximate since we don't know exact entry
+            )
+            
+            with self._lock:
+                self.positions[option_symbol] = new_pos
+            
+            pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+            
+            logger.info(f"🔄 SYNCED: {option_symbol} {qty}x @ ${entry_price:.2f} -> ${current_price:.2f} ({pnl_pct:+.1f}%)")
+            logger.info(f"   Target: ${target_price:.2f} (+20%) | Stop: ${stop_loss:.2f} (-15%)")
+            
+            synced_count += 1
+            
+            # Alert about synced positions
+            send_telegram_alert(f"""🔄 **SYNCED POSITION**
+{underlying} {trade_type}
+Entry: ${entry_price:.2f}
+Current: ${current_price:.2f} ({pnl_pct:+.1f}%)
+Target: ${target_price:.2f} (+20%)
+Stop: ${stop_loss:.2f} (-15%)
+
+_Position picked up from restart - now monitoring_""")
+        
+        if synced_count > 0:
+            logger.info(f"✅ Synced {synced_count} existing position(s) from Alpaca")
+        else:
+            logger.info("No existing Alpaca positions to sync")
+        
+        return synced_count
+    
     def get_strike_interval(self, underlying: str, price: float) -> float:
         """
         Get the standard option strike interval for a given underlying.

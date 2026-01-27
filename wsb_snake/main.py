@@ -135,6 +135,12 @@ def main():
     # Start Alpaca Paper Trading Executor - real paper trades
     log.info("Starting Alpaca Paper Trading Executor...")
     alpaca_executor.start_monitoring()
+    
+    # CRITICAL: Sync any existing Alpaca positions from previous session
+    # This prevents orphaned positions that don't get exit-monitored
+    synced = alpaca_executor.sync_existing_positions()
+    log.info(f"Position sync complete: {synced} existing position(s) now tracked")
+    
     account = alpaca_executor.get_account()
     buying_power = float(account.get("buying_power", 0))
     log.info(f"Alpaca Paper Trading active - Buying Power: ${buying_power:,.2f}")
