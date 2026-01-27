@@ -149,6 +149,12 @@ Battle-tested trading desk knowledge encoded into `wsb_snake/engines/institution
 ### Session Learnings Module (CORRECTED)
 Battle-tested wisdom from live trading sessions encoded in `wsb_snake/learning/session_learnings.py`:
 
+**Jan 27, 2026 - STOP WIDTH FIX APPLIED**
+- IWM, AAPL stopped out immediately on noise - stops were too tight (0.3% = $0.78 on $260 = noise)
+- Fixed: ATR multipliers widened across all 10 patterns in spy_scalper.py
+- Fixed: institutional_scalper.py STOP_PCT 0.3%→0.8%, TARGET_PCT 0.4%→1.2%
+- Trades now have breathing room: META Entry $667.21, Stop $667.71 (1.0 ATR), Target $666.13, R:R=2.12
+
 **Jan 26, 2026 - LOSING DAY: Net -$82 (25% win rate)**
 - AAPL: +$35 (+4.1%) - ONLY WINNER
 - QQQ: -$62 (-24.6%) - 0DTE theta killed us
@@ -156,21 +162,20 @@ Battle-tested wisdom from live trading sessions encoded in `wsb_snake/learning/s
 - ONDS: -$32 (-4%) - EOD forced close
 
 **Critical Learnings:**
-1. **AAPL +4.1%:** Quick profit taking was the ONLY thing that worked today.
-2. **0DTE is DEATH:** QQQ -$62, SPY -$23. Avoid 0DTE or use 8% stops.
-3. **Quality > Quantity:** 25% win rate is unacceptable. Raise thresholds.
-4. **Signal-Execution Fixed:** Alerts now trigger immediate execution.
-5. **Book Profits FAST:** Small gains compound. Don't wait for 10%+.
+1. **STOPS TOO TIGHT:** 0.3% ATR on underlying = noise triggers. Now using 0.8-1.2% ATR stops.
+2. **AAPL +4.1%:** Quick profit taking was the ONLY thing that worked today.
+3. **0DTE is DEATH:** QQQ -$62, SPY -$23. Avoid 0DTE or use 8% stops.
+4. **Quality > Quantity:** 25% win rate is unacceptable. Raise thresholds.
+5. **Signal-Execution Fixed:** Alerts now trigger immediate execution.
+6. **Book Profits FAST:** Small gains compound. Don't wait for 10%+.
 
-**Tomorrow's Battle Plan (CORRECTED):**
-- Confidence threshold: 70% (RAISED from 58%)
-- Daily limit: $1,000 split into MAX 2 trades
+**Current Battle Plan (Jan 27 UPDATED):**
+- Confidence threshold: 70%
+- Daily limit: $1,000 | Current: $950 deployed ($50 remaining)
+- Stop multipliers: 0.8-1.2 ATR (WIDENED from 0.3-0.7 ATR)
+- Target multipliers: 2.5-3.5 ATR (WIDENED from 1.5-2.5 ATR)
 - AVOID 0DTE - prefer 2-4 DTE
-- 0DTE stops: 8% (much tighter)
-- Multi-day stops: 15%
-- 0DTE targets: 5% (book fast)
-- Multi-day targets: 10%
-- No new positions after 3 PM
+- Institutional stops: 0.8% on underlying (was 0.3%)
 - EOD close: 3:55 PM ET (mandatory)
 
 ### System Flow

@@ -60,10 +60,10 @@ class InstitutionalScalper:
     MIN_EDGE_THRESHOLD = 0.03  # 0.03% minimum directional bias
     MAX_SPREAD_PCT = 0.5  # Skip if spread > 0.5%
     
-    # Risk parameters - institutional discipline
-    STOP_PCT = 0.003  # 0.3% stop on underlying (~15-20% on option)
-    TARGET_PCT = 0.004  # 0.4% target on underlying (~20-25% on option)
-    MAX_HOLD_MINUTES = 30  # Exit after 30 mins regardless
+    # Risk parameters - institutional discipline (WIDENED to avoid noise stop-outs)
+    STOP_PCT = 0.008  # 0.8% stop on underlying (~25-35% on option) - widened from 0.3%
+    TARGET_PCT = 0.012  # 1.2% target on underlying (~35-50% on option) - widened from 0.4%
+    MAX_HOLD_MINUTES = 45  # Exit after 45 mins regardless (extended from 30)
     
     # Time-of-day multipliers (institutional wisdom)
     TIME_MULTIPLIERS = {

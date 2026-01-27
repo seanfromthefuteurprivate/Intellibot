@@ -163,7 +163,46 @@
         "stop_pnl": "-15%",
         "key_insight": "small_gains_compound"
       }
+    },
+    {
+      "category": "execution",
+      "lesson": "STOPS TOO TIGHT: IWM filled @ $1.80, immediately stopped out. 0.3% ATR stops = noise triggers. WIDENED to 0.8-1.2% ATR on underlying.",
+      "weight": 1.0,
+      "date_learned": "2026-01-27",
+      "trade_context": {
+        "ticker": "IWM",
+        "fill_price": 1.8,
+        "stop_reason": "noise_triggered",
+        "fix_applied": "widened_stops_to_1pct_atr",
+        "key_insight": "tight_stops_kill_positions"
+      }
+    },
+    {
+      "category": "execution",
+      "lesson": "ATR MULTIPLIERS CHANGED: VWAP bounce stop 0.5->1.0 ATR, momentum stop 0.7->1.2 ATR, breakout stop 0.3->0.8 ATR. Targets also widened to 2.5-3.5 ATR.",
+      "weight": 0.95,
+      "date_learned": "2026-01-27",
+      "trade_context": {
+        "old_stop_multiplier": 0.3,
+        "new_stop_multiplier": 1.0,
+        "old_target_multiplier": 1.5,
+        "new_target_multiplier": 2.5,
+        "key_insight": "atr_multipliers_doubled"
+      }
+    },
+    {
+      "category": "execution",
+      "lesson": "INSTITUTIONAL STOPS WIDENED: 0.3% on underlying = $2 on $700 SPY = noise. Changed to 0.8% = $5.60 on SPY. This gives breathing room.",
+      "weight": 0.95,
+      "date_learned": "2026-01-27",
+      "trade_context": {
+        "old_stop_pct": 0.003,
+        "new_stop_pct": 0.008,
+        "spy_old_stop_dollars": 2.1,
+        "spy_new_stop_dollars": 5.6,
+        "key_insight": "stops_need_room_to_breathe"
+      }
     }
   ],
-  "last_updated": "2026-01-26T20:59:22.227487"
+  "last_updated": "2026-01-27T18:37:33.519157"
 }
