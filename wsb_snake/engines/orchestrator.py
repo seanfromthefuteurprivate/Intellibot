@@ -1186,6 +1186,27 @@ Minutes to close: {mins_to_close:.0f}"""
             send_telegram_alert(message)
             self.alerts_sent_today[ticker] = datetime.utcnow()
             log.info(f"Alert sent for {ticker}")
+            
+            # EXECUTE TRADE ON ALPACA - Signal-execution connection!
+            if score >= 70 and entry > 0 and stop > 0:
+                try:
+                    position = alpaca_executor.execute_scalp_entry(
+                        underlying=ticker,
+                        direction=direction,
+                        entry_price=entry,
+                        stop_loss=stop,
+                        target_price=t1 if t1 > 0 else entry * 1.15,
+                        confidence=score,
+                        pattern="orchestrator_signal"
+                    )
+                    if position:
+                        symbol = getattr(position, 'option_symbol', ticker) if hasattr(position, 'option_symbol') else ticker
+                        log.info(f"🚀 TRADE EXECUTED for {ticker}: {symbol}")
+                        send_telegram_alert(f"🚀 **TRADE EXECUTED** {ticker} {direction.upper()} @ ${entry:.2f}")
+                    else:
+                        log.warning(f"Trade not executed for {ticker} - check Alpaca logs")
+                except Exception as trade_err:
+                    log.error(f"Failed to execute trade for {ticker}: {trade_err}")
         except Exception as e:
             log.error(f"Failed to send alert: {e}")
     

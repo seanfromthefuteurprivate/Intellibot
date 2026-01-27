@@ -86,12 +86,13 @@ class SPYScalper:
     
     # ========== APEX PREDATOR CONFIGURATION ==========
     # These thresholds ensure we only strike on the highest quality setups
-    # Balanced for real market conditions - not too loose, not too tight
+    # AGGRESSIVE MODE: Lower thresholds for more trading opportunities
     PREDATOR_MODE = True  # Enable apex predator behavior
-    MIN_CONFIDENCE_FOR_AI = 50  # Minimum to bother with AI confirmation (lowered for aggression)
-    MIN_CONFIDENCE_FOR_ALERT = 58  # Minimum final confidence to trigger entry (lowered from 65 for more trades)
-    REQUIRE_AI_CONFIRMATION = True  # Must have AI blessing to strike
-    REQUIRE_PREDATOR_STRIKE = True  # Must have Predator Stack STRIKE verdict
+    MIN_CONFIDENCE_FOR_AI = 45  # Lowered for more pattern detection
+    MIN_CONFIDENCE_FOR_ALERT = 55  # LOWERED from 65 - allow setups at 55%+
+    REQUIRE_AI_CONFIRMATION = False  # DISABLED - AI was blocking all trades
+    REQUIRE_PREDATOR_STRIKE = False  # DISABLED - Predator Stack was too conservative
+    HIGH_CONFIDENCE_AUTO_EXECUTE = 70  # Auto-execute at this confidence (lowered from 75)
     # =================================================
     
     def __init__(self):
