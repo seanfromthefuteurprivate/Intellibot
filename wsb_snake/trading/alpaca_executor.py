@@ -547,48 +547,61 @@ No overnight risk. Fresh start tomorrow!
         # Calculate strike at proper interval for this underlying
         interval = self.get_strike_interval(underlying, entry_price)
         
-        if direction == "long":
-            # For calls, go slightly ITM (below current price)
-            strike = self.round_to_strike(entry_price - interval, interval, "down")
-        else:
-            # For puts, go slightly ITM (above current price)
-            strike = self.round_to_strike(entry_price + interval, interval, "up")
+        # Try multiple strikes from ITM to OTM to find affordable option
+        max_contract_cost = self.MAX_PER_TRADE  # $1000 max per trade
+        strikes_to_try = 5  # Try up to 5 different strikes
         
-        logger.info(f"Selected strike ${strike:.0f} (interval: ${interval}) for {underlying} @ ${entry_price:.2f}")
+        option_price = 0
+        bid_price = 0
+        strike = 0
+        option_symbol = ""
+        quote = {}
         
-        option_symbol = self.format_option_symbol(
-            underlying, expiry, strike,
-            "C" if option_type == "call" else "P"
-        )
+        for i in range(strikes_to_try):
+            if direction == "long":
+                # For calls: start slightly ITM, then go further OTM
+                strike = self.round_to_strike(entry_price - interval * (1 - i * 2), interval, "down")
+            else:
+                # For puts: start slightly ITM, then go further OTM
+                strike = self.round_to_strike(entry_price + interval * (1 - i * 2), interval, "up")
+            
+            option_symbol = self.format_option_symbol(
+                underlying, expiry, strike,
+                "C" if option_type == "call" else "P"
+            )
+            
+            quote = self.get_option_quote(option_symbol)
+            if not quote:
+                continue
+            
+            option_price = float(quote.get("ap", 0))
+            bid_price = float(quote.get("bp", 0))
+            
+            if option_price > 0 and bid_price > 0:
+                contract_cost = option_price * 100
+                if contract_cost <= max_contract_cost:
+                    logger.info(f"Selected strike ${strike:.0f} (interval: ${interval}) for {underlying} @ ${entry_price:.2f}")
+                    break
+                else:
+                    logger.info(f"Strike ${strike:.0f} too expensive (${contract_cost:.0f}/contract), trying further OTM...")
         
-        # CRITICAL: Get real quote - NEVER assume a price
-        quote = self.get_option_quote(option_symbol)
-        if not quote:
-            logger.error(f"No quote available for {option_symbol} - ABORTING trade")
-            send_telegram_alert(f"❌ Trade aborted: No quote for {option_symbol}")
+        if not quote or option_price <= 0:
+            logger.error(f"No valid quote found for {underlying} options - ABORTING trade")
+            send_telegram_alert(f"❌ Trade aborted: No valid {underlying} options available")
             return None
         
-        # Validate quote freshness (must be within 30 seconds)
+        # Validate quote freshness (must be within 60 seconds)
         quote_timestamp = quote.get("t", "")
         if quote_timestamp:
             try:
                 from dateutil import parser as date_parser
                 quote_time = date_parser.parse(quote_timestamp)
                 quote_age = (datetime.now(quote_time.tzinfo) - quote_time).total_seconds()
-                if quote_age > 60:  # More than 60 seconds old
+                if quote_age > 60:
                     logger.warning(f"Quote for {option_symbol} is {quote_age:.0f}s old - may be stale")
             except Exception as e:
                 logger.debug(f"Could not parse quote timestamp: {e}")
         
-        # Use ask price (what we pay to buy)
-        option_price = float(quote.get("ap", 0))
-        if option_price <= 0:
-            logger.error(f"Invalid option price ${option_price} for {option_symbol} - ABORTING")
-            send_telegram_alert(f"❌ Trade aborted: Invalid price for {option_symbol}")
-            return None
-        
-        # Verify option exists and is tradeable
-        bid_price = float(quote.get("bp", 0))
         if bid_price <= 0:
             logger.error(f"No bid for {option_symbol} - option may be illiquid - ABORTING")
             send_telegram_alert(f"❌ Trade aborted: No bid for {option_symbol} (illiquid)")
