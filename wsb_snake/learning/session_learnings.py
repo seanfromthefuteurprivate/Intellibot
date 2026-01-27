@@ -131,6 +131,39 @@ class SessionLearnings:
                 "key_insight": "stops_need_room_to_breathe"
             }
         ))
+        
+        self.add_insight(TradingInsight(
+            category="pattern",
+            lesson="SMALL CAPS NEED CANDLESTICK CONFIRMATION: SLS lost -$130 (both calls and puts). Small caps are choppy. Added 75% min confidence + STRICT candlestick pattern requirement.",
+            weight=1.0,
+            date_learned=today,
+            trade_context={
+                "ticker": "SLS",
+                "total_loss": -130,
+                "call_loss": -80,
+                "put_loss": -50,
+                "fix_applied": "small_cap_strict_mode",
+                "new_threshold": 75,
+                "requires_candlestick": True,
+                "patterns_detected": ["hammer", "engulfing", "harami", "momentum"],
+                "key_insight": "small_caps_choppy_need_strict_confirmation"
+            }
+        ))
+        
+        self.add_insight(TradingInsight(
+            category="winner",
+            lesson="ETFs WORK BETTER: GDX +$150, IWM +$64, QQQ +$44 = +$258 from ETFs. Small caps SLS -$130. STICK TO ETFs for scalping, small caps only on BIG candlestick signals.",
+            weight=1.0,
+            date_learned=today,
+            trade_context={
+                "etf_pnl": 258,
+                "small_cap_pnl": -130,
+                "net_pnl": 128,
+                "winners": ["GDX", "IWM", "QQQ"],
+                "losers": ["SLS"],
+                "key_insight": "etfs_more_reliable_than_small_caps"
+            }
+        ))
     
     def _encode_jan26_session(self):
         """Encode learnings from Jan 26 - LOSING DAY"""

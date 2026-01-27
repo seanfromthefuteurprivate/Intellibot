@@ -95,6 +95,27 @@ class SPYScalper:
     HIGH_CONFIDENCE_AUTO_EXECUTE = 75  # Auto-execute at 75%+ only (raised from 70)
     # =================================================
     
+    # ========== SMALL CAP STRICT MODE ==========
+    # Small caps can rally hard but are also choppy/unpredictable
+    # Require HIGHER confidence + STRICT candlestick confirmation
+    SMALL_CAP_TICKERS = [
+        "THH", "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
+        "POET", "ENPH", "USAR", "PYPL"
+    ]
+    MIN_CONFIDENCE_SMALL_CAP = 75  # 75% minimum for small caps (vs 70% for ETFs)
+    SMALL_CAP_REQUIRE_CANDLESTICK = True  # Must have clear candlestick pattern
+    
+    # Candlestick patterns we trust for small cap rallies
+    BULLISH_CANDLESTICK_PATTERNS = [
+        "hammer", "inverted_hammer", "bullish_engulfing", "morning_star",
+        "three_white_soldiers", "piercing_line", "bullish_harami"
+    ]
+    BEARISH_CANDLESTICK_PATTERNS = [
+        "hanging_man", "shooting_star", "bearish_engulfing", "evening_star",
+        "three_black_crows", "dark_cloud_cover", "bearish_harami"
+    ]
+    # ============================================
+    
     def __init__(self):
         self.symbol = "SPY"
         self.scan_interval = 30  # seconds between scans
@@ -328,12 +349,40 @@ class SPYScalper:
         # 3. Predator Stack must give STRIKE verdict (checked in _get_ai_confirmation)
         
         ai_passed = (not self.REQUIRE_AI_CONFIRMATION) or best_setup.ai_confirmed
-        confidence_passed = final_confidence >= self.MIN_CONFIDENCE_FOR_ALERT
         
-        should_alert = ai_passed and confidence_passed
+        # ========== SMALL CAP STRICT MODE ==========
+        # Small caps require HIGHER confidence + CANDLESTICK confirmation
+        is_small_cap = ticker in self.SMALL_CAP_TICKERS
+        
+        if is_small_cap:
+            # Higher confidence threshold for small caps
+            min_confidence = self.MIN_CONFIDENCE_SMALL_CAP
+            confidence_passed = final_confidence >= min_confidence
+            
+            # Detect candlestick patterns for small caps
+            candlestick_pattern = self._detect_candlestick_pattern(bars)
+            candlestick_passed = candlestick_pattern is not None
+            
+            if candlestick_pattern:
+                log.info(f"🕯️ {ticker} CANDLESTICK: {candlestick_pattern} detected")
+                # Boost confidence if strong candlestick pattern
+                final_confidence += 5
+            else:
+                log.info(f"⚠️ {ticker} SMALL CAP: No clear candlestick pattern - STRICT mode requires confirmation")
+            
+            should_alert = ai_passed and confidence_passed and candlestick_passed
+        else:
+            # Standard ETF/mega-cap rules
+            min_confidence = self.MIN_CONFIDENCE_FOR_ALERT
+            confidence_passed = final_confidence >= min_confidence
+            candlestick_passed = True  # Not required for ETFs
+            candlestick_pattern = None
+            should_alert = ai_passed and confidence_passed
+        # =============================================
         
         if should_alert:
-            log.info(f"🎯 APEX PREDATOR STRIKE on {ticker}: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence")
+            pattern_note = f" [Candlestick: {candlestick_pattern}]" if candlestick_pattern else ""
+            log.info(f"🎯 APEX PREDATOR STRIKE on {ticker}: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence{pattern_note}")
             self._send_entry_alert(best_setup, ticker)
             # Set per-ticker cooldown
             setattr(self, f"cooldown_{ticker}", datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes))
@@ -341,10 +390,116 @@ class SPYScalper:
         else:
             reason = []
             if not confidence_passed:
-                reason.append(f"confidence {final_confidence:.0f}% < {self.MIN_CONFIDENCE_FOR_ALERT}%")
+                reason.append(f"confidence {final_confidence:.0f}% < {min_confidence}%")
             if not ai_passed:
                 reason.append("AI not confirmed")
+            if is_small_cap and not candlestick_passed:
+                reason.append("no candlestick pattern (SMALL CAP STRICT)")
             log.info(f"❌ {ticker} passed on {best_setup.pattern.value}: {', '.join(reason)}")
+    
+    def _detect_candlestick_pattern(self, bars: List[Dict]) -> Optional[str]:
+        """
+        Detect candlestick patterns for small cap strict mode.
+        
+        Analyzes the last 3-5 candles for reversal/continuation patterns
+        that signal high-probability moves in small caps.
+        
+        Returns pattern name or None if no clear pattern.
+        """
+        if len(bars) < 3:
+            return None
+        
+        # Get last 5 candles (or fewer if not available)
+        recent = bars[-5:] if len(bars) >= 5 else bars[-3:]
+        
+        # Helper to get OHLC
+        def get_ohlc(bar):
+            o = bar.get('o') or bar.get('open') or bar.get('Open') or 0
+            h = bar.get('h') or bar.get('high') or bar.get('High') or 0
+            l = bar.get('l') or bar.get('low') or bar.get('Low') or 0
+            c = bar.get('c') or bar.get('close') or bar.get('Close') or 0
+            return o, h, l, c
+        
+        # Current and previous candles
+        curr_o, curr_h, curr_l, curr_c = get_ohlc(recent[-1])
+        prev_o, prev_h, prev_l, prev_c = get_ohlc(recent[-2])
+        
+        if curr_o == 0 or prev_o == 0:
+            return None
+        
+        body = abs(curr_c - curr_o)
+        upper_wick = curr_h - max(curr_c, curr_o)
+        lower_wick = min(curr_c, curr_o) - curr_l
+        range_size = curr_h - curr_l if curr_h > curr_l else 0.01
+        
+        prev_body = abs(prev_c - prev_o)
+        
+        # ========== BULLISH PATTERNS ==========
+        
+        # HAMMER: Small body at top, long lower wick (2x+ body), little upper wick
+        if lower_wick >= body * 2 and upper_wick <= body * 0.5 and curr_c > curr_o:
+            return "hammer"
+        
+        # INVERTED HAMMER: Small body at bottom, long upper wick
+        if upper_wick >= body * 2 and lower_wick <= body * 0.5:
+            return "inverted_hammer"
+        
+        # BULLISH ENGULFING: Current green candle engulfs previous red candle
+        if prev_c < prev_o and curr_c > curr_o:  # Previous red, current green
+            if curr_o <= prev_c and curr_c >= prev_o:  # Current engulfs previous
+                return "bullish_engulfing"
+        
+        # PIERCING LINE: Gap down open, closes above 50% of previous red candle
+        if prev_c < prev_o and curr_c > curr_o:  # Previous red, current green
+            prev_midpoint = (prev_o + prev_c) / 2
+            if curr_o < prev_c and curr_c > prev_midpoint:
+                return "piercing_line"
+        
+        # BULLISH HARAMI: Small green inside previous large red
+        if prev_c < prev_o and curr_c > curr_o:  # Previous red, current green
+            if curr_o > prev_c and curr_c < prev_o and body < prev_body * 0.5:
+                return "bullish_harami"
+        
+        # ========== BEARISH PATTERNS ==========
+        
+        # SHOOTING STAR: Small body at bottom, long upper wick
+        if upper_wick >= body * 2 and lower_wick <= body * 0.5 and curr_c < curr_o:
+            return "shooting_star"
+        
+        # HANGING MAN: Small body at top, long lower wick (like hammer but in uptrend)
+        if lower_wick >= body * 2 and upper_wick <= body * 0.5 and curr_c < curr_o:
+            return "hanging_man"
+        
+        # BEARISH ENGULFING: Current red candle engulfs previous green candle
+        if prev_c > prev_o and curr_c < curr_o:  # Previous green, current red
+            if curr_o >= prev_c and curr_c <= prev_o:  # Current engulfs previous
+                return "bearish_engulfing"
+        
+        # DARK CLOUD COVER: Gap up open, closes below 50% of previous green candle
+        if prev_c > prev_o and curr_c < curr_o:  # Previous green, current red
+            prev_midpoint = (prev_o + prev_c) / 2
+            if curr_o > prev_c and curr_c < prev_midpoint:
+                return "dark_cloud_cover"
+        
+        # BEARISH HARAMI: Small red inside previous large green
+        if prev_c > prev_o and curr_c < curr_o:  # Previous green, current red
+            if curr_o < prev_c and curr_c > prev_o and body < prev_body * 0.5:
+                return "bearish_harami"
+        
+        # ========== MOMENTUM PATTERNS ==========
+        
+        # STRONG MOMENTUM CANDLE: Large body with small wicks (>80% body)
+        if body / range_size > 0.8:
+            if curr_c > curr_o:
+                return "strong_bullish_momentum"
+            else:
+                return "strong_bearish_momentum"
+        
+        # DOJI: Very small body, indicates indecision but can precede reversal
+        if body / range_size < 0.1 and range_size > 0:
+            return "doji"
+        
+        return None
     
     def _calculate_vwap(self, bars: List[Dict]) -> float:
         """Calculate VWAP from bars."""
