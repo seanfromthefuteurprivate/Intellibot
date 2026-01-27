@@ -84,12 +84,12 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    # ========== MARGIN UTILIZATION STRATEGY ==========
-    # $1,000 cash + $3,000 margin = $4,000 total daily exposure
-    # This maximizes profit potential while keeping risk controlled
-    MAX_DAILY_EXPOSURE = 4000  # Total exposure cap: $1k cash + $3k margin
-    MAX_PER_TRADE = 1000  # $1,000 max per individual trade
-    MAX_CONCURRENT_POSITIONS = 4  # Allow 4 x $1k trades = $4k max exposure
+    # ========== AGGRESSIVE MODE - JAN 28 TEST ==========
+    # Testing higher exposure for maximum profit potential
+    # Target: 15%+ daily returns on ETF scalping
+    MAX_DAILY_EXPOSURE = 6000  # $6,000 total (aggressive margin usage)
+    MAX_PER_TRADE = 1500  # $1,500 max per individual trade (bigger positions)
+    MAX_CONCURRENT_POSITIONS = 5  # Allow 5 trades running simultaneously
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
     
