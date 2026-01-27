@@ -170,8 +170,10 @@ Battle-tested wisdom from live trading sessions encoded in `wsb_snake/learning/s
 6. **Book Profits FAST:** Small gains compound. Don't wait for 10%+.
 
 **Current Battle Plan (Jan 27 UPDATED):**
-- Confidence threshold: 70%
-- Daily limit: $1,000 | Current: $950 deployed ($50 remaining)
+- Confidence threshold: 70% (HIGH QUALITY ONLY)
+- NO daily capital cap - unlimited trades allowed
+- Max per trade: $1,000 per individual position
+- Max trades per day: 5 (prevent overtrading)
 - Stop multipliers: 0.8-1.2 ATR (WIDENED from 0.3-0.7 ATR)
 - Target multipliers: 2.5-3.5 ATR (WIDENED from 1.5-2.5 ATR)
 - AVOID 0DTE - prefer 2-4 DTE

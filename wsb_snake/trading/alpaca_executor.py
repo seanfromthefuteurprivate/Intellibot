@@ -84,8 +84,9 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    MAX_DAILY_DEPLOYED = 1000  # $1,000 TOTAL per day (not per trade!)
-    MAX_CONCURRENT_POSITIONS = 3  # Max 3 positions at once (split from $1000)
+    MAX_DAILY_DEPLOYED = 999999  # No daily cap - unlimited capital available
+    MAX_PER_TRADE = 1000  # $1,000 max per individual trade
+    MAX_CONCURRENT_POSITIONS = 5  # Max 5 trades per day
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
     
@@ -102,13 +103,13 @@ class AlpacaExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
-        # Track daily deployed capital
-        self.daily_deployed = 0.0
+        # Track daily trade count (not capital)
+        self.daily_trade_count = 0
         self.daily_reset_date = datetime.utcnow().date()
         
         mode = "LIVE" if self.LIVE_TRADING else "Paper"
         logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
-        logger.info(f"Daily limit: ${self.MAX_DAILY_DEPLOYED} | Max positions: {self.MAX_CONCURRENT_POSITIONS}")
+        logger.info(f"Max per trade: ${self.MAX_PER_TRADE} | Max daily trades: {self.MAX_CONCURRENT_POSITIONS}")
         
         if self.LIVE_TRADING:
             logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
@@ -243,14 +244,22 @@ class AlpacaExecutor:
             logger.debug(f"Option quote error: {e}")
             return {}
     
+    def _reset_daily_count_if_needed(self):
+        """Reset daily trade count if new trading day."""
+        today = datetime.utcnow().date()
+        if today != self.daily_reset_date:
+            self.daily_trade_count = 0
+            self.daily_reset_date = today
+            logger.info(f"Daily trade count reset: 0/{self.MAX_CONCURRENT_POSITIONS} trades today")
+    
     def get_remaining_daily_capital(self) -> float:
-        """Get remaining capital available for today."""
+        """Get remaining capital available for today (legacy - no longer used for limiting)."""
         # Reset daily tracker if new day
         today = datetime.utcnow().date()
         if today != self.daily_reset_date:
-            self.daily_deployed = 0.0
+            self.daily_trade_count = 0
             self.daily_reset_date = today
-            logger.info(f"Daily capital reset: ${self.MAX_DAILY_DEPLOYED} available")
+            logger.info(f"Daily trade count reset: 0/{self.MAX_CONCURRENT_POSITIONS} trades")
         
         # Calculate currently deployed capital from open positions
         positions = self.get_options_positions()
@@ -270,12 +279,12 @@ class AlpacaExecutor:
     ) -> int:
         """
         Calculate number of contracts to buy.
-        Uses remaining daily capital (total $1000/day limit).
+        Uses $1,000 max per trade (not daily cap).
         Options are 100 shares per contract.
         """
         if max_value is None:
-            # Use remaining daily capital, not fixed max
-            max_value = min(self.get_remaining_daily_capital(), self.MAX_DAILY_DEPLOYED)
+            # Use MAX_PER_TRADE for each individual trade
+            max_value = self.MAX_PER_TRADE
         
         if option_price <= 0:
             return 0
@@ -591,25 +600,23 @@ No overnight risk. Fresh start tomorrow!
         if spread_pct > 20:
             logger.warning(f"Wide spread {spread_pct:.1f}% on {option_symbol} - may be illiquid")
         
+        # Check if we've hit daily trade limit (5 trades max)
+        self._reset_daily_count_if_needed()
+        if self.daily_trade_count >= self.MAX_CONCURRENT_POSITIONS:
+            logger.warning(f"Daily trade limit reached ({self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS}) - no more trades today")
+            send_telegram_alert(f"⏸️ Daily limit: {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} trades - pausing until tomorrow")
+            return None
+        
         qty = self.calculate_position_size(option_price)
         estimated_cost = qty * option_price * 100  # Total cost in dollars
         
-        # Check remaining daily capital
-        remaining_capital = self.get_remaining_daily_capital()
-        
-        # HARD CAP: Double-check we're under daily limit
-        if estimated_cost > remaining_capital:
-            logger.error(f"Position size ${estimated_cost:.2f} exceeds ${remaining_capital:.2f} remaining daily capital - ABORTING")
-            send_telegram_alert(f"❌ Trade skipped: ${estimated_cost:.2f} exceeds ${remaining_capital:.2f} remaining today")
-            return None
-        
-        # Skip if position size is 0 (too expensive)
+        # Skip if position size is 0 (option too expensive for $1000 per trade limit)
         if qty == 0:
-            logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive for ${remaining_capital:.2f} remaining")
-            send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} too expensive")
+            logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive (>${self.MAX_PER_TRADE}/trade limit)")
+            send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} exceeds ${self.MAX_PER_TRADE}/trade max")
             return None
         
-        logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (${remaining_capital:.2f} remaining of ${self.MAX_DAILY_DEPLOYED})")
+        logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f} (trade {self.daily_trade_count + 1}/{self.MAX_CONCURRENT_POSITIONS} today)")
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
@@ -667,6 +674,9 @@ Confidence: {confidence:.0f}%
         
         with self._lock:
             self.positions[position_id] = position
+            self.daily_trade_count += 1  # Increment daily trade counter
+        
+        logger.info(f"Trade {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} placed today")
         
         # Confirmation alert after order placed
         confirm_message = f"""✅ **BUY ORDER PLACED**
