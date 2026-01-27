@@ -1,26 +1,4 @@
 [project]
-name = "repl-nix-workspace"
+name = "intellibot"
 version = "0.1.0"
-description = "Add your description here"
 requires-python = ">=3.11"
-dependencies = [
-    "alpaca-trade-api>=3.2.0",
-    "beautifulsoup4>=4.14.3",
-    "finnhub-python>=2.4.26",
-    "langchain>=1.2.7",
-    "langchain-openai>=1.1.7",
-    "langgraph>=1.0.7",
-    "lxml>=6.0.2",
-    "matplotlib>=3.10.8",
-    "mplfinance>=0.12.10b0",
-    "numpy>=2.4.1",
-    "openai>=2.15.0",
-    "pillow>=12.1.0",
-    "praw>=7.8.1",
-    "python-dotenv>=1.2.1",
-    "python-telegram-bot>=22.6",
-    "pytz>=2025.2",
-    "schedule>=1.2.2",
-    "scipy>=1.17.0",
-    "websocket-client>=1.9.0",
-]
