@@ -31,7 +31,7 @@ scipy>=1.11.0
 
 # Charting
 matplotlib>=3.8.0
-mplfinance>=0.12.10
+mplfinance
 
 # Market Data - Additional
 finnhub-python>=2.4.0
