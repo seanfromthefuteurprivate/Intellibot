@@ -87,12 +87,15 @@ class SPYScalper:
     # ========== APEX PREDATOR CONFIGURATION ==========
     # These thresholds ensure we only strike on the highest quality setups
     # HIGH QUALITY MODE: Only trade when confidence is HIGH to avoid losses
+    # SNIPER MODE: Reduces AI calls to prevent API suspension
     PREDATOR_MODE = True  # Enable apex predator behavior
-    MIN_CONFIDENCE_FOR_AI = 60  # Raised - only analyze quality setups
-    MIN_CONFIDENCE_FOR_ALERT = 70  # RAISED to 70% - HIGH QUALITY TRADES ONLY
+    SNIPER_MODE = True  # Only call AI for the BEST setup per scan cycle
+    MIN_CONFIDENCE_FOR_AI = 75  # RAISED TO 75% - Only analyze HIGH quality setups
+    MIN_CONFIDENCE_FOR_ALERT = 78  # RAISED to 78% - SNIPER PRECISION ONLY
     REQUIRE_AI_CONFIRMATION = False  # DISABLED - AI was blocking all trades
     REQUIRE_PREDATOR_STRIKE = False  # DISABLED - Predator Stack was too conservative
-    HIGH_CONFIDENCE_AUTO_EXECUTE = 75  # Auto-execute at 75%+ only (raised from 70)
+    HIGH_CONFIDENCE_AUTO_EXECUTE = 80  # Auto-execute at 80%+ only (raised from 75)
+    MAX_AI_CALLS_PER_HOUR = 30  # Limit AI calls to prevent abuse
     # =================================================
     
     # ========== SMALL CAP STRICT MODE ==========
@@ -248,31 +251,134 @@ class SPYScalper:
             return self._classified_trades_cache or {"available": False}
     
     def _scan_loop(self):
-        """Main scanning loop - runs every 30 seconds during market hours."""
+        """Main scanning loop - runs every 30 seconds during market hours.
+
+        SNIPER MODE: Collects all setups first, then only calls AI for the BEST one.
+        This reduces API calls from potentially 29 per cycle to 1.
+        """
         log.info("SPY Scalper scan loop started")
         log.info(f"Monitoring {len(ZERO_DTE_UNIVERSE)} tickers: {', '.join(ZERO_DTE_UNIVERSE)}")
-        
+        log.info(f"SNIPER MODE: {'ENABLED' if self.SNIPER_MODE else 'DISABLED'} - AI calls limited")
+
         while self.running:
             try:
                 if is_market_open():
-                    # Scan ALL tickers in universe, not just SPY
-                    for ticker in ZERO_DTE_UNIVERSE:
-                        try:
-                            self._run_scan_for_ticker(ticker)
-                        except Exception as te:
-                            log.debug(f"Error scanning {ticker}: {te}")
+                    if self.SNIPER_MODE:
+                        # SNIPER MODE: Collect all setups, only AI analyze the best
+                        self._run_sniper_scan()
+                    else:
+                        # Legacy mode: Scan each ticker individually
+                        for ticker in ZERO_DTE_UNIVERSE:
+                            try:
+                                self._run_scan_for_ticker(ticker)
+                            except Exception as te:
+                                log.debug(f"Error scanning {ticker}: {te}")
                 else:
                     # During off-hours, check less frequently
                     time.sleep(60)
                     continue
-                
+
                 time.sleep(self.scan_interval)
-                
+
             except Exception as e:
                 log.error(f"Scalper scan error: {e}")
                 time.sleep(10)
-        
+
         log.info("Scalper scan loop ended")
+
+    def _run_sniper_scan(self):
+        """SNIPER MODE: Scan all tickers, but only call AI for the single best setup.
+
+        This dramatically reduces API calls while still finding the best trades.
+        """
+        all_setups = []
+
+        # Phase 1: Quick scan all tickers WITHOUT AI
+        for ticker in ZERO_DTE_UNIVERSE:
+            try:
+                setup = self._quick_scan_ticker(ticker)
+                if setup:
+                    all_setups.append((ticker, setup))
+            except Exception as e:
+                log.debug(f"Quick scan error for {ticker}: {e}")
+
+        if not all_setups:
+            log.debug("No setups found this cycle")
+            return
+
+        # Phase 2: Sort by confidence and only AI-analyze the top 1-2
+        all_setups.sort(key=lambda x: x[1].confidence, reverse=True)
+
+        # Only process top setup(s) that meet threshold
+        top_setups = [(t, s) for t, s in all_setups[:2] if s.confidence >= self.MIN_CONFIDENCE_FOR_AI]
+
+        if not top_setups:
+            log.debug(f"Best setup {all_setups[0][0]}@{all_setups[0][1].confidence:.0f}% below threshold ({self.MIN_CONFIDENCE_FOR_AI}%)")
+            return
+
+        log.info(f"🎯 SNIPER: {len(top_setups)} setup(s) qualify for AI analysis (of {len(all_setups)} detected)")
+
+        # Phase 3: AI analyze only the best setup(s)
+        for ticker, setup in top_setups:
+            # Set context for AI
+            self.last_vwap = setup.vwap
+            self.last_price = setup.entry_price
+
+            # Get AI confirmation
+            setup = self._get_ai_confirmation(setup, ticker)
+
+            # Apply learning boosts
+            bars = self.price_cache
+            setup = self._apply_learning_boosts(setup, bars)
+
+            final_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
+
+            # Check if it meets alert threshold
+            if final_confidence >= self.MIN_CONFIDENCE_FOR_ALERT:
+                log.info(f"🎯 SNIPER STRIKE on {ticker}: {setup.pattern.value} @ {final_confidence:.0f}%")
+                self._send_entry_alert(setup, ticker)
+                self.signals_today += 1
+                # Set cooldown
+                setattr(self, f"cooldown_{ticker}", datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes))
+            else:
+                log.info(f"❌ {ticker} {setup.pattern.value} @ {final_confidence:.0f}% below alert threshold")
+
+    def _quick_scan_ticker(self, ticker: str) -> Optional[ScalpSetup]:
+        """Quick scan a ticker WITHOUT AI - just pattern detection.
+
+        Returns the best setup for this ticker, or None.
+        """
+        # Check cooldown
+        cooldown_key = f"cooldown_{ticker}"
+        ticker_cooldown = getattr(self, cooldown_key, None)
+        if ticker_cooldown and datetime.utcnow() < ticker_cooldown:
+            return None
+
+        # Get data
+        data_packet = self.scalp_data.get_scalp_data(ticker)
+        bars = data_packet.bars_1m if data_packet.is_valid else polygon_enhanced.get_intraday_bars(
+            ticker, timespan="minute", multiplier=1, limit=60
+        )
+
+        if not bars or len(bars) < 20:
+            return None
+
+        current_price = data_packet.current_price if data_packet.current_price > 0 else bars[-1].get('c', 0)
+        vwap = self._calculate_vwap(bars)
+
+        # Save for later AI use
+        self.price_cache = bars
+
+        # Detect patterns (NO AI)
+        setups = self._detect_patterns_for_ticker(bars, ticker, current_price, vwap)
+
+        if not setups:
+            return None
+
+        # Return best setup
+        best = max(setups, key=lambda s: s.confidence)
+        log.debug(f"{ticker}: {best.pattern.value} @ {best.confidence:.0f}%")
+        return best
     
     def _run_scan(self):
         """Execute a single scan for SPY (legacy method for compatibility)."""
