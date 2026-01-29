@@ -115,5 +115,6 @@ async def status():
 
 
 if __name__ == "__main__":
-    # Run on port 5000 as required by Replit
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    # Run on port 8080 for Digital Ocean App Platform (or PORT env var)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)

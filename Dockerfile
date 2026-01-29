@@ -27,12 +27,12 @@ COPY . .
 # Create data directory for SQLite database
 RUN mkdir -p /app/wsb_snake_data
 
-# Expose FastAPI port
-EXPOSE 5000
+# Expose FastAPI port (8080 for App Platform)
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the application
 CMD ["python", "main.py"]
