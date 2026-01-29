@@ -1,5 +1,6 @@
 # WSB Snake - Python Dependencies
 # Install: pip install -r requirements.txt
+# Last updated: 2026-01-29 - Force rebuild
 
 # Web Framework
 fastapi>=0.109.0
@@ -9,6 +10,8 @@ uvicorn[standard]>=0.27.0
 openai>=1.10.0
 langchain>=0.1.0
 langchain-openai>=0.0.5
+langchain-core>=0.1.0
+langgraph>=0.0.20
 google-generativeai>=0.3.0
 
 # Trading & Market Data
@@ -24,13 +27,19 @@ websockets>=12.0
 # Data Processing
 pandas>=2.1.0
 numpy>=1.26.0
+scipy>=1.11.0
 
 # Charting
 matplotlib>=3.8.0
+mplfinance>=0.12.10
+
+# Market Data - Additional
+finnhub-python>=2.4.0
 
 # Scheduling & Time
-schedule>=1.2.0
+schedule>=1.2.1
 pytz>=2024.1
+python-dateutil>=2.8.2
 
 # Database
 # Uses SQLite (built-in)
