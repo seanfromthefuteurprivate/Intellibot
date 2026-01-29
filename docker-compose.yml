@@ -1,0 +1,58 @@
+# WSB Snake - Docker Compose Configuration
+# For Digital Ocean deployment with Docker
+
+version: '3.8'
+
+services:
+  wsb-snake:
+    build: .
+    container_name: wsb-snake
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      # Alpaca (Paper Trading)
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_BASE_URL=https://paper-api.alpaca.markets
+
+      # Market Data
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY}
+      - BENZINGA_API_KEY=${BENZINGA_API_KEY}
+
+      # AI Models
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+      # Telegram
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+
+      # Optional: Reddit
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_USER_AGENT=python:wsb-snake:v2.5
+
+      # Timezone
+      - TZ=America/New_York
+    volumes:
+      # Persist database and data
+      - wsb_data:/app/wsb_snake_data
+      - ./wsb_snake.db:/app/wsb_snake.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wsb_data:
+    driver: local
