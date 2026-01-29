@@ -202,7 +202,52 @@
         "spy_new_stop_dollars": 5.6,
         "key_insight": "stops_need_room_to_breathe"
       }
+    },
+    {
+      "category": "critical_fix",
+      "lesson": "JAN 29 MAJOR OVERHAUL: ALL trades losing because of 0DTE THETA DECAY + WRONG SETTINGS. FIXED: Target 12% (was 25%), Stop 8% (was 20%), Max Hold 12min (was 30min). Confidence threshold RAISED to 85% (was 75%). AI CONFIRMATION RE-ENABLED. Underlying ATR stops TIGHTENED to 0.3-0.5 ATR (was 0.8-1.2).",
+      "weight": 1.0,
+      "date_learned": "2026-01-29",
+      "trade_context": {
+        "root_cause": "0DTE theta decay destroying all gains",
+        "old_target_pct": 25,
+        "new_target_pct": 12,
+        "old_stop_pct": 20,
+        "new_stop_pct": 8,
+        "old_max_hold_minutes": 30,
+        "new_max_hold_minutes": 12,
+        "old_confidence_threshold": 75,
+        "new_confidence_threshold": 85,
+        "ai_confirmation": "RE-ENABLED",
+        "key_insight": "quick_in_quick_out_for_0dte"
+      }
+    },
+    {
+      "category": "critical_fix",
+      "lesson": "FUNDAMENTAL TRUTH: 0DTE options lose 30-50% value in 30 minutes even if underlying is FLAT. Wide targets (25%) NEVER get hit before theta kills you. Solution: SMALL QUICK WINS (10-12%) + FAST EXITS (8% stop, 12 min max hold).",
+      "weight": 1.0,
+      "date_learned": "2026-01-29",
+      "trade_context": {
+        "theta_decay_rate": "30-50% per 30 minutes on 0DTE",
+        "old_strategy": "wide_targets_long_holds",
+        "new_strategy": "quick_small_wins",
+        "key_insight": "theta_is_the_enemy"
+      }
+    },
+    {
+      "category": "critical_fix",
+      "lesson": "QUALITY OVER QUANTITY: 25% win rate is DEATH. Problem was taking too many marginal setups. FIXED: Raised confidence from 75% to 85%, require AI confirmation, require stronger order flow (8% sweep vs 5%). Only trade A+ setups.",
+      "weight": 1.0,
+      "date_learned": "2026-01-29",
+      "trade_context": {
+        "old_win_rate": 0.25,
+        "problem": "too_many_marginal_setups",
+        "fix": "higher_thresholds_ai_confirmation",
+        "new_min_confidence": 85,
+        "new_sweep_pct": 8,
+        "key_insight": "fewer_but_better_trades"
+      }
     }
   ],
-  "last_updated": "2026-01-27T18:37:33.519157"
+  "last_updated": "2026-01-29T00:00:00.000000"
 }

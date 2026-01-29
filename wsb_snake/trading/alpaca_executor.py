@@ -16,6 +16,10 @@ import time
 
 from wsb_snake.utils.logger import get_logger
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.trading.risk_governor import (
+    get_risk_governor,
+    TradingEngine,
+)
 
 logger = get_logger(__name__)
 
@@ -58,6 +62,8 @@ class AlpacaPosition:
     alpaca_order_id: Optional[str] = None
     exit_order_id: Optional[str] = None
     exit_reason: Optional[str] = None
+    engine: str = "scalper"  # scalper | momentum | macro – for trim-and-hold
+    trimmed: bool = False  # True after partial exit at +50%
 
 
 class AlpacaExecutor:
@@ -96,7 +102,19 @@ class AlpacaExecutor:
     # ETF Priority - focus on liquid, predictable instruments
     ETF_TICKERS = ['SPY', 'QQQ', 'IWM', 'GLD', 'GDX', 'SLV', 'XLE', 'XLF', 'TLT', 'USO', 'UNG', 'HYG']
     ETF_PRIORITY = True  # Prioritize ETFs for scalping (higher win rate)
-    
+
+    # ========== FIXED SCALP EXIT SETTINGS - JAN 29 ==========
+    # PROBLEM: 0DTE theta decay was killing positions
+    # - Old +25% target rarely hit before theta ate gains
+    # - Old -20% stop too wide, let theta drain positions
+    # - Old 30min hold = death by theta decay
+    #
+    # FIX: Quick in, quick out. Take small wins, cut fast.
+    # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
+    _SCALP_TARGET_PCT_DEFAULT = 1.12   # +12% target (achievable in 5-10 mins)
+    _SCALP_STOP_PCT_DEFAULT = 0.92     # -8% stop (CUT FAST before theta kills)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 12  # 12 MIN MAX - theta decays fast on 0DTE
+
     def __init__(self):
         self.api_key = os.environ.get("ALPACA_API_KEY", "")
         self.api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
@@ -110,13 +128,23 @@ class AlpacaExecutor:
         self.winning_trades = 0
         self.total_pnl = 0.0
         
-        # Track daily exposure (cash + margin utilization)
+        # Track daily exposure and daily PnL (for risk governor kill switch)
         self.daily_exposure_used = 0.0  # Running total of exposure deployed today
+        self.daily_pnl = 0.0  # Realized PnL today; reset each day
         self.daily_trade_count = 0
         self.daily_reset_date = datetime.utcnow().date()
-        
+
+        # Scalper exit levels (tunable via env)
+        _v = os.environ.get("SCALP_TARGET_PCT")
+        self.SCALP_TARGET_PCT = float(_v) if _v is not None else self._SCALP_TARGET_PCT_DEFAULT
+        _v = os.environ.get("SCALP_STOP_PCT")
+        self.SCALP_STOP_PCT = float(_v) if _v is not None else self._SCALP_STOP_PCT_DEFAULT
+        _v = os.environ.get("SCALP_MAX_HOLD_MINUTES")
+        self.SCALP_MAX_HOLD_MINUTES = int(_v) if _v is not None else self._SCALP_MAX_HOLD_MINUTES_DEFAULT
+
         mode = "LIVE" if self.LIVE_TRADING else "Paper"
         logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
+        logger.info(f"Scalper exit: target +{(self.SCALP_TARGET_PCT-1)*100:.0f}% | stop {(self.SCALP_STOP_PCT-1)*100:.0f}% | max hold {self.SCALP_MAX_HOLD_MINUTES}min")
         logger.info(f"Max daily exposure: ${self.MAX_DAILY_EXPOSURE} ($1k cash + $3k margin)")
         logger.info(f"Max per trade: ${self.MAX_PER_TRADE} | Max concurrent: {self.MAX_CONCURRENT_POSITIONS}")
         
@@ -204,8 +232,8 @@ class AlpacaExecutor:
             
             # Set conservative targets/stops for orphaned positions
             # Default: +20% target, -15% stop (standard scalp settings)
-            target_price = entry_price * 1.20
-            stop_loss = entry_price * 0.85
+            target_price = entry_price * self.SCALP_TARGET_PCT
+            stop_loss = entry_price * self.SCALP_STOP_PCT
             
             # Create tracked position
             position_id = f"sync_{option_symbol}_{int(datetime.utcnow().timestamp())}"
@@ -229,7 +257,7 @@ class AlpacaExecutor:
             pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             
             logger.info(f"🔄 SYNCED: {option_symbol} {qty}x @ ${entry_price:.2f} -> ${current_price:.2f} ({pnl_pct:+.1f}%)")
-            logger.info(f"   Target: ${target_price:.2f} (+20%) | Stop: ${stop_loss:.2f} (-15%)")
+            logger.info(f"   Target: ${target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%) | Stop: ${stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)")
             
             synced_count += 1
             
@@ -238,8 +266,8 @@ class AlpacaExecutor:
 {underlying} {trade_type}
 Entry: ${entry_price:.2f}
 Current: ${current_price:.2f} ({pnl_pct:+.1f}%)
-Target: ${target_price:.2f} (+20%)
-Stop: ${stop_loss:.2f} (-15%)
+Target: ${target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop: ${stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 
 _Position picked up from restart - now monitoring_""")
         
@@ -339,11 +367,12 @@ _Position picked up from restart - now monitoring_""")
             return {}
     
     def _reset_daily_count_if_needed(self):
-        """Reset daily trade count and exposure if new trading day."""
+        """Reset daily trade count, exposure, and daily PnL if new trading day."""
         today = datetime.utcnow().date()
         if today != self.daily_reset_date:
             self.daily_trade_count = 0
             self.daily_exposure_used = 0.0  # Reset margin utilization
+            self.daily_pnl = 0.0  # Reset daily PnL for risk governor
             self.daily_reset_date = today
             logger.info(f"Daily reset: 0/{self.MAX_CONCURRENT_POSITIONS} trades, $0/${self.MAX_DAILY_EXPOSURE} exposure")
     
@@ -364,7 +393,7 @@ _Position picked up from restart - now monitoring_""")
             for p in positions
         )
         
-        remaining = self.MAX_DAILY_DEPLOYED - current_deployed
+        remaining = self.MAX_DAILY_EXPOSURE - current_deployed
         return max(0, remaining)
     
     def calculate_position_size(
@@ -505,6 +534,32 @@ No overnight risk. Fresh start tomorrow!
             logger.error(f"Order error: {e}")
             return None
     
+    def sell_option_by_symbol(self, option_symbol: str, qty: int) -> Optional[Dict]:
+        """Sell (reduce) option position by symbol and qty. For partial closes."""
+        if qty <= 0:
+            return None
+        try:
+            order_data = {
+                "symbol": option_symbol,
+                "qty": str(qty),
+                "side": "sell",
+                "type": "market",
+                "time_in_force": "day",
+            }
+            resp = requests.post(
+                f"{self.BASE_URL}/v2/orders",
+                headers=self.headers,
+                json=order_data,
+                timeout=10,
+            )
+            if resp.status_code >= 400:
+                logger.error(f"Partial sell failed {option_symbol} qty={qty}: {resp.status_code} {resp.text}")
+                return None
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Partial sell error {option_symbol}: {e}")
+            return None
+
     def close_position(self, option_symbol: str) -> Optional[Dict]:
         """Close an existing position by selling."""
         try:
@@ -546,7 +601,9 @@ No overnight risk. Fresh start tomorrow!
         target_price: float,
         stop_loss: float,
         confidence: float,
-        pattern: str
+        pattern: str,
+        engine: TradingEngine = TradingEngine.SCALPER,
+        expiry_override: Optional[datetime] = None,
     ) -> Optional[AlpacaPosition]:
         """
         Execute a scalp trade entry.
@@ -554,9 +611,32 @@ No overnight risk. Fresh start tomorrow!
         For 0DTE SPY options:
         - direction='long' -> buy CALLS
         - direction='short' -> buy PUTS (we don't short options, we buy puts)
+        
+        engine: SCALPER (default), MOMENTUM, or MACRO – used for risk governor limits and position sizing.
         """
+        self._reset_daily_count_if_needed()
+        governor = get_risk_governor()
+        open_positions = [p for p in self.positions.values() if p.status in (PositionStatus.OPEN, PositionStatus.PENDING)]
+        open_count = len(open_positions)
+        positions_with_cost = [
+            (p.symbol, p.option_symbol, p.entry_price * p.qty * 100)
+            for p in open_positions
+        ]
+        allowed, reason = governor.can_trade(
+            engine=engine,
+            ticker=underlying,
+            open_positions_count=open_count,
+            positions_with_cost=positions_with_cost,
+            daily_pnl=self.daily_pnl,
+            daily_exposure_used=self.daily_exposure_used,
+        )
+        if not allowed:
+            logger.warning(f"Risk governor blocked trade: {reason}")
+            send_telegram_alert(f"⏸️ Risk governor: {reason}")
+            return None
+
         with self._lock:
-            if len([p for p in self.positions.values() if p.status == PositionStatus.OPEN]) >= self.MAX_CONCURRENT_POSITIONS:
+            if open_count >= self.MAX_CONCURRENT_POSITIONS:
                 logger.warning("Max concurrent positions reached, skipping entry")
                 return None
         
@@ -609,16 +689,18 @@ No overnight risk. Fresh start tomorrow!
         
         logger.info(f"Validated trade: {underlying} {direction} Entry=${entry_price:.2f} Target=${target_price:.2f} Stop=${stop_loss:.2f} R:R={rr_ratio:.2f}")
         
-        # ETFs with daily 0DTE options - import from config or use default
+        # Expiry: override (LEAPS/momentum) or compute
         from wsb_snake.config import DAILY_0DTE_TICKERS
         daily_0dte_tickers = DAILY_0DTE_TICKERS
         
-        # Use Eastern Time for market hours (server may be UTC)
         import pytz
         et = pytz.timezone('US/Eastern')
         now_et = datetime.now(et)
         
-        if underlying in daily_0dte_tickers:
+        if expiry_override is not None:
+            expiry = expiry_override.replace(tzinfo=None) if hasattr(expiry_override, 'replace') else expiry_override
+            logger.info(f"Using expiry override: {expiry.strftime('%Y-%m-%d')} (engine={engine.value})")
+        elif underlying in daily_0dte_tickers:
             # For SPY/QQQ/IWM - use same-day 0DTE or next trading day if after hours
             if now_et.hour >= 16:  # After 4 PM ET
                 expiry = now_et + timedelta(days=1)
@@ -719,14 +801,18 @@ No overnight risk. Fresh start tomorrow!
         if spread_pct > 20:
             logger.warning(f"Wide spread {spread_pct:.1f}% on {option_symbol} - may be illiquid")
         
-        # Check if we've hit daily trade limit
-        self._reset_daily_count_if_needed()
-        if self.daily_trade_count >= self.MAX_CONCURRENT_POSITIONS:
-            logger.warning(f"Daily trade limit reached ({self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS}) - no more trades today")
-            send_telegram_alert(f"⏸️ Daily limit: {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} trades - pausing until tomorrow")
-            return None
-        
-        qty = self.calculate_position_size(option_price)
+        # Position size: risk governor (confidence + vol) or executor fallback
+        buying_power = self.get_buying_power()
+        governor = get_risk_governor()
+        qty = governor.compute_position_size(
+            engine=engine,
+            confidence_pct=confidence,
+            option_price=option_price,
+            buying_power=buying_power if buying_power > 0 else None,
+            volatility_factor=1.0,
+        )
+        if qty <= 0:
+            qty = self.calculate_position_size(option_price)
         estimated_cost = qty * option_price * 100  # Total cost in dollars
         
         # Skip if position size is 0 (option too expensive for $1000 per trade limit)
@@ -793,10 +879,11 @@ Confidence: {confidence:.0f}%
             trade_type=trade_type,
             qty=qty,
             entry_price=option_price,
-            target_price=option_price * 1.20,
-            stop_loss=option_price * 0.85,
+            target_price=option_price * self.SCALP_TARGET_PCT,
+            stop_loss=option_price * self.SCALP_STOP_PCT,
             status=PositionStatus.PENDING,
-            alpaca_order_id=order.get("id")
+            alpaca_order_id=order.get("id"),
+            engine=engine.value,
         )
         
         with self._lock:
@@ -813,8 +900,8 @@ Confidence: {confidence:.0f}%
 Strike: ${strike:.0f} | Exp: {expiry.strftime('%m/%d')}
 Contracts: {qty}
 Est. Entry: ${option_price:.2f}
-Target: ${position.target_price:.2f} (+20%)
-Stop: ${position.stop_loss:.2f} (-15%)
+Target: ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop: ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 
 Order ID: `{order.get('id', 'N/A')[:8]}...`
 Status: PENDING FILL
@@ -858,6 +945,7 @@ Reason: {reason}
         
         self.total_trades += 1
         self.total_pnl += position.pnl
+        self.daily_pnl += position.pnl  # For risk governor kill switch
         if position.pnl > 0:
             self.winning_trades += 1
         
@@ -932,20 +1020,20 @@ Total P&L: ${self.total_pnl:+.2f}
                     
                     # CRITICAL: Verify actual cost is within limits
                     actual_cost = position.entry_price * position.qty * 100
-                    if actual_cost > self.MAX_DAILY_DEPLOYED * 1.5:  # 50% tolerance = EMERGENCY CLOSE
-                        logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_DAILY_DEPLOYED * 1.5}!")
+                    if actual_cost > self.MAX_DAILY_EXPOSURE * 1.5:  # 50% tolerance = EMERGENCY CLOSE
+                        logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_DAILY_EXPOSURE * 1.5}!")
                         send_telegram_alert(f"🚨 EMERGENCY: Position ${actual_cost:.2f} > limit - AUTO-CLOSING!")
                         # Immediately close the oversized position
                         self.close_position(position.option_symbol)
                         position.status = PositionStatus.CLOSED
                         position.exit_reason = "OVERSIZED_POSITION_CLOSED"
                         continue
-                    elif actual_cost > self.MAX_DAILY_DEPLOYED * 0.5:  # Using more than half daily limit = WARNING
-                        logger.warning(f"NOTE: Single trade ${actual_cost:.2f} using >{50}% of daily ${self.MAX_DAILY_DEPLOYED} limit")
+                    elif actual_cost > self.MAX_DAILY_EXPOSURE * 0.5:  # Using more than half daily limit = WARNING
+                        logger.warning(f"NOTE: Single trade ${actual_cost:.2f} using >{50}% of daily ${self.MAX_DAILY_EXPOSURE} limit")
                         send_telegram_alert(f"⚠️ WARNING: Position cost ${actual_cost:.2f} slightly over limit")
                     
-                    position.target_price = position.entry_price * 1.20  # +20% target
-                    position.stop_loss = position.entry_price * 0.85     # -15% stop
+                    position.target_price = position.entry_price * self.SCALP_TARGET_PCT
+                    position.stop_loss = position.entry_price * self.SCALP_STOP_PCT
                     
                     logger.info(f"Order filled: {position.option_symbol} @ ${position.entry_price:.2f}")
                     logger.info(f"  Total Cost: ${actual_cost:.2f} | Target: ${position.target_price:.2f} | Stop: ${position.stop_loss:.2f}")
@@ -957,9 +1045,9 @@ Filled: {position.qty}x @ ${position.entry_price:.2f}
 Total Cost: ${actual_cost:.2f}
 
 **EXIT LEVELS (AUTOMATIC):**
-Target: ${position.target_price:.2f} (+20%)
-Stop: ${position.stop_loss:.2f} (-15%)
-Max Hold: 45 minutes
+Target: ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop: ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
+Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
 """
                     send_telegram_alert(message)
                 
@@ -975,8 +1063,26 @@ Symbol: {position.option_symbol}
 Reason: Order was {order_status}
 """)
     
+    def execute_partial_exit(self, position: AlpacaPosition, fraction: float, current_price: float) -> bool:
+        """Trim-and-hold: close fraction of position (e.g. 0.5 = half). Returns True if done."""
+        sell_qty = max(1, int(position.qty * fraction))
+        if sell_qty >= position.qty:
+            self.execute_exit(position, "TARGET HIT (full trim)", current_price)
+            return True
+        result = self.sell_option_by_symbol(position.option_symbol, sell_qty)
+        if result:
+            position.qty -= sell_qty
+            position.trimmed = True
+            send_telegram_alert(
+                f"✂️ **TRIM** {position.trade_type} {position.symbol} sold {sell_qty} @ ~${current_price:.2f} "
+                f"(+{(current_price/position.entry_price-1)*100:.0f}%) – letting rest run"
+            )
+            logger.info(f"Trimmed {position.option_symbol}: sold {sell_qty}, {position.qty} left")
+            return True
+        return False
+
     def _check_exits(self):
-        """Check open positions for exit conditions."""
+        """Check open positions for exit conditions. Trim-and-hold for momentum/macro."""
         with self._lock:
             for position in list(self.positions.values()):
                 if position.status != PositionStatus.OPEN:
@@ -985,21 +1091,39 @@ Reason: Order was {order_status}
                 quote = self.get_option_quote(position.option_symbol)
                 if not quote:
                     continue
-                
-                current_price = float(quote.get("bp", 0)) or float(quote.get("ap", 0))
+                # Use mid for exit decisions to avoid bid bias (we're long → bid is below ask; using bid alone hits stop too often)
+                bp = float(quote.get("bp", 0))
+                ap = float(quote.get("ap", 0))
+                current_price = (bp + ap) / 2 if (bp > 0 and ap > 0) else (bp or ap)
                 if current_price <= 0:
                     continue
                 
+                pnl_pct = (current_price / position.entry_price - 1) * 100 if position.entry_price else 0
+                
+                # Trim-and-hold: momentum/macro – at +50% trim half, trail rest at +20%
+                if position.engine in ("momentum", "macro"):
+                    if not position.trimmed and pnl_pct >= 50:
+                        self.execute_partial_exit(position, 0.5, current_price)
+                        continue
+                    if position.trimmed and current_price < position.entry_price * (self.SCALP_TARGET_PCT * 0.96):
+                        self.execute_exit(position, "TRAIL STOP", current_price)
+                        continue
+                    # No 45min exit for momentum/macro – hold longer
+                    if current_price >= position.target_price:
+                        self.execute_exit(position, "TARGET HIT 🎯", current_price)
+                    elif current_price <= position.stop_loss:
+                        self.execute_exit(position, "STOP LOSS", current_price)
+                    continue
+                
+                # Scalper: target, stop, or max hold (30 min to limit theta decay losses)
                 if current_price >= position.target_price:
                     self.execute_exit(position, "TARGET HIT 🎯", current_price)
-                
                 elif current_price <= position.stop_loss:
                     self.execute_exit(position, "STOP LOSS", current_price)
-                
                 elif position.entry_time:
                     elapsed = (datetime.now() - position.entry_time).total_seconds() / 60
-                    if elapsed >= 45:
-                        self.execute_exit(position, "TIME DECAY (45min)", current_price)
+                    if elapsed >= self.SCALP_MAX_HOLD_MINUTES:
+                        self.execute_exit(position, f"TIME DECAY ({self.SCALP_MAX_HOLD_MINUTES}min)", current_price)
     
     def get_session_stats(self) -> Dict:
         """Get current session statistics."""
@@ -1011,6 +1135,7 @@ Reason: Order was {order_status}
             "winning_trades": self.winning_trades,
             "win_rate": win_rate,
             "total_pnl": self.total_pnl,
+            "daily_pnl": self.daily_pnl,
             "open_positions": open_positions
         }
 

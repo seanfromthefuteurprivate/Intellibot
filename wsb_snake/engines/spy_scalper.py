@@ -36,7 +36,12 @@ from wsb_snake.learning.session_learnings import session_learnings, battle_plan
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
 from wsb_snake.trading.alpaca_executor import alpaca_executor
-from wsb_snake.config import ZERO_DTE_UNIVERSE
+from wsb_snake.config import ZERO_DTE_UNIVERSE, DAILY_0DTE_TICKERS
+from wsb_snake.utils.sector_strength import is_sector_slighted_down
+from wsb_snake.utils.session_regime import (
+    get_market_regime_info,
+    RegimeType,
+)
 
 log = get_logger(__name__)
 
@@ -84,29 +89,42 @@ class SPYScalper:
     Swoop in, execute, exit smoothly. No waiting for volatility.
     """
     
-    # ========== APEX PREDATOR CONFIGURATION ==========
-    # These thresholds ensure we only strike on the highest quality setups
-    # HIGH QUALITY MODE: Only trade when confidence is HIGH to avoid losses
-    # SNIPER MODE: Reduces AI calls to prevent API suspension
+    # ========== APEX PREDATOR CONFIGURATION - JAN 29 FIX ==========
+    # PROBLEM DIAGNOSED: 25% win rate, 0DTE theta killing all positions
+    #
+    # ROOT CAUSES:
+    # 1. 0DTE theta decay destroys gains even on winning direction
+    # 2. Win rate too low - taking too many marginal setups
+    # 3. Stops too wide, targets unreachable before theta kills
+    #
+    # FIX: QUALITY OVER QUANTITY
+    # - Raise confidence thresholds SIGNIFICANTLY
+    # - Require AI confirmation to filter bad setups
+    # - Only trade A+ setups (85%+ confidence)
     PREDATOR_MODE = True  # Enable apex predator behavior
     SNIPER_MODE = True  # Only call AI for the BEST setup per scan cycle
-    MIN_CONFIDENCE_FOR_AI = 75  # RAISED TO 75% - Only analyze HIGH quality setups
-    MIN_CONFIDENCE_FOR_ALERT = 78  # RAISED to 78% - SNIPER PRECISION ONLY
-    REQUIRE_AI_CONFIRMATION = False  # DISABLED - AI was blocking all trades
-    REQUIRE_PREDATOR_STRIKE = False  # DISABLED - Predator Stack was too conservative
-    HIGH_CONFIDENCE_AUTO_EXECUTE = 80  # Auto-execute at 80%+ only (raised from 75)
+    MIN_CONFIDENCE_FOR_AI = 80  # RAISED TO 80% - Only analyze VERY HIGH quality setups
+    MIN_CONFIDENCE_FOR_ALERT = 85  # RAISED TO 85% - Only trade A+ setups (was 75)
+    MIN_SWEEP_PCT_FOR_FLOW = 8  # RAISED - Require stronger order flow agreement
+    REQUIRE_AI_CONFIRMATION = True  # RE-ENABLED - Filter out bad setups
+    REQUIRE_PREDATOR_STRIKE = False  # Keep disabled - AI confirmation enough
+    HIGH_CONFIDENCE_AUTO_EXECUTE = 90  # Only auto-execute at 90%+ (near perfect setup)
     MAX_AI_CALLS_PER_HOUR = 30  # Limit AI calls to prevent abuse
     # =================================================
     
-    # ========== SMALL CAP STRICT MODE ==========
-    # Small caps can rally hard but are also choppy/unpredictable
-    # Require HIGHER confidence + STRICT candlestick confirmation
+    # ========== SMALL CAP STRICT MODE - JAN 29 FIX ==========
+    # Small caps are CHOPPY and unpredictable - most losses came from small caps
+    # PROBLEM: Small cap 0DTE options = double theta + volatility risk
+    #
+    # FIX: VERY HIGH confidence required for small caps
+    # Prefer EQUITIES over options for small caps (no theta decay!)
     SMALL_CAP_TICKERS = [
         "THH", "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
         "POET", "ENPH", "USAR", "PYPL"
     ]
-    MIN_CONFIDENCE_SMALL_CAP = 75  # 75% minimum for small caps (vs 70% for ETFs)
+    MIN_CONFIDENCE_SMALL_CAP = 88  # RAISED TO 88% for small caps (was 75)
     SMALL_CAP_REQUIRE_CANDLESTICK = True  # Must have clear candlestick pattern
+    SMALL_CAP_PREFER_EQUITY = True  # NEW: Prefer stock over options for small caps
     
     # Candlestick patterns we trust for small cap rallies
     BULLISH_CANDLESTICK_PATTERNS = [
@@ -139,7 +157,7 @@ class SPYScalper:
         # Pattern detection state
         self.active_setup: Optional[ScalpSetup] = None
         self.cooldown_until: Optional[datetime] = None
-        self.trade_cooldown_minutes = 15  # Longer cooldown in predator mode
+        self.trade_cooldown_minutes = 20  # JAN 29 FIX: 20 min cooldown - stop overtrading!
         
         # Statistics
         self.signals_today = 0
@@ -195,15 +213,16 @@ class SPYScalper:
         
         self.running = True
         
-        # Start Alpaca WebSocket for real-time data
+        # Start Alpaca WebSocket for real-time data (UNHINGED: SPY + QQQ + IWM 0DTE)
         if not self._stream_started:
             try:
-                self.alpaca_stream.subscribe([self.symbol], trades=True, quotes=True, bars=True)
+                stream_symbols = list(set([self.symbol] + [t for t in DAILY_0DTE_TICKERS if t in ("SPY", "QQQ", "IWM")]))
+                self.alpaca_stream.subscribe(stream_symbols, trades=True, quotes=True, bars=True)
                 self.alpaca_stream.on_halt(self._on_halt_callback)
                 self.alpaca_stream.on_luld(self._on_luld_callback)
                 self.alpaca_stream.start()
                 self._stream_started = True
-                log.info(f"Started Alpaca real-time stream for {self.symbol}")
+                log.info(f"Started Alpaca real-time stream for {stream_symbols}")
             except Exception as e:
                 log.warning(f"Alpaca stream start failed (will use polling): {e}")
         
@@ -249,6 +268,25 @@ class SPYScalper:
         except Exception as e:
             log.debug(f"Classified trades fetch error: {e}")
             return self._classified_trades_cache or {"available": False}
+    
+    def _flow_agrees_with_setup(self, ticker: str, direction: str) -> bool:
+        """Order flow hard filter: require sweep_direction to agree with setup and sweep_pct >= MIN_SWEEP_PCT."""
+        try:
+            flow = polygon_enhanced.get_classified_trades(ticker, limit=100)
+            if not flow.get("available"):
+                return True  # Allow when no flow data (avoid blocking on API failure)
+            sweep_dir = flow.get("sweep_direction", "NONE")
+            sweep_pct = flow.get("sweep_pct", 0) or 0
+            if sweep_dir == "NONE" or sweep_pct < self.MIN_SWEEP_PCT_FOR_FLOW:
+                return False
+            if direction == "long" and sweep_dir != "BUY":
+                return False
+            if direction == "short" and sweep_dir != "SELL":
+                return False
+            return True
+        except Exception as e:
+            log.debug(f"Flow check error for {ticker}: {e}")
+            return True  # Allow on error to avoid blocking
     
     def _scan_loop(self):
         """Main scanning loop - runs every 30 seconds during market hours.
@@ -333,6 +371,29 @@ class SPYScalper:
 
             final_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
 
+            # Sector slighted down? – skip new scalp (UNHINGED: pause when SPY weak)
+            if is_sector_slighted_down():
+                log.info(f"⏸️ Sector slighted down – skipping scalp on {ticker}")
+                return
+            # Earnings within 2d – skip buy (IV crush risk)
+            earnings_check = finnhub_collector.is_earnings_soon(ticker, days=2)
+            if earnings_check.get("has_earnings"):
+                log.info(f"⏸️ Earnings within 2d – skip buy on {ticker} (IV crush risk)")
+                return
+            # Order flow hard filter: sweep direction must agree with setup
+            if not self._flow_agrees_with_setup(ticker, setup.direction):
+                log.info(f"⏸️ Flow disagrees – skipping scalp on {ticker} (sweep direction or pct)")
+                return
+            # Regime gate: skip or penalize in chop; only allow long in trend_up, short in trend_down
+            regime_info = get_market_regime_info(ticker)
+            if regime_info.get("is_chop"):
+                final_confidence -= regime_info.get("confidence_penalty_in_chop", 10)
+            if setup.direction == "long" and regime_info.get("regime") == RegimeType.TREND_DOWN.value:
+                log.info(f"⏸️ Regime trend_down – skipping long scalp on {ticker}")
+                return
+            if setup.direction == "short" and regime_info.get("regime") == RegimeType.TREND_UP.value:
+                log.info(f"⏸️ Regime trend_up – skipping short scalp on {ticker}")
+                return
             # Check if it meets alert threshold
             if final_confidence >= self.MIN_CONFIDENCE_FOR_ALERT:
                 log.info(f"🎯 SNIPER STRIKE on {ticker}: {setup.pattern.value} @ {final_confidence:.0f}%")
@@ -487,6 +548,28 @@ class SPYScalper:
         # =============================================
         
         if should_alert:
+            if is_sector_slighted_down():
+                log.info(f"⏸️ Sector slighted down – skipping scalp on {ticker}")
+                return
+            earnings_check = finnhub_collector.is_earnings_soon(ticker, days=2)
+            if earnings_check.get("has_earnings"):
+                log.info(f"⏸️ Earnings within 2d – skip buy on {ticker} (IV crush risk)")
+                return
+            if not self._flow_agrees_with_setup(ticker, best_setup.direction):
+                log.info(f"⏸️ Flow disagrees – skipping scalp on {ticker} (sweep direction or pct)")
+                return
+            regime_info = get_market_regime_info(ticker)
+            if regime_info.get("is_chop"):
+                final_confidence -= regime_info.get("confidence_penalty_in_chop", 10)
+            if best_setup.direction == "long" and regime_info.get("regime") == RegimeType.TREND_DOWN.value:
+                log.info(f"⏸️ Regime trend_down – skipping long scalp on {ticker}")
+                return
+            if best_setup.direction == "short" and regime_info.get("regime") == RegimeType.TREND_UP.value:
+                log.info(f"⏸️ Regime trend_up – skipping short scalp on {ticker}")
+                return
+            if final_confidence < self.MIN_CONFIDENCE_FOR_ALERT:
+                log.info(f"⏸️ Confidence after regime penalty {final_confidence:.0f}% below threshold")
+                return
             pattern_note = f" [Candlestick: {candlestick_pattern}]" if candlestick_pattern else ""
             log.info(f"🎯 APEX PREDATOR STRIKE on {ticker}: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence{pattern_note}")
             self._send_entry_alert(best_setup, ticker)
@@ -703,14 +786,15 @@ class SPYScalper:
         # === Pattern Detection ===
         
         # 1. VWAP Bounce (Long)
+        # JAN 29 FIX: Tighter targets/stops for 0DTE - quick in, quick out
         if low <= vwap * 1.001 and price > vwap and prev_close < vwap:
             # Price tested VWAP from below and bounced
             setups.append(ScalpSetup(
                 pattern=ScalpPattern.VWAP_BOUNCE,
                 direction="long",
                 entry_price=price,
-                target_price=price + (atr * 2.5),  # 2.5 ATR target (widened from 1.5)
-                stop_loss=vwap - (atr * 1.0),      # 1.0 ATR Below VWAP (widened from 0.5)
+                target_price=price + (atr * 1.2),  # 1.2 ATR target (TIGHTENED for 0DTE)
+                stop_loss=vwap - (atr * 0.4),      # 0.4 ATR Below VWAP (TIGHTENED - cut fast)
                 confidence=65 + (volume_ratio * 5),
                 vwap=vwap,
                 volume_ratio=volume_ratio,
@@ -719,13 +803,14 @@ class SPYScalper:
             ))
         
         # 2. VWAP Reclaim (Long) - stronger signal
+        # JAN 29 FIX: Tighter stops/targets for 0DTE
         if prev_close < vwap and price > vwap * 1.001 and volume_ratio > 1.3:
             setups.append(ScalpSetup(
                 pattern=ScalpPattern.VWAP_RECLAIM,
                 direction="long",
                 entry_price=price,
-                target_price=price + (atr * 3.0),  # Widened from 2.0
-                stop_loss=vwap - (atr * 0.8),       # Widened from 0.3
+                target_price=price + (atr * 1.5),  # TIGHTENED: 1.5 ATR target
+                stop_loss=vwap - (atr * 0.3),       # TIGHTENED: 0.3 ATR stop
                 confidence=70 + (volume_ratio * 5),
                 vwap=vwap,
                 volume_ratio=volume_ratio,
@@ -734,13 +819,14 @@ class SPYScalper:
             ))
         
         # 3. VWAP Rejection (Short)
+        # JAN 29 FIX: Tighter stops/targets for 0DTE
         if high >= vwap * 0.999 and price < vwap and prev_close > vwap:
             setups.append(ScalpSetup(
                 pattern=ScalpPattern.VWAP_REJECTION,
                 direction="short",
                 entry_price=price,
-                target_price=price - (atr * 2.5),  # Widened from 1.5
-                stop_loss=vwap + (atr * 1.0),      # Widened from 0.5
+                target_price=price - (atr * 1.2),  # TIGHTENED: 1.2 ATR target
+                stop_loss=vwap + (atr * 0.4),      # TIGHTENED: 0.4 ATR stop
                 confidence=65 + (volume_ratio * 5),
                 vwap=vwap,
                 volume_ratio=volume_ratio,
@@ -749,28 +835,30 @@ class SPYScalper:
             ))
         
         # 4. Momentum Surge (Long)
-        if momentum > 0.15 and volume_ratio > 1.5:  # Strong up move with volume
+        # JAN 29 FIX: Require STRONGER momentum + tighter stops
+        if momentum > 0.20 and volume_ratio > 1.8:  # RAISED thresholds
             setups.append(ScalpSetup(
                 pattern=ScalpPattern.MOMENTUM_SURGE,
                 direction="long",
                 entry_price=price,
-                target_price=price + (atr * 3.0),  # Widened from 2.0
-                stop_loss=price - (atr * 1.2),     # Widened from 0.7
+                target_price=price + (atr * 1.5),  # TIGHTENED: 1.5 ATR target
+                stop_loss=price - (atr * 0.5),     # TIGHTENED: 0.5 ATR stop
                 confidence=68 + (momentum * 10) + (volume_ratio * 3),
                 vwap=vwap,
                 volume_ratio=volume_ratio,
                 momentum=momentum,
                 notes=f"Momentum surge +{momentum:.2f}% with volume"
             ))
-        
+
         # 5. Momentum Surge (Short)
-        if momentum < -0.15 and volume_ratio > 1.5:
+        # JAN 29 FIX: Require STRONGER momentum + tighter stops
+        if momentum < -0.20 and volume_ratio > 1.8:  # RAISED thresholds
             setups.append(ScalpSetup(
                 pattern=ScalpPattern.MOMENTUM_SURGE,
                 direction="short",
                 entry_price=price,
-                target_price=price - (atr * 3.0),  # Widened from 2.0
-                stop_loss=price + (atr * 1.2),     # Widened from 0.7
+                target_price=price - (atr * 1.5),  # TIGHTENED: 1.5 ATR target
+                stop_loss=price + (atr * 0.5),     # TIGHTENED: 0.5 ATR stop
                 confidence=68 + (abs(momentum) * 10) + (volume_ratio * 3),
                 vwap=vwap,
                 volume_ratio=volume_ratio,
@@ -779,18 +867,18 @@ class SPYScalper:
             ))
         
         # 6. Breakout - price makes new high of last 30 bars
-        # BUGFIX: Filter out zero/invalid values before taking max
+        # JAN 29 FIX: Tighter stops/targets, require stronger volume
         highs_30 = [b.get('h', 0) for b in bars[-30:-1] if b.get('h', 0) > 0]
-        if highs_30 and price > max(highs_30) and volume_ratio > 1.3:
+        if highs_30 and price > max(highs_30) and volume_ratio > 1.6:  # RAISED volume requirement
             max_high = max(highs_30)
-            # CRITICAL: Ensure stop loss is valid (below entry, positive) - widened to 1% minimum
-            stop = max(max_high - (atr * 0.8), price * 0.990)  # At least 1.0% below entry (widened from 0.5%)
-            if stop > 0 and stop < price:  # Validate stop is sensible
+            # TIGHTENED stop for 0DTE
+            stop = max(max_high - (atr * 0.3), price * 0.996)  # 0.4% stop (tightened)
+            if stop > 0 and stop < price:
                 setups.append(ScalpSetup(
                     pattern=ScalpPattern.BREAKOUT,
                     direction="long",
                     entry_price=price,
-                    target_price=price + (atr * 3.5),  # Widened from 2.5
+                    target_price=price + (atr * 1.5),  # TIGHTENED: 1.5 ATR target
                     stop_loss=stop,
                     confidence=72 + (volume_ratio * 4),
                     vwap=vwap,
@@ -798,20 +886,20 @@ class SPYScalper:
                     momentum=momentum,
                     notes="30-bar high breakout"
                 ))
-        
+
         # 7. Breakdown
-        # BUGFIX: Filter out zero/invalid values before taking min
+        # JAN 29 FIX: Tighter stops/targets, require stronger volume
         lows_30 = [b.get('l', 0) for b in bars[-30:-1] if b.get('l', 0) > 0]
-        if lows_30 and price < min(lows_30) and volume_ratio > 1.3:
+        if lows_30 and price < min(lows_30) and volume_ratio > 1.6:  # RAISED volume requirement
             min_low = min(lows_30)
-            # CRITICAL: Ensure stop loss is valid (above entry for shorts, positive) - widened to 1%
-            stop = min(min_low + (atr * 0.8), price * 1.010)  # At least 1.0% above entry (widened from 0.5%)
-            if stop > 0 and stop > price:  # Validate stop is sensible for short
+            # TIGHTENED stop for 0DTE
+            stop = min(min_low + (atr * 0.3), price * 1.004)  # 0.4% stop (tightened)
+            if stop > 0 and stop > price:
                 setups.append(ScalpSetup(
                     pattern=ScalpPattern.BREAKDOWN,
                     direction="short",
                     entry_price=price,
-                    target_price=price - (atr * 3.5),  # Widened from 2.5
+                    target_price=price - (atr * 1.5),  # TIGHTENED: 1.5 ATR target
                     stop_loss=stop,
                     confidence=72 + (volume_ratio * 4),
                     vwap=vwap,
@@ -821,20 +909,20 @@ class SPYScalper:
                 ))
         
         # 8. Failed Breakdown (Bear Trap - Long)
-        # BUGFIX: Filter out zero/invalid values
+        # JAN 29 FIX: These are high-quality reversal patterns - tighter stops for 0DTE
         lows_10 = [b.get('l', 0) for b in bars[-10:-3] if b.get('l', 0) > 0]
         if lows_10:
             recent_low = min(lows_10)
             prev_low = prev.get('l', 0)
             if prev_low > 0 and prev_low < recent_low and price > recent_low * 1.002:
-                # CRITICAL: Ensure stop is valid - widened to 1% minimum
-                stop = max(prev_low - (atr * 0.6), price * 0.990)  # Widened from 0.2 ATR and 0.5%
+                # TIGHTENED stop for 0DTE quick scalps
+                stop = max(prev_low - (atr * 0.25), price * 0.995)  # 0.5% stop
                 if stop > 0 and stop < price:
                     setups.append(ScalpSetup(
                         pattern=ScalpPattern.FAILED_BREAKDOWN,
                         direction="long",
                         entry_price=price,
-                        target_price=price + (atr * 3.0),  # Widened from 2.0
+                        target_price=price + (atr * 1.5),  # TIGHTENED: 1.5 ATR target
                         stop_loss=stop,
                         confidence=75 + (volume_ratio * 3),
                         vwap=vwap,
@@ -842,22 +930,22 @@ class SPYScalper:
                         momentum=momentum,
                         notes="Bear trap - failed breakdown recovery"
                     ))
-        
+
         # 9. Failed Breakout (Bull Trap - Short)
-        # BUGFIX: Filter out zero/invalid values
+        # JAN 29 FIX: These are high-quality reversal patterns - tighter stops for 0DTE
         highs_10 = [b.get('h', 0) for b in bars[-10:-3] if b.get('h', 0) > 0]
         if highs_10:
             recent_high = max(highs_10)
             prev_high = prev.get('h', 0)
             if prev_high > 0 and prev_high > recent_high and price < recent_high * 0.998:
-                # CRITICAL: Ensure stop is valid for short - widened to 1%
-                stop = min(prev_high + (atr * 0.6), price * 1.010)  # Widened from 0.2 ATR and 0.5%
+                # TIGHTENED stop for 0DTE quick scalps
+                stop = min(prev_high + (atr * 0.25), price * 1.005)  # 0.5% stop
                 if stop > 0 and stop > price:
                     setups.append(ScalpSetup(
                         pattern=ScalpPattern.FAILED_BREAKOUT,
                         direction="short",
                         entry_price=price,
-                        target_price=price - (atr * 3.0),  # Widened from 2.0
+                        target_price=price - (atr * 1.5),  # TIGHTENED: 1.5 ATR target
                         stop_loss=stop,
                         confidence=75 + (volume_ratio * 3),
                         vwap=vwap,
@@ -867,31 +955,32 @@ class SPYScalper:
                     ))
         
         # 10. Squeeze Fire - detect low volatility followed by expansion
+        # JAN 29 FIX: Require STRONGER volatility expansion + tighter params
         volatility_recent = self._calculate_volatility(bars[-5:])
         volatility_older = self._calculate_volatility(bars[-15:-5])
-        
-        if volatility_older > 0 and volatility_recent / volatility_older > 1.5:
-            # Volatility expanding
-            if momentum > 0:
+
+        if volatility_older > 0 and volatility_recent / volatility_older > 2.0:  # RAISED: 2x expansion
+            # Volatility expanding - these can be powerful moves
+            if momentum > 0.1:  # Require minimum momentum
                 setups.append(ScalpSetup(
                     pattern=ScalpPattern.SQUEEZE_FIRE,
                     direction="long",
                     entry_price=price,
-                    target_price=price + (atr * 3.5),  # Widened from 2.5
-                    stop_loss=price - (atr * 1.2),     # Widened from 0.8
+                    target_price=price + (atr * 2.0),  # TIGHTENED: 2.0 ATR (squeeze can run)
+                    stop_loss=price - (atr * 0.5),     # TIGHTENED: 0.5 ATR stop
                     confidence=70 + (momentum * 15),
                     vwap=vwap,
                     volume_ratio=volume_ratio,
                     momentum=momentum,
                     notes="Squeeze fire - volatility expanding bullish"
                 ))
-            elif momentum < 0:
+            elif momentum < -0.1:  # Require minimum momentum
                 setups.append(ScalpSetup(
                     pattern=ScalpPattern.SQUEEZE_FIRE,
                     direction="short",
                     entry_price=price,
-                    target_price=price - (atr * 3.5),  # Widened from 2.5
-                    stop_loss=price + (atr * 1.2),     # Widened from 0.8
+                    target_price=price - (atr * 2.0),  # TIGHTENED: 2.0 ATR
+                    stop_loss=price + (atr * 0.5),     # TIGHTENED: 0.5 ATR stop
                     confidence=70 + (abs(momentum) * 15),
                     vwap=vwap,
                     volume_ratio=volume_ratio,
