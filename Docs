@@ -1,0 +1,3769 @@
+# WSB Snake - Agent Authority Matrix
+
+## Power Limits & Decision Authority
+
+This document defines what each component of the system is authorized to do.
+
+---
+
+## Authority Levels
+
+| Level | Description | Examples |
+|-------|-------------|----------|
+| **L0** | Read-only observation | View prices, check status |
+| **L1** | Alert/notify | Send Telegram messages |
+| **L2** | Recommend action | Suggest trades, flag setups |
+| **L3** | Execute within limits | Place orders up to limits |
+| **L4** | Execute without limits | Emergency close all |
+| **L5** | Configure system | Change thresholds, limits |
+
+---
+
+## Component Authority
+
+### SPY Scalper Engine
+
+| Action | Authority | Limits |
+|--------|-----------|--------|
+| Scan tickers | L0 | All 29 tickers |
+| Detect patterns | L0 | Unlimited |
+| Calculate confidence | L0 | 0-100% |
+| Request AI analysis | L1 | Rate limited |
+| Send alerts | L1 | Must meet 60% threshold |
+| Trigger auto-execute | L2 | Recommends only |
+| Execute trades | L3 | Via Alpaca Executor |
+
+**CANNOT:**
+- Bypass confidence thresholds
+- Execute without AI confirmation (for auto)
+- Override position limits
+
+---
+
+### Predator Stack (AI)
+
+| Action | Authority | Limits |
+|--------|-----------|--------|
+| Analyze charts | L0 | 50 calls/day OpenAI |
+| Analyze news | L0 | 200 calls/day DeepSeek |
+| Return verdict | L2 | STRIKE_CALLS/PUTS/NO_TRADE/ABORT |
+| Adjust confidence | L2 | +/- 25% max |
+
+**CANNOT:**
+- Execute trades directly
+- Exceed daily budget ($5)
+- Bypass rate limits (10/min, 60/hour)
+
+---
+
+### Alpaca Executor
+
+| Action | Authority | Limits |
+|--------|-----------|--------|
+| Check account | L0 | Unlimited |
+| Get positions | L0 | Unlimited |
+| Get quotes | L0 | Rate limited by Alpaca |
+| Place orders | L3 | $1,500/trade, $6,000/day |
+| Monitor positions | L0 | Every 5 seconds |
+| Close positions | L3 | At target/stop/time |
+| Emergency close all | L4 | EOD or manual trigger |
+| Reject oversized | L4 | Auto-close if > 150% limit |
+
+**CANNOT:**
+- Trade real money (paper only)
+- Exceed 5 concurrent positions
+- Hold past 3:55 PM ET
+
+---
+
+### Zero Greed Exit
+
+| Action | Authority | Limits |
+|--------|-----------|--------|
+| Track positions | L0 | Up to 20 positions |
+| Calculate exit levels | L0 | Based on entry |
+| Send exit alerts | L1 | At target/stop/time |
+| Trigger close | L3 | Via Alpaca Executor |
+
+**CANNOT:**
+- Override exit rules
+- Extend hold time
+- Skip stop losses
+
+---
+
+### Telegram Bot
+
+| Action | Authority | Limits |
+|--------|-----------|--------|
+| Send alerts | L1 | Unlimited |
+| Receive commands | L0 | Read only |
+
+**CANNOT:**
+- Execute trades
+- Change configuration
+- Access sensitive data
+
+---
+
+### Learning Modules
+
+| Module | Authority | Limits |
+|--------|-----------|--------|
+| Pattern Memory | L0 | Read patterns, boost confidence +15% max |
+| Time Learning | L0 | Read performance, boost +10% max |
+| Session Learnings | L5 | Update battle plan parameters |
+| Stalking Mode | L1 | Track setups, send alerts |
+
+**CANNOT:**
+- Execute trades directly
+- Override AI decisions
+- Bypass safety limits
+
+---
+
+## Decision Flow Authority
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DECISION AUTHORITY FLOW                       │
+│                                                                  │
+│  Pattern Detected                                                │
+│       │                                                          │
+│       ▼                                                          │
+│  [L0] Calculate base confidence                                  │
+│       │                                                          │
+│       ▼                                                          │
+│  [L0] Apply learning boosts (max +25%)                          │
+│       │                                                          │
+│       ▼                                                          │
+│  [L0] AI Analysis (rate limited)                                │
+│       │                                                          │
+│       ▼                                                          │
+│  [L2] AI returns verdict (+/- 25% confidence)                   │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────┴────┐                                                     │
+│  │ >= 60%? │                                                     │
+│  └────┬────┘                                                     │
+│       │ YES                                                       │
+│       ▼                                                          │
+│  [L1] Send Telegram alert                                        │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────┴────────────────┐                                         │
+│  │ >= 70% AND AI conf? │                                         │
+│  └────┬────────────────┘                                         │
+│       │ YES                                                       │
+│       ▼                                                          │
+│  [L3] Execute trade (within limits)                              │
+│       │                                                          │
+│       ▼                                                          │
+│  [L0] Monitor position (every 5s)                                │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌────┴─────────────────────┐                                    │
+│  │ Target/Stop/Time reached? │                                   │
+│  └────┬─────────────────────┘                                    │
+│       │ YES                                                       │
+│       ▼                                                          │
+│  [L3] Execute exit                                               │
+│       │                                                          │
+│       ▼                                                          │
+│  [L1] Send exit alert                                            │
+│       │                                                          │
+│       ▼                                                          │
+│  [L0] Record outcome for learning                                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Override Authority
+
+### Human Operator (L5)
+
+Can override:
+- All thresholds and limits
+- Stop/close any position
+- Disable auto-execution
+- Restart/stop system
+
+### System (L4)
+
+Can override:
+- Individual trades (emergency close)
+- EOD close (mandatory)
+- Oversized position close
+
+### No One Can Override:
+- Paper trading mode (hardcoded)
+- Maximum position limits (code enforced)
+- Rate limits (API enforced)
+
+---
+
+## Audit Trail
+
+All authority exercises are logged:
+
+```
+2026-01-28 15:30:05 | L1 | spy_scalper | Alert sent: SPY VWAP_RECLAIM 78%
+2026-01-28 15:30:06 | L3 | alpaca_executor | Order placed: SPY260128C00602000 2x
+2026-01-28 15:35:15 | L3 | alpaca_executor | Position closed: TARGET_HIT +$60
+```
+
+# WSB Snake - Architecture Overview
+
+## System Structure
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         MAIN.PY                                  │
+│                    (FastAPI + Orchestrator)                      │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+        ▼                         ▼                         ▼
+┌───────────────┐       ┌─────────────────┐       ┌───────────────┐
+│   COLLECTORS  │       │     ENGINES     │       │   ANALYSIS    │
+│               │       │                 │       │               │
+│ • Polygon     │       │ • SPY Scalper   │       │ • Predator    │
+│ • Alpaca News │──────▶│ • Multi-Day     │◀──────│   Stack (AI)  │
+│ • Finnhub     │       │ • Surge Hunter  │       │ • LangGraph   │
+│ • FRED        │       │ • Institutional │       │ • Charts      │
+└───────────────┘       └────────┬────────┘       └───────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+        ▼                        ▼                        ▼
+┌───────────────┐       ┌─────────────────┐       ┌───────────────┐
+│   LEARNING    │       │    TRADING      │       │ NOTIFICATIONS │
+│               │       │                 │       │               │
+│ • Pattern     │       │ • Alpaca        │       │ • Telegram    │
+│   Memory      │◀──────│   Executor      │──────▶│   Alerts      │
+│ • Time Learn  │       │ • Zero Greed    │       │               │
+│ • Stalking    │       │   Exit          │       │               │
+└───────────────┘       └─────────────────┘       └───────────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │    DATABASE     │
+                        │    (SQLite)     │
+                        └─────────────────┘
+```
+
+---
+
+## Component Breakdown
+
+### 1. Entry Point (`main.py`)
+- FastAPI web server on port 5000
+- Launches WSB Snake orchestrator as background task
+- Health check endpoint at `/health`
+
+### 2. Collectors (Data Input)
+| Collector | Data Source | Purpose |
+|-----------|-------------|---------|
+| `polygon_enhanced.py` | Polygon.io | OHLCV, options chains, GEX |
+| `alpaca_news.py` | Alpaca | News headlines for sentiment |
+| `alpaca_stream.py` | Alpaca WebSocket | Real-time trades/quotes |
+| `finnhub_collector.py` | Finnhub | Earnings, analyst ratings |
+| `scalp_data_collector.py` | Polygon | 5s/15s/1m bars for scalping |
+| `fred_collector.py` | FRED | Macro economic data |
+
+### 3. Engines (Signal Detection)
+| Engine | Focus | Output |
+|--------|-------|--------|
+| `spy_scalper.py` | 0DTE scalp patterns | ScalpSetup objects |
+| `multi_day_scanner.py` | 3-21 DTE swings | MultiDaySetup objects |
+| `surge_hunter.py` | Power hour breakouts | SurgeSetup objects |
+| `institutional_scalper.py` | Prop desk rules | Risk parameters |
+
+### 4. Analysis (AI Confirmation)
+| Component | Model | Purpose |
+|-----------|-------|---------|
+| `predator_stack.py` | GPT-4o + DeepSeek | Chart vision + news sentiment |
+| `scalp_langgraph.py` | LangGraph workflow | 5-node pattern validation |
+| `chart_generator.py` | Matplotlib | Candlestick chart generation |
+| `scalp_chart_generator.py` | Enhanced charts | VWAP bands, volume profile |
+
+### 5. Learning (Adaptive Improvement)
+| Module | Tracks | Improves |
+|--------|--------|----------|
+| `pattern_memory.py` | Successful patterns | Pattern confidence |
+| `time_learning.py` | Hourly performance | Time-of-day weights |
+| `stalking_mode.py` | Approaching triggers | Multi-day tracking |
+| `session_learnings.py` | Daily lessons | Stop widths, thresholds |
+
+### 6. Trading (Execution)
+| Component | Function |
+|-----------|----------|
+| `alpaca_executor.py` | Order placement, position monitoring |
+| `zero_greed_exit.py` | Mechanical exit enforcement |
+
+### 7. Notifications
+| Component | Channel |
+|-----------|---------|
+| `telegram_bot.py` | Telegram alerts |
+
+---
+
+## Data Flow
+
+```
+1. COLLECT
+   Polygon → 5s/15s/1m bars
+   Alpaca → News headlines
+   Finnhub → Earnings/ratings
+
+2. DETECT
+   SPY Scalper scans 29 tickers
+   Pattern matched (VWAP reclaim, breakout, etc.)
+   Base confidence calculated
+
+3. ENHANCE
+   Pattern Memory boost (+5-15%)
+   Time-of-Day boost (+5-10%)
+   Session learnings applied
+
+4. CONFIRM (PARALLEL)
+   OpenAI GPT-4o → Chart vision analysis
+   DeepSeek → News sentiment analysis
+   Combined verdict calculated
+
+5. EXECUTE
+   If confidence >= 70% AND AI confirmed:
+   → Alpaca order placed
+   → Telegram alert sent
+   → Position monitored
+
+6. EXIT
+   Every 5 seconds check:
+   → Target +20%? SELL
+   → Stop -15%? SELL
+   → 45 min elapsed? SELL
+   → 3:55 PM? CLOSE ALL
+
+7. LEARN
+   Record outcome
+   Update pattern memory
+   Adjust time weights
+```
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|------------|
+| Runtime | Python 3.11 |
+| Web Framework | FastAPI + Uvicorn |
+| Database | SQLite |
+| AI/ML | OpenAI GPT-4o, DeepSeek, LangGraph |
+| Trading | Alpaca Paper Trading API |
+| Data | Polygon.io, Finnhub, FRED |
+| Notifications | Telegram Bot API |
+| Scheduling | Python threading |
+| Timezone | pytz (US/Eastern) |
+
+---
+
+## Key Design Decisions
+
+1. **Parallel AI Analysis**: OpenAI (vision) and DeepSeek (text) run simultaneously for speed
+2. **Sniper Mode**: AI only fires on high-value setups to save costs
+3. **Rate Limiting**: 10 calls/min, 60/hour to prevent API bans
+4. **Mechanical Exits**: Zero Greed Exit removes emotional trading
+5. **Learning System**: Pattern memory adapts to what works
+6. **SQLite**: Simple, file-based persistence for signals/outcomes
+
+# WSB Snake - Audit and Compliance
+
+## Regulatory and Audit Framework
+
+This document covers audit trails, compliance considerations, and record-keeping requirements.
+
+---
+
+## Audit Trail
+
+### What is Logged
+
+| Category | Events Logged |
+|----------|---------------|
+| **Trading** | Order placed, filled, cancelled, rejected |
+| **Positions** | Open, close, P&L calculation |
+| **Signals** | Detection, confidence, AI verdict |
+| **AI** | API calls, responses, costs |
+| **System** | Start, stop, errors, config changes |
+| **Access** | API calls, authentication |
+
+### Log Format
+
+```
+TIMESTAMP | LEVEL | COMPONENT | EVENT | DETAILS
+2026-01-28 15:30:05 | INFO | alpaca_executor | ORDER_PLACED | SPY260128C00602000 2x @ $1.50
+2026-01-28 15:30:06 | INFO | alpaca_executor | ORDER_FILLED | SPY260128C00602000 @ $1.51
+2026-01-28 15:45:15 | INFO | alpaca_executor | POSITION_CLOSED | TARGET_HIT +$60
+```
+
+### Log Retention
+
+| Log Type | Retention Period | Storage |
+|----------|------------------|---------|
+| Trading logs | 7 years | SQLite + file |
+| Signal logs | 1 year | SQLite |
+| System logs | 90 days | File |
+| AI call logs | 30 days | File |
+
+---
+
+## Compliance Considerations
+
+### Paper Trading Disclaimer
+
+**IMPORTANT:** WSB Snake operates in **paper trading mode only**.
+
+- No real money is at risk
+- Uses Alpaca paper trading API
+- Simulated executions only
+- For educational and research purposes
+
+### If Moving to Live Trading
+
+Future live trading would require:
+
+1. **Pattern Day Trader (PDT) Rules**
+   - $25,000 minimum equity
+   - 3+ day trades in 5 days = PDT designation
+
+2. **Broker Compliance**
+   - Alpaca terms of service
+   - Automated trading approval
+   - API usage limits
+
+3. **Tax Reporting**
+   - Form 1099-B for realized gains/losses
+   - Wash sale tracking
+   - Cost basis records
+
+4. **Record Keeping**
+   - 3-year minimum for tax records
+   - 6-year recommended for audits
+
+---
+
+## Data Protection
+
+### Sensitive Data Handling
+
+| Data Type | Protection | Storage |
+|-----------|------------|---------|
+| API Keys | Replit Secrets | Encrypted |
+| Account Data | Not persisted | Memory only |
+| Trade History | Local SQLite | File |
+| Position Data | Local SQLite | File |
+
+### Access Control
+
+- API keys never logged
+- Account balances not persisted
+- No personal data collected
+- No third-party data sharing
+
+---
+
+## Audit Reports
+
+### Daily Trade Report
+
+Generated at end of each trading day:
+
+```
+═══════════════════════════════════════════════════════
+            DAILY TRADE REPORT - 2026-01-28
+═══════════════════════════════════════════════════════
+
+SESSION SUMMARY
+├─ Market Hours: 9:30 AM - 4:00 PM ET
+├─ System Uptime: 100%
+├─ Signals Generated: 15
+└─ Trades Executed: 5
+
+PERFORMANCE
+├─ Winning Trades: 3 (60%)
+├─ Losing Trades: 2 (40%)
+├─ Total P&L: +$125.00
+├─ Largest Win: +$85.00 (SPY CALLS)
+└─ Largest Loss: -$45.00 (QQQ PUTS)
+
+AI USAGE
+├─ OpenAI Calls: 12
+├─ DeepSeek Calls: 15
+├─ Total Cost: $0.48
+└─ Confirmations: 8 (67%)
+
+POSITIONS
+├─ Opened: 5
+├─ Closed at Target: 3
+├─ Closed at Stop: 1
+├─ Closed at Time: 1
+└─ EOD Forced: 0
+
+═══════════════════════════════════════════════════════
+```
+
+### Weekly Compliance Report
+
+```
+═══════════════════════════════════════════════════════
+          WEEKLY COMPLIANCE REPORT - W05 2026
+═══════════════════════════════════════════════════════
+
+TRADING ACTIVITY
+├─ Trading Days: 5
+├─ Total Trades: 23
+├─ Day Trades: 23 (all 0DTE)
+└─ Pattern Day Trader: N/A (paper trading)
+
+RISK LIMITS
+├─ Max Single Trade: $1,487 (limit: $1,500) ✅
+├─ Max Daily Exposure: $5,230 (limit: $6,000) ✅
+├─ Max Concurrent: 4 (limit: 5) ✅
+└─ EOD Close Compliance: 100% ✅
+
+SYSTEM HEALTH
+├─ Uptime: 99.8%
+├─ API Errors: 3 (0.02%)
+├─ Missed Signals: 0
+└─ Emergency Stops: 0
+
+AUDIT ITEMS
+├─ Config Changes: 2
+├─ Manual Overrides: 0
+└─ Anomalies: 0
+
+═══════════════════════════════════════════════════════
+```
+
+---
+
+## Compliance Checklist
+
+### Daily Checks
+
+- [ ] All positions closed by EOD
+- [ ] No limit breaches
+- [ ] All trades logged
+- [ ] AI costs within budget
+- [ ] No error accumulation
+
+### Weekly Checks
+
+- [ ] Review win/loss ratio
+- [ ] Check system logs for anomalies
+- [ ] Verify database integrity
+- [ ] Review configuration changes
+- [ ] Check API key expiration
+
+### Monthly Checks
+
+- [ ] Performance review
+- [ ] Cost analysis
+- [ ] Log rotation/cleanup
+- [ ] Database backup verification
+- [ ] Strategy effectiveness review
+
+---
+
+## Incident Reporting
+
+### Incident Categories
+
+| Severity | Description | Response Time |
+|----------|-------------|---------------|
+| P1 - Critical | Trading halted, data loss | Immediate |
+| P2 - High | Position stuck, wrong execution | < 1 hour |
+| P3 - Medium | Delayed alerts, AI failures | < 4 hours |
+| P4 - Low | Minor logging issues | < 24 hours |
+
+### Incident Report Template
+
+```markdown
+## Incident Report
+
+**Date:** 2026-01-28
+**Time:** 15:30:05 ET
+**Severity:** P2
+**Status:** Resolved
+
+### Description
+Position failed to close at target price.
+
+### Impact
+- Missed $30 profit opportunity
+- Position held 5 minutes longer than expected
+
+### Root Cause
+API timeout on Alpaca close order.
+
+### Resolution
+1. Order retried successfully
+2. Timeout increased from 5s to 10s
+
+### Prevention
+- Added retry logic for close orders
+- Monitoring for timeout patterns
+```
+
+---
+
+## Regulatory References
+
+### Relevant Regulations
+
+| Regulation | Applicability |
+|------------|---------------|
+| SEC Rule 15c3-5 | Market access controls |
+| FINRA Rule 3110 | Supervision requirements |
+| Reg SHO | Short sale rules |
+| Reg NMS | Order routing |
+
+**Note:** Paper trading is exempt from most regulations, but understanding them prepares for live trading.
+
+### Best Practices Followed
+
+1. **Record Keeping:** All trades logged with timestamps
+2. **Risk Controls:** Hard limits on position sizes
+3. **Audit Trail:** Complete history of actions
+4. **Transparency:** Clear documentation
+5. **Testing:** Simulated environment only
+
+---
+
+## Contact for Compliance Questions
+
+For questions about compliance or audit:
+1. Review this documentation
+2. Check system logs
+3. Contact system operator
+
+# WSB Snake - BFF API Contract
+
+## Backend-for-Frontend API Specification
+
+This document defines the API contract between the WSB Snake backend and any frontend clients.
+
+---
+
+## Base URL
+
+```
+Development: http://localhost:5000
+Production: https://wsb-snake.replit.app
+```
+
+---
+
+## Authentication
+
+Currently no authentication required (internal use only).
+
+Future: Add API key header `X-API-Key: <key>`
+
+---
+
+## Endpoints
+
+### 1. Health Check
+
+```http
+GET /health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-01-28T16:30:00-05:00",
+  "market_open": true,
+  "session": "power_hour"
+}
+```
+
+---
+
+### 2. System Status
+
+```http
+GET /api/status
+```
+
+**Response:**
+```json
+{
+  "running": true,
+  "market_open": true,
+  "eastern_time": "2026-01-28T16:30:00-05:00",
+  "session_type": "power_hour",
+  "open_positions": 2,
+  "signals_today": 5,
+  "entries_today": 3,
+  "ai_budget": {
+    "daily_budget": 5.0,
+    "spent_today": 1.25,
+    "remaining": 3.75,
+    "openai_calls_today": 15,
+    "openai_calls_max": 50
+  }
+}
+```
+
+---
+
+### 3. Account Info
+
+```http
+GET /api/account
+```
+
+**Response:**
+```json
+{
+  "equity": 98693.95,
+  "buying_power": 394775.80,
+  "cash": 98693.95,
+  "portfolio_value": 98693.95,
+  "account_status": "ACTIVE",
+  "trading_blocked": false,
+  "pattern_day_trader": true
+}
+```
+
+---
+
+### 4. Open Positions
+
+```http
+GET /api/positions
+```
+
+**Response:**
+```json
+{
+  "positions": [
+    {
+      "symbol": "SPY",
+      "option_symbol": "SPY260128C00602000",
+      "trade_type": "CALLS",
+      "qty": 2,
+      "entry_price": 1.50,
+      "current_price": 1.65,
+      "target_price": 1.80,
+      "stop_loss": 1.27,
+      "pnl": 30.00,
+      "pnl_pct": 10.0,
+      "entry_time": "2026-01-28T15:30:00-05:00",
+      "status": "OPEN"
+    }
+  ],
+  "total_pnl": 30.00
+}
+```
+
+---
+
+### 5. Recent Signals
+
+```http
+GET /api/signals?limit=10
+```
+
+**Query Parameters:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| limit | int | 10 | Max signals to return |
+| ticker | string | null | Filter by ticker |
+| pattern | string | null | Filter by pattern |
+
+**Response:**
+```json
+{
+  "signals": [
+    {
+      "id": 123,
+      "ticker": "SPY",
+      "pattern": "vwap_reclaim",
+      "direction": "long",
+      "entry_price": 602.50,
+      "target_price": 603.10,
+      "stop_loss": 601.90,
+      "confidence": 78,
+      "ai_confirmed": true,
+      "detected_at": "2026-01-28T15:25:00-05:00",
+      "alerted_at": "2026-01-28T15:25:05-05:00"
+    }
+  ]
+}
+```
+
+---
+
+### 6. Session Statistics
+
+```http
+GET /api/stats
+```
+
+**Response:**
+```json
+{
+  "today": {
+    "total_trades": 5,
+    "winning_trades": 3,
+    "losing_trades": 2,
+    "win_rate": 60.0,
+    "total_pnl": 125.00,
+    "avg_pnl_per_trade": 25.00,
+    "largest_win": 85.00,
+    "largest_loss": -45.00
+  },
+  "all_time": {
+    "total_trades": 47,
+    "win_rate": 55.3,
+    "total_pnl": 1250.00
+  }
+}
+```
+
+---
+
+### 7. Stalked Setups
+
+```http
+GET /api/stalking
+```
+
+**Response:**
+```json
+{
+  "setups": [
+    {
+      "id": "spy_vwap_1706470800",
+      "symbol": "SPY",
+      "setup_type": "0DTE_vwap_reclaim",
+      "trigger_price": 600.00,
+      "current_price": 599.50,
+      "distance_pct": 0.08,
+      "urgency": "HOT",
+      "expires_at": "2026-01-28T18:00:00-05:00",
+      "entry_price": 600.00,
+      "target_price": 601.00,
+      "stop_loss": 599.50
+    }
+  ]
+}
+```
+
+---
+
+### 8. Close Position (Manual)
+
+```http
+POST /api/positions/close
+```
+
+**Request Body:**
+```json
+{
+  "option_symbol": "SPY260128C00602000"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Position closed successfully",
+  "exit_price": 1.75,
+  "pnl": 50.00
+}
+```
+
+---
+
+### 9. Close All Positions (Emergency)
+
+```http
+POST /api/positions/close-all
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "positions_closed": 3,
+  "total_pnl": 85.00
+}
+```
+
+---
+
+### 10. Update Configuration
+
+```http
+PATCH /api/config
+```
+
+**Request Body:**
+```json
+{
+  "min_confidence_for_alert": 60,
+  "high_confidence_auto_execute": 70,
+  "max_per_trade": 1500,
+  "max_daily_exposure": 6000
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "config": {
+    "min_confidence_for_alert": 60,
+    "high_confidence_auto_execute": 70,
+    "max_per_trade": 1500,
+    "max_daily_exposure": 6000
+  }
+}
+```
+
+---
+
+## WebSocket API
+
+### Real-time Updates
+
+```
+WS /ws/updates
+```
+
+**Message Types:**
+
+1. **Signal Detected**
+```json
+{
+  "type": "signal",
+  "data": {
+    "ticker": "SPY",
+    "pattern": "vwap_reclaim",
+    "confidence": 78,
+    "direction": "long"
+  }
+}
+```
+
+2. **Trade Executed**
+```json
+{
+  "type": "trade_executed",
+  "data": {
+    "ticker": "SPY",
+    "option_symbol": "SPY260128C00602000",
+    "direction": "long",
+    "entry_price": 1.50
+  }
+}
+```
+
+3. **Position Update**
+```json
+{
+  "type": "position_update",
+  "data": {
+    "option_symbol": "SPY260128C00602000",
+    "current_price": 1.65,
+    "pnl": 30.00,
+    "pnl_pct": 10.0
+  }
+}
+```
+
+4. **Position Closed**
+```json
+{
+  "type": "position_closed",
+  "data": {
+    "option_symbol": "SPY260128C00602000",
+    "exit_price": 1.80,
+    "pnl": 60.00,
+    "reason": "TARGET_HIT"
+  }
+}
+```
+
+---
+
+## Error Responses
+
+All errors follow this format:
+
+```json
+{
+  "error": true,
+  "code": "POSITION_NOT_FOUND",
+  "message": "No position found with symbol SPY260128C00602000"
+}
+```
+
+### Error Codes
+
+| Code | HTTP Status | Description |
+|------|-------------|-------------|
+| MARKET_CLOSED | 400 | Market is not open |
+| INVALID_SYMBOL | 400 | Invalid option symbol |
+| POSITION_NOT_FOUND | 404 | Position does not exist |
+| MAX_POSITIONS | 429 | Maximum concurrent positions reached |
+| DAILY_LIMIT_EXCEEDED | 429 | Daily exposure limit reached |
+| INTERNAL_ERROR | 500 | Unexpected server error |
+
+---
+
+## Rate Limits
+
+| Endpoint | Limit |
+|----------|-------|
+| GET endpoints | 60/minute |
+| POST endpoints | 10/minute |
+| WebSocket | 1 connection per client |
+
+# WSB Snake - ClawBot Ingestion Guide
+
+## Data Ingestion Architecture
+
+This guide covers how data flows into WSB Snake from external sources.
+
+---
+
+## Data Sources Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    EXTERNAL DATA SOURCES                         │
+│                                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
+│  │ Polygon  │  │  Alpaca  │  │ Finnhub  │  │   FRED   │        │
+│  │   .io    │  │   News   │  │          │  │          │        │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘        │
+│       │             │             │             │                │
+│       ▼             ▼             ▼             ▼                │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    COLLECTORS LAYER                      │    │
+│  │                                                          │    │
+│  │  polygon_enhanced.py  │  alpaca_news.py  │  finnhub.py  │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    DATA NORMALIZATION                    │    │
+│  │                                                          │    │
+│  │  ScalpDataPacket  │  NewsArticle  │  EarningsData       │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                      ENGINES                             │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 1. Polygon.io Integration
+
+### Collector: `polygon_enhanced.py`
+
+**Data Types:**
+| Type | Endpoint | Frequency |
+|------|----------|-----------|
+| Bars (5s) | `/v2/aggs/ticker/{ticker}/range/5/second` | Real-time |
+| Bars (15s) | `/v2/aggs/ticker/{ticker}/range/15/second` | Real-time |
+| Bars (1m) | `/v2/aggs/ticker/{ticker}/range/1/minute` | Real-time |
+| Bars (5m) | `/v2/aggs/ticker/{ticker}/range/5/minute` | Real-time |
+| NBBO Quotes | `/v3/quotes/{ticker}` | On demand |
+| Options Chain | `/v3/reference/options/contracts` | On demand |
+| Recent Trades | `/v3/trades/{ticker}` | On demand |
+
+**Authentication:**
+```python
+headers = {
+    "Authorization": f"Bearer {POLYGON_API_KEY}"
+}
+```
+
+**Rate Limits:**
+- Free tier: 5 calls/minute
+- Starter: 100 calls/minute
+- Developer: Unlimited
+
+**Normalized Output:**
+```python
+@dataclass
+class ScalpDataPacket:
+    ticker: str
+    bars_5s: List[Dict]    # Last 30 bars
+    bars_15s: List[Dict]   # Last 20 bars
+    bars_1m: List[Dict]    # Last 60 bars
+    bars_5m: List[Dict]    # Last 12 bars
+    vwap: float
+    volume_ratio: float
+    momentum: float
+    current_price: float
+    bid: float
+    ask: float
+    spread: float
+    timestamp: datetime
+```
+
+---
+
+## 2. Alpaca Integration
+
+### Collector: `alpaca_news.py`
+
+**Data Types:**
+| Type | Endpoint | Frequency |
+|------|----------|-----------|
+| News | `/v1beta1/news` | On demand |
+| Ticker News | `/v1beta1/news?symbols={ticker}` | Per pattern |
+
+**Authentication:**
+```python
+headers = {
+    "APCA-API-KEY-ID": ALPACA_API_KEY,
+    "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
+}
+```
+
+**Rate Limits:**
+- 200 calls/minute
+
+**Normalized Output:**
+```python
+{
+    "headline": "Apple announces new product line",
+    "summary": "Apple Inc unveiled...",
+    "author": "Reuters",
+    "created_at": "2026-01-28T15:30:00Z",
+    "source": "reuters",
+    "symbols": ["AAPL"],
+    "url": "https://..."
+}
+```
+
+### Collector: `alpaca_stream.py` (WebSocket)
+
+**Stream Types:**
+| Stream | Data |
+|--------|------|
+| trades | Real-time trade executions |
+| quotes | Bid/ask updates |
+| bars | Minute bars as they form |
+| news | Breaking news |
+
+**Connection:**
+```python
+wss://stream.data.alpaca.markets/v2/iex
+```
+
+---
+
+## 3. Finnhub Integration
+
+### Collector: `finnhub_collector.py`
+
+**Data Types:**
+| Type | Endpoint | Frequency |
+|------|----------|-----------|
+| Quote | `/quote` | On demand |
+| Company News | `/company-news` | Daily |
+| Earnings Calendar | `/calendar/earnings` | Daily |
+| Recommendation Trends | `/stock/recommendation` | Weekly |
+| Price Targets | `/stock/price-target` | Weekly |
+| Technical Indicators | `/scan/support-resistance` | On demand |
+| Insider Sentiment | `/stock/insider-sentiment` | Weekly |
+
+**Authentication:**
+```python
+params = {"token": FINNHUB_API_KEY}
+```
+
+**Rate Limits:**
+- Free: 60 calls/minute
+- Premium: 300 calls/minute
+
+**Normalized Output:**
+```python
+{
+    "earnings_soon": True,
+    "days_until_earnings": 3,
+    "expected_eps": 1.25,
+    "recommendation": "buy",
+    "recommendation_score": 3.8,  # 1-5 scale
+    "price_target_mean": 185.00,
+    "support_levels": [175.00, 170.00],
+    "resistance_levels": [185.00, 190.00]
+}
+```
+
+---
+
+## 4. FRED Integration
+
+### Collector: `fred_collector.py`
+
+**Data Series:**
+| Series ID | Description |
+|-----------|-------------|
+| DFF | Federal Funds Rate |
+| VIXCLS | VIX Close |
+| T10Y2Y | 10Y-2Y Treasury Spread |
+| UNRATE | Unemployment Rate |
+| CPIAUCSL | CPI All Urban |
+
+**Authentication:**
+```python
+params = {"api_key": FRED_API_KEY}
+```
+
+**Rate Limits:**
+- 120 calls/minute
+
+---
+
+## 5. Data Freshness Requirements
+
+| Data Type | Max Staleness | Refresh Trigger |
+|-----------|---------------|-----------------|
+| Price bars | 5 seconds | Continuous scan |
+| VWAP | 30 seconds | Each scan cycle |
+| News | 5 minutes | On pattern detection |
+| Earnings calendar | 24 hours | Daily pre-market |
+| Macro data | 24 hours | Daily pre-market |
+
+---
+
+## 6. Error Handling
+
+### Retry Strategy
+```python
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 5]  # seconds
+
+for attempt, delay in enumerate(RETRY_DELAYS):
+    try:
+        response = fetch_data()
+        break
+    except RateLimitError:
+        sleep(delay)
+    except APIError as e:
+        log.error(f"API error attempt {attempt}: {e}")
+```
+
+### Fallback Chain
+```
+Primary: Polygon.io bars
+    ↓ (if fails)
+Fallback: Alpaca bars
+    ↓ (if fails)
+Cache: Last known values
+    ↓ (if stale > 5 min)
+Skip: Mark ticker unavailable
+```
+
+---
+
+## 7. Data Validation
+
+All ingested data is validated:
+
+```python
+def validate_bar(bar: Dict) -> bool:
+    required = ['open', 'high', 'low', 'close', 'volume', 'timestamp']
+    
+    # Check required fields
+    if not all(k in bar for k in required):
+        return False
+    
+    # Check price sanity
+    if bar['high'] < bar['low']:
+        return False
+    
+    if bar['close'] < 0 or bar['open'] < 0:
+        return False
+    
+    # Check volume sanity
+    if bar['volume'] < 0:
+        return False
+    
+    return True
+```
+
+---
+
+## 8. Ingestion Metrics
+
+Track ingestion health:
+
+```python
+ingestion_metrics = {
+    "polygon_calls_1m": 45,
+    "polygon_errors_1m": 2,
+    "polygon_latency_avg_ms": 125,
+    
+    "alpaca_calls_1m": 10,
+    "alpaca_errors_1m": 0,
+    
+    "finnhub_calls_1m": 5,
+    "finnhub_errors_1m": 0,
+    
+    "data_freshness_pct": 98.5,
+    "tickers_stale": ["BBBY"]  # If any
+}
+```
+
+---
+
+## 9. Secret Management
+
+All API keys stored in Replit Secrets:
+
+| Secret Name | Service |
+|-------------|---------|
+| `POLYGON_API_KEY` | Polygon.io |
+| `ALPACA_API_KEY` | Alpaca |
+| `ALPACA_SECRET_KEY` | Alpaca |
+| `FINNHUB_API_KEY` | Finnhub |
+| `FRED_API_KEY` | FRED (optional) |
+
+**Access:**
+```python
+import os
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY")
+```
+
+# WSB Snake - Database Schema
+
+## Data Truth Source
+
+All persistent data is stored in SQLite at `wsb_snake_data/wsb_snake.db`.
+
+---
+
+## Tables Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      DATABASE SCHEMA                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  signals ──────────< outcomes                                   │
+│     │                                                            │
+│     │                                                            │
+│  spy_scalp_history                                              │
+│                                                                  │
+│  pattern_memory                                                 │
+│                                                                  │
+│  time_performance                                               │
+│                                                                  │
+│  event_outcomes                                                 │
+│                                                                  │
+│  stalked_setups                                                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Table: signals
+
+Stores every detected signal with full feature set.
+
+```sql
+CREATE TABLE signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    setup_type TEXT NOT NULL,
+    score REAL NOT NULL,
+    tier TEXT NOT NULL,  -- 'A+', 'A', 'B', 'C'
+    
+    -- Market features
+    price REAL,
+    volume INTEGER,
+    change_pct REAL,
+    vwap REAL,
+    range_pct REAL,
+    
+    -- Options features
+    atm_iv REAL,
+    call_put_ratio REAL,
+    top_strike REAL,
+    options_pressure_score REAL,
+    
+    -- Social features
+    social_velocity REAL,
+    sentiment_score REAL,
+    
+    -- Session context
+    session_type TEXT,
+    minutes_to_close REAL,
+    
+    -- Full feature blob (JSON)
+    features_json TEXT,
+    
+    -- Evidence
+    evidence_json TEXT,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_signals_ticker ON signals(ticker);
+CREATE INDEX idx_signals_timestamp ON signals(timestamp);
+CREATE INDEX idx_signals_tier ON signals(tier);
+```
+
+---
+
+## Table: outcomes
+
+Tracks what happened after each signal.
+
+```sql
+CREATE TABLE outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL,
+    
+    -- Price outcomes
+    entry_price REAL,
+    max_price REAL,      -- MFE (max favorable excursion)
+    min_price REAL,      -- MAE (max adverse excursion)
+    exit_price REAL,
+    
+    -- Timing
+    time_to_target_1 INTEGER,   -- seconds to hit target 1
+    time_to_target_2 INTEGER,   -- seconds to hit target 2
+    time_to_stop INTEGER,       -- seconds to hit stop (if any)
+    
+    -- Result
+    hit_target_1 INTEGER DEFAULT 0,
+    hit_target_2 INTEGER DEFAULT 0,
+    hit_stop INTEGER DEFAULT 0,
+    r_multiple REAL,
+    
+    -- Meta
+    outcome_type TEXT,  -- 'win', 'loss', 'scratch', 'timeout'
+    notes TEXT,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (signal_id) REFERENCES signals(id)
+);
+
+CREATE INDEX idx_outcomes_signal ON outcomes(signal_id);
+CREATE INDEX idx_outcomes_type ON outcomes(outcome_type);
+```
+
+---
+
+## Table: spy_scalp_history
+
+Records SPY scalper signals and outcomes.
+
+```sql
+CREATE TABLE spy_scalp_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern TEXT NOT NULL,
+    direction TEXT NOT NULL,  -- 'long' or 'short'
+    entry_price REAL NOT NULL,
+    target_price REAL NOT NULL,
+    stop_loss REAL NOT NULL,
+    confidence REAL NOT NULL,
+    ai_confirmed INTEGER DEFAULT 0,
+    ai_confidence REAL,
+    detected_at TEXT NOT NULL,
+    alerted_at TEXT,
+    
+    -- Outcome (filled later)
+    exit_price REAL,
+    pnl REAL,
+    outcome TEXT,  -- 'win', 'loss', 'timeout'
+    exit_reason TEXT,
+    exited_at TEXT,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_scalp_pattern ON spy_scalp_history(pattern);
+CREATE INDEX idx_scalp_outcome ON spy_scalp_history(outcome);
+```
+
+---
+
+## Table: pattern_memory
+
+Stores successful price action patterns for similarity matching.
+
+```sql
+CREATE TABLE pattern_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern_type TEXT NOT NULL,  -- 'breakout', 'squeeze', 'reversal', 'momentum'
+    
+    -- Price action signature (normalized)
+    price_action_json TEXT NOT NULL,  -- Array of normalized candle data
+    volume_profile_json TEXT NOT NULL, -- Volume signature
+    
+    -- Outcome
+    success INTEGER NOT NULL,  -- 1 = win, 0 = loss
+    profit_pct REAL,
+    
+    -- Context
+    ticker TEXT,
+    session_type TEXT,
+    timestamp TEXT,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_pattern_type ON pattern_memory(pattern_type);
+CREATE INDEX idx_pattern_success ON pattern_memory(success);
+```
+
+---
+
+## Table: time_performance
+
+Tracks performance by hour and session.
+
+```sql
+CREATE TABLE time_performance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hour INTEGER NOT NULL,  -- 0-23
+    day_of_week INTEGER,    -- 0=Monday, 6=Sunday
+    
+    -- Stats
+    total_trades INTEGER DEFAULT 0,
+    winning_trades INTEGER DEFAULT 0,
+    total_pnl REAL DEFAULT 0,
+    avg_pnl REAL DEFAULT 0,
+    
+    -- Calculated
+    win_rate REAL DEFAULT 0,
+    quality_score INTEGER DEFAULT 50,  -- 0-100
+    
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(hour, day_of_week)
+);
+```
+
+---
+
+## Table: event_outcomes
+
+Records market reactions to events (earnings, CPI, FOMC).
+
+```sql
+CREATE TABLE event_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,  -- 'earnings', 'cpi', 'fomc', 'jobs'
+    ticker TEXT,               -- NULL for macro events
+    event_date TEXT NOT NULL,
+    
+    -- Pre-event
+    pre_event_price REAL,
+    pre_event_iv REAL,
+    
+    -- Post-event
+    post_event_price REAL,
+    post_event_iv REAL,
+    move_pct REAL,
+    move_direction TEXT,  -- 'up', 'down', 'flat'
+    
+    -- Expectations
+    expected_move REAL,
+    beat_expectations INTEGER,  -- 1 = beat, 0 = miss, NULL = in-line
+    
+    notes TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_event_type ON event_outcomes(event_type);
+CREATE INDEX idx_event_ticker ON event_outcomes(ticker);
+```
+
+---
+
+## Table: stalked_setups
+
+Tracks setups approaching trigger points.
+
+```sql
+CREATE TABLE stalked_setups (
+    id TEXT PRIMARY KEY,  -- Format: {ticker}_{type}_{timestamp}
+    symbol TEXT NOT NULL,
+    setup_type TEXT NOT NULL,
+    
+    -- Trigger
+    trigger_price REAL NOT NULL,
+    trigger_condition TEXT,
+    
+    -- Trade params
+    entry_price REAL,
+    target_price REAL,
+    stop_loss REAL,
+    direction TEXT,
+    trade_type TEXT,  -- 'CALLS' or 'PUTS'
+    
+    -- Status
+    urgency TEXT DEFAULT 'DORMANT',  -- DORMANT, WATCHING, HEATING, HOT, IMMINENT
+    entry_alerted INTEGER DEFAULT 0,
+    
+    -- Context
+    catalyst TEXT,
+    expected_move REAL,
+    expires_at TEXT,
+    
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_stalk_symbol ON stalked_setups(symbol);
+CREATE INDEX idx_stalk_urgency ON stalked_setups(urgency);
+```
+
+---
+
+## JSON File: session_learnings.json
+
+Battle-tested wisdom stored in `wsb_snake_data/session_learnings.json`.
+
+```json
+{
+  "battle_plan": {
+    "min_confidence_for_alert": 60,
+    "high_confidence_auto_execute": 70,
+    "max_per_trade": 1500,
+    "max_daily_exposure": 6000,
+    "max_concurrent_positions": 5,
+    "stop_atr_multiplier_min": 0.8,
+    "stop_atr_multiplier_max": 1.2,
+    "target_atr_multiplier_min": 2.5,
+    "target_atr_multiplier_max": 3.5,
+    "eod_close_time": "15:55"
+  },
+  "daily_learnings": [
+    {
+      "date": "2026-01-27",
+      "lesson": "Stops too tight at 0.3% ATR - noise triggers. Widened to 0.8-1.2% ATR",
+      "trades": ["AAPL +$35", "QQQ -$62", "SPY -$23"],
+      "net_pnl": -82
+    }
+  ]
+}
+```
+
+---
+
+## Data Retention
+
+| Table | Retention |
+|-------|-----------|
+| signals | 90 days |
+| outcomes | 90 days |
+| spy_scalp_history | 180 days |
+| pattern_memory | 1 year |
+| time_performance | Permanent |
+| event_outcomes | 2 years |
+| stalked_setups | Auto-purge on expiry |
+
+---
+
+## Backup Strategy
+
+```bash
+# Daily backup
+cp wsb_snake_data/wsb_snake.db wsb_snake_data/backups/wsb_snake_$(date +%Y%m%d).db
+
+# Keep last 30 days
+find wsb_snake_data/backups -name "*.db" -mtime +30 -delete
+```
+
+# WSB Snake - End-to-End Flow
+
+## Complete System Behavior
+
+This document traces a complete trade from signal detection to exit.
+
+---
+
+## Phase 1: Market Scan (Every 30 Seconds)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    SPY SCALPER LOOP                      │
+│                                                          │
+│  for ticker in ZERO_DTE_UNIVERSE:  # 29 tickers         │
+│      if cooldown_active(ticker): skip                    │
+│      bars = get_5s_15s_1m_bars(ticker)                  │
+│      patterns = detect_patterns(bars)                    │
+│      if patterns:                                        │
+│          setup = create_scalp_setup(patterns)           │
+│          process_setup(setup)                            │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Tickers Scanned:**
+```
+SPY, QQQ, IWM, AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL,
+AMD, NFLX, COIN, MARA, RIOT, PLTR, SOFI, NIO, BABA, SNAP,
+GME, AMC, BBBY, HOOD, LCID, RIVN, F, UBER, DIS
+```
+
+---
+
+## Phase 2: Pattern Detection
+
+### 2.1 Patterns Detected
+| Pattern | Trigger Condition |
+|---------|-------------------|
+| VWAP Reclaim | Price crosses above VWAP with volume > 1.3x |
+| VWAP Rejection | Price rejects from VWAP with bearish candle |
+| VWAP Bounce | Price bounces off VWAP support |
+| Momentum Surge Long | +0.15% move with volume > 1.5x |
+| Momentum Surge Short | -0.15% move with volume > 1.5x |
+| Breakout | Price > 30-bar high with volume > 1.3x |
+| Breakdown | Price < 30-bar low with volume > 1.3x |
+| Failed Breakout | Breakout fails, traps bulls |
+| Failed Breakdown | Breakdown fails, traps bears |
+| Squeeze Fire | Volatility expansion after compression |
+
+### 2.2 Base Confidence Calculation
+```python
+base_confidence = 60  # Starting point
+
+# Volume boost
+if volume_ratio >= 2.0: base_confidence += 10
+elif volume_ratio >= 1.5: base_confidence += 5
+
+# Momentum boost
+if abs(momentum) >= 0.3: base_confidence += 8
+elif abs(momentum) >= 0.2: base_confidence += 5
+
+# VWAP alignment boost
+if direction == "long" and price > vwap: base_confidence += 5
+if direction == "short" and price < vwap: base_confidence += 5
+```
+
+---
+
+## Phase 3: Learning Boosts
+
+### 3.1 Pattern Memory
+```python
+# Check if this pattern worked before
+similar_patterns = pattern_memory.find_similar(
+    pattern_type=setup.pattern,
+    price_action=recent_bars,
+    volume_profile=volume_data
+)
+
+if similar_patterns:
+    avg_success_rate = calculate_success_rate(similar_patterns)
+    if avg_success_rate > 0.6:
+        setup.pattern_memory_boost = 10
+    elif avg_success_rate > 0.5:
+        setup.pattern_memory_boost = 5
+```
+
+### 3.2 Time-of-Day Learning
+```python
+# Get performance for current hour
+time_performance = time_learning.get_hour_quality(current_hour)
+
+if time_performance.quality_score > 70:
+    setup.time_quality_score = 10
+elif time_performance.quality_score > 50:
+    setup.time_quality_score = 5
+```
+
+---
+
+## Phase 4: AI Analysis (Parallel)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    PARALLEL AI ANALYSIS                       │
+│                                                               │
+│  ┌─────────────────────┐     ┌─────────────────────┐         │
+│  │    OpenAI GPT-4o    │     │      DeepSeek       │         │
+│  │   (Chart Vision)    │     │   (News Sentiment)  │         │
+│  │                     │     │                     │         │
+│  │ Input: Candlestick  │     │ Input: 5 recent     │         │
+│  │        chart image  │     │        news headlines│         │
+│  │                     │     │                     │         │
+│  │ Output:             │     │ Output:             │         │
+│  │ - STRIKE_CALLS      │     │ - CALLS/PUTS/NONE   │         │
+│  │ - STRIKE_PUTS       │     │ - Sentiment score   │         │
+│  │ - NO_TRADE          │     │ - Key catalyst      │         │
+│  │ - ABORT             │     │ - Urgency level     │         │
+│  └──────────┬──────────┘     └──────────┬──────────┘         │
+│             │                           │                     │
+│             └───────────┬───────────────┘                     │
+│                         ▼                                     │
+│              ┌─────────────────────┐                         │
+│              │  COMBINE VERDICTS   │                         │
+│              │                     │                         │
+│              │ Both agree? +15%    │                         │
+│              │ Disagree? -20%      │                         │
+│              │ One neutral? Use    │                         │
+│              │   the other         │                         │
+│              └─────────────────────┘                         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Phase 5: Trade Decision
+
+```python
+# Calculate total confidence
+total_confidence = (
+    setup.confidence +           # Base pattern confidence
+    setup.pattern_memory_boost + # Learning boost
+    setup.time_quality_score     # Time-of-day boost
+)
+
+# Apply AI adjustments
+if ai_confirmed:
+    total_confidence += 10
+else:
+    total_confidence -= 15
+
+if chart_and_news_agree:
+    total_confidence += 10
+
+# Decision gate
+should_alert = total_confidence >= 60
+should_auto_execute = total_confidence >= 70 AND ai_confirmed
+```
+
+---
+
+## Phase 6: Trade Execution
+
+### 6.1 Telegram Alert Sent
+```
+========================================
+🦅 SPY 0DTE SCALP ALERT 🦅
+========================================
+
+📊 Pattern: VWAP_RECLAIM
+BUY CALLS
+
+💰 ENTRY: $602.50
+🎯 TARGET: $603.10
+🛑 STOP: $601.90
+
+📈 R:R = 1:2.0
+💵 Expected Gain: ~25%
+
+📍 VWAP: $602.00
+📊 Volume: 1.8x avg
+🚀 Momentum: +0.18%
+
+✅ AI CONFIRMED
+🎯 Confidence: 78%
+========================================
+```
+
+### 6.2 Alpaca Order Placed
+```python
+if should_auto_execute:
+    alpaca_position = alpaca_executor.execute_scalp_entry(
+        underlying="SPY",
+        direction="long",
+        entry_price=602.50,
+        target_price=603.10,
+        stop_loss=601.90,
+        confidence=78,
+        pattern="vwap_reclaim"
+    )
+    
+    send_telegram_alert("🤖 AUTO-EXECUTED: SPY CALLS @ $602.50")
+```
+
+---
+
+## Phase 7: Position Monitoring
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              MONITOR LOOP (Every 5 Seconds)              │
+│                                                          │
+│  for position in open_positions:                         │
+│      current_price = get_option_quote(position.symbol)  │
+│                                                          │
+│      if current_price >= target_price:                  │
+│          execute_exit(position, "TARGET HIT 🎯")        │
+│                                                          │
+│      elif current_price <= stop_loss:                   │
+│          execute_exit(position, "STOP LOSS")            │
+│                                                          │
+│      elif elapsed_minutes >= 45:                        │
+│          execute_exit(position, "TIME DECAY")           │
+│                                                          │
+│      elif current_time >= 3:55 PM ET:                   │
+│          close_all_0dte_positions()                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Phase 8: Exit Execution
+
+### 8.1 Exit Alert Sent
+```
+🔴 **SELL ORDER SENDING**
+
+**CALLS** SPY
+Contracts: 2
+Entry: $1.50
+Current: $1.80
+Reason: TARGET HIT 🎯
+
+⏳ Closing on Alpaca...
+```
+
+### 8.2 Order Closed
+```python
+result = close_position(position.option_symbol)
+position.exit_price = current_price
+position.pnl = (current_price - entry_price) * qty * 100
+position.status = PositionStatus.CLOSED
+
+send_telegram_alert(f"""
+✅ **POSITION CLOSED**
+{position.trade_type} {position.symbol}
+Entry: ${position.entry_price:.2f}
+Exit: ${position.exit_price:.2f}
+P&L: ${position.pnl:.2f}
+""")
+```
+
+---
+
+## Phase 9: Learning Update
+
+```python
+# Record outcome to database
+record_outcome(
+    signal_id=signal.id,
+    entry_price=entry_price,
+    exit_price=exit_price,
+    pnl=pnl,
+    outcome_type="win" if pnl > 0 else "loss"
+)
+
+# Update pattern memory
+if pnl > 0:
+    pattern_memory.record_success(
+        pattern_type=setup.pattern,
+        confidence=total_confidence,
+        pnl=pnl
+    )
+
+# Update time learning
+time_learning.record_trade(
+    hour=entry_hour,
+    outcome="win" if pnl > 0 else "loss",
+    pnl=pnl
+)
+```
+
+---
+
+## Timing Summary
+
+| Phase | Duration |
+|-------|----------|
+| Market Scan | Every 30 seconds |
+| Pattern Detection | ~100ms per ticker |
+| AI Analysis | 2-5 seconds (parallel) |
+| Order Placement | ~500ms |
+| Position Monitor | Every 5 seconds |
+| Exit Execution | ~500ms |
+| Learning Update | ~50ms |
+
+**Total Signal-to-Trade: ~3-6 seconds**
+
+# WSB Snake - Frontend Architecture
+
+## Current State
+
+WSB Snake is currently a backend-only system with Telegram as the primary UI. This document describes the planned frontend architecture.
+
+---
+
+## Planned Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      FRONTEND ARCHITECTURE                       │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                      REACT SPA                             │  │
+│  │                   (Vite + TypeScript)                      │  │
+│  │                                                            │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
+│  │  │  Dashboard  │  │  Positions  │  │   Signals   │        │  │
+│  │  │    Page     │  │    Page     │  │    Page     │        │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘        │  │
+│  │                                                            │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
+│  │  │   Charts    │  │   Config    │  │   History   │        │  │
+│  │  │    Page     │  │    Page     │  │    Page     │        │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘        │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    STATE MANAGEMENT                        │  │
+│  │                 (TanStack Query + Zustand)                 │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                      API CLIENT                            │  │
+│  │                  (REST + WebSocket)                        │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                   WSB SNAKE BACKEND                        │  │
+│  │                   (FastAPI on :5000)                       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Framework | React 18 | UI components |
+| Build | Vite | Fast dev/build |
+| Language | TypeScript | Type safety |
+| Styling | Tailwind CSS | Utility-first CSS |
+| Components | shadcn/ui | Pre-built components |
+| State | TanStack Query | Server state |
+| State | Zustand | Client state |
+| Routing | Wouter | Lightweight routing |
+| Charts | Recharts | Data visualization |
+| Icons | Lucide React | Icon library |
+
+---
+
+## Page Specifications
+
+### 1. Dashboard Page
+
+**Route:** `/`
+
+**Components:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  HEADER                                                      │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ WSB Snake 🐍 │ Status: Running │ Market: Open │ 3:45 PM ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  STATS CARDS                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
+│  │  P&L     │  │  Win %   │  │  Trades  │  │ Open Pos │     │
+│  │  +$125   │  │   60%    │  │    5     │  │    2     │     │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘     │
+├─────────────────────────────────────────────────────────────┤
+│  OPEN POSITIONS                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ SPY CALLS │ Entry: $1.50 │ Current: $1.65 │ +10% 🟢     ││
+│  │ QQQ PUTS  │ Entry: $2.00 │ Current: $1.85 │ -7.5% 🔴    ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  RECENT SIGNALS                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ 3:40 PM │ AAPL │ VWAP_RECLAIM │ 78% │ AI ✅ │ EXECUTED  ││
+│  │ 3:35 PM │ TSLA │ BREAKOUT     │ 65% │ AI ❌ │ ALERT     ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Data Sources:**
+- `GET /api/stats` - P&L, win rate
+- `GET /api/positions` - Open positions
+- `GET /api/signals?limit=10` - Recent signals
+- `WS /ws/updates` - Real-time updates
+
+---
+
+### 2. Positions Page
+
+**Route:** `/positions`
+
+**Components:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  OPEN POSITIONS TABLE                                        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Ticker │ Type │ Qty │ Entry │ Current │ P&L │ Actions   ││
+│  ├─────────────────────────────────────────────────────────┤│
+│  │ SPY    │CALLS │  2  │ $1.50 │  $1.65  │+$30 │ [Close]   ││
+│  │ QQQ    │PUTS  │  1  │ $2.00 │  $1.85  │-$15 │ [Close]   ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  POSITION DETAILS (on select)                                │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Symbol: SPY260128C00602000                               ││
+│  │ Entry Time: 3:30:05 PM                                   ││
+│  │ Target: $1.80 (+20%)                                     ││
+│  │ Stop: $1.27 (-15%)                                       ││
+│  │ Time Remaining: 12:45                                    ││
+│  │ Pattern: VWAP_RECLAIM                                    ││
+│  │ AI Confidence: 78%                                       ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  QUICK ACTIONS                                               │
+│  [Close Selected] [Close All] [Refresh]                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 3. Signals Page
+
+**Route:** `/signals`
+
+**Components:**
+- Signal history table (paginated)
+- Filter by: ticker, pattern, outcome
+- Signal detail modal
+- Chart preview
+
+---
+
+### 4. Charts Page
+
+**Route:** `/charts`
+
+**Components:**
+- Real-time candlestick chart
+- VWAP overlay
+- Volume profile
+- Signal markers
+- Ticker selector
+
+---
+
+### 5. Config Page
+
+**Route:** `/config`
+
+**Components:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TRADING CONFIGURATION                                       │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Alert Threshold         [====60====]                    ││
+│  │ Auto-Execute Threshold  [====70====]                    ││
+│  │ Max Per Trade           [$1,500]                        ││
+│  │ Max Daily Exposure      [$6,000]                        ││
+│  │ Max Concurrent          [5]                             ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+│  AI CONFIGURATION                                            │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ OpenAI Enabled          [✓]                             ││
+│  │ DeepSeek Enabled        [✓]                             ││
+│  │ Daily AI Budget         [$5.00]                         ││
+│  │ Sniper Mode             [✓]                             ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+│  [Save Configuration]                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Component Library
+
+Using shadcn/ui components:
+
+| Component | Usage |
+|-----------|-------|
+| Card | Stats, position cards |
+| Table | Positions, signals |
+| Button | Actions |
+| Input | Configuration |
+| Slider | Thresholds |
+| Switch | Toggles |
+| Badge | Status indicators |
+| Alert | Notifications |
+| Dialog | Confirmations |
+| Toast | Real-time updates |
+
+---
+
+## State Management
+
+### Server State (TanStack Query)
+
+```typescript
+// Positions query
+const { data: positions } = useQuery({
+  queryKey: ['/api/positions'],
+  refetchInterval: 5000, // Poll every 5s
+});
+
+// Signals query
+const { data: signals } = useQuery({
+  queryKey: ['/api/signals', { limit: 10 }],
+});
+```
+
+### Client State (Zustand)
+
+```typescript
+interface AppState {
+  selectedPosition: string | null;
+  theme: 'light' | 'dark';
+  sidebarOpen: boolean;
+}
+
+const useAppStore = create<AppState>((set) => ({
+  selectedPosition: null,
+  theme: 'dark',
+  sidebarOpen: true,
+  setSelectedPosition: (id) => set({ selectedPosition: id }),
+}));
+```
+
+---
+
+## Real-time Updates
+
+### WebSocket Integration
+
+```typescript
+function useTradeUpdates() {
+  const queryClient = useQueryClient();
+  
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:5000/ws/updates');
+    
+    ws.onmessage = (event) => {
+      const update = JSON.parse(event.data);
+      
+      switch (update.type) {
+        case 'position_update':
+          queryClient.invalidateQueries(['/api/positions']);
+          break;
+        case 'signal':
+          queryClient.invalidateQueries(['/api/signals']);
+          toast({ title: `New signal: ${update.data.ticker}` });
+          break;
+      }
+    };
+    
+    return () => ws.close();
+  }, []);
+}
+```
+
+---
+
+## File Structure
+
+```
+client/
+├── src/
+│   ├── components/
+│   │   ├── ui/           # shadcn components
+│   │   ├── layout/       # Header, Sidebar
+│   │   ├── dashboard/    # Dashboard widgets
+│   │   ├── positions/    # Position components
+│   │   └── charts/       # Chart components
+│   ├── pages/
+│   │   ├── Dashboard.tsx
+│   │   ├── Positions.tsx
+│   │   ├── Signals.tsx
+│   │   ├── Charts.tsx
+│   │   ├── Config.tsx
+│   │   └── History.tsx
+│   ├── hooks/
+│   │   ├── usePositions.ts
+│   │   ├── useSignals.ts
+│   │   └── useWebSocket.ts
+│   ├── lib/
+│   │   ├── api.ts
+│   │   └── queryClient.ts
+│   ├── store/
+│   │   └── appStore.ts
+│   ├── App.tsx
+│   └── main.tsx
+└── index.html
+```
+
+---
+
+## Implementation Status
+
+| Feature | Status |
+|---------|--------|
+| Backend API | ✅ Implemented |
+| Dashboard | 🔲 Planned |
+| Positions | 🔲 Planned |
+| Signals | 🔲 Planned |
+| Charts | 🔲 Planned |
+| Config | 🔲 Planned |
+| WebSocket | 🔲 Planned |
+
+Current UI: **Telegram Bot Only**
+
+# WSB Snake - System Invariants (Safety Rules)
+
+## Critical Safety Invariants
+
+These rules are NEVER violated by the system. They exist to protect capital and ensure safe operation.
+
+---
+
+## 1. Position Size Limits
+
+### INV-001: Maximum Per Trade
+```
+INVARIANT: No single trade exceeds $1,500
+ENFORCED IN: alpaca_executor.py
+CHECK: if position_cost > MAX_PER_TRADE: REJECT
+```
+
+### INV-002: Maximum Daily Exposure
+```
+INVARIANT: Total daily exposure never exceeds $6,000
+ENFORCED IN: alpaca_executor.py
+CHECK: if daily_exposure + new_trade > MAX_DAILY_EXPOSURE: REJECT
+```
+
+### INV-003: Maximum Concurrent Positions
+```
+INVARIANT: Never more than 5 open positions at once
+ENFORCED IN: alpaca_executor.py
+CHECK: if open_positions >= 5: REJECT new trades
+```
+
+---
+
+## 2. Time-Based Safety
+
+### INV-004: 0DTE End-of-Day Close
+```
+INVARIANT: ALL 0DTE positions close by 3:55 PM ET
+ENFORCED IN: alpaca_executor.py
+TRIGGER: 3:55 PM ET → close_all_0dte_positions()
+```
+
+### INV-005: Market Hours Only
+```
+INVARIANT: No trades placed outside 9:30 AM - 4:00 PM ET
+ENFORCED IN: session_regime.py
+CHECK: is_market_open() must be True to trade
+```
+
+### INV-006: Maximum Hold Time
+```
+INVARIANT: No 0DTE position held longer than 45 minutes
+ENFORCED IN: alpaca_executor.py
+CHECK: if elapsed_minutes >= 45: execute_exit("TIME_DECAY")
+```
+
+---
+
+## 3. Exit Enforcement
+
+### INV-007: Target Exit
+```
+INVARIANT: Position exits when +20% target hit
+ENFORCED IN: alpaca_executor._check_exits()
+CHECK: if current_price >= target_price: execute_exit("TARGET_HIT")
+```
+
+### INV-008: Stop Loss Exit
+```
+INVARIANT: Position exits when -15% stop hit
+ENFORCED IN: alpaca_executor._check_exits()
+CHECK: if current_price <= stop_loss: execute_exit("STOP_LOSS")
+```
+
+### INV-009: Zero Greed Protocol
+```
+INVARIANT: No position escapes mechanical exit rules
+ENFORCED IN: zero_greed_exit.py
+PRINCIPLE: Target hit = IMMEDIATE EXIT, no exceptions
+```
+
+---
+
+## 4. AI Safety
+
+### INV-010: Rate Limiting
+```
+INVARIANT: AI API calls limited to prevent abuse
+LIMITS:
+  - 10 calls per minute
+  - 60 calls per hour
+  - 6 second minimum cooldown between calls
+ENFORCED IN: predator_stack.py
+```
+
+### INV-011: Daily Budget Cap
+```
+INVARIANT: AI spending never exceeds $5/day
+ENFORCED IN: predator_stack.py
+CHECK: if daily_spend >= DAILY_BUDGET_USD: skip AI analysis
+```
+
+### INV-012: Sniper Mode
+```
+INVARIANT: OpenAI only fires on high-value setups
+REQUIREMENTS:
+  - Confidence >= 60%
+  - Volume >= 1.5x average
+  - Pattern changed from last check
+ENFORCED IN: predator_stack.py
+```
+
+---
+
+## 5. Execution Safety
+
+### INV-013: AI Confirmation Required for Auto-Execute
+```
+INVARIANT: Auto-trade requires BOTH 70%+ confidence AND AI confirmation
+ENFORCED IN: spy_scalper.py
+CHECK:
+  should_auto_execute = (
+    total_confidence >= 70 AND
+    setup.ai_confirmed == True
+  )
+```
+
+### INV-014: Valid Stop/Target Required
+```
+INVARIANT: No trade without valid stop loss and target
+ENFORCED IN: alpaca_executor.py
+CHECK: if stop_loss <= 0 OR target_price <= 0: REJECT
+```
+
+### INV-015: Paper Trading Mode
+```
+INVARIANT: System operates in paper trading mode only
+ENFORCED IN: alpaca_executor.py
+BASE_URL: https://paper-api.alpaca.markets
+```
+
+---
+
+## 6. Data Integrity
+
+### INV-016: Eastern Time Zone
+```
+INVARIANT: All market time calculations use US/Eastern
+ENFORCED IN: session_regime.py
+IMPLEMENTATION: pytz.timezone('US/Eastern')
+```
+
+### INV-017: Signal Persistence
+```
+INVARIANT: All signals recorded to database
+ENFORCED IN: spy_scalper._record_signal()
+TABLE: spy_scalp_history
+```
+
+### INV-018: Position Tracking
+```
+INVARIANT: All positions synced between Alpaca and local state
+ENFORCED IN: alpaca_executor.sync_positions()
+TRIGGER: On startup and periodically during operation
+```
+
+---
+
+## 7. Notification Safety
+
+### INV-019: Critical Alerts Delivered
+```
+INVARIANT: All trade executions and exits send Telegram alerts
+ENFORCED IN: alpaca_executor.py, spy_scalper.py
+ALERTS:
+  - Entry: "AUTO-EXECUTED: {ticker} {direction}"
+  - Fill: "ORDER FILLED: {details}"
+  - Exit: "TARGET HIT / STOP LOSS / TIME DECAY"
+```
+
+---
+
+## Violation Handling
+
+If any invariant is violated:
+1. Log ERROR with full context
+2. Send Telegram alert
+3. Reject the violating action
+4. Continue safe operation
+
+Example:
+```python
+if actual_cost > MAX_DAILY_EXPOSURE * 1.5:
+    logger.error(f"EMERGENCY: Position ${actual_cost} exceeds limit!")
+    send_telegram_alert("🚨 EMERGENCY: Oversized position - AUTO-CLOSING!")
+    self.close_position(position.option_symbol)
+```
+
+# WSB Snake - LangGraph Agent Roles
+
+## AI Agent Architecture
+
+This document describes the LangGraph-based AI agents used in WSB Snake.
+
+---
+
+## Overview
+
+WSB Snake uses LangGraph for structured AI workflows with multiple specialized nodes.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LANGGRAPH ARCHITECTURE                        │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                   SCALP ANALYZER                           │  │
+│  │                   (5-Node Workflow)                        │  │
+│  │                                                            │  │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │  │
+│  │  │  VWAP   │─▶│Momentum │─▶│  Trap   │─▶│ Entry   │       │  │
+│  │  │Analysis │  │Analysis │  │Detection│  │ Timing  │       │  │
+│  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │  │
+│  │                                              │              │  │
+│  │                                              ▼              │  │
+│  │                                        ┌─────────┐         │  │
+│  │                                        │  Final  │         │  │
+│  │                                        │ Verdict │         │  │
+│  │                                        └─────────┘         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                   PREDATOR STACK                           │  │
+│  │               (Parallel Multi-Model)                       │  │
+│  │                                                            │  │
+│  │  ┌─────────────────────────────────────────────────────┐  │  │
+│  │  │                 PARALLEL EXECUTION                   │  │  │
+│  │  │                                                      │  │  │
+│  │  │  ┌───────────┐              ┌───────────┐           │  │  │
+│  │  │  │  OpenAI   │              │ DeepSeek  │           │  │  │
+│  │  │  │  GPT-4o   │              │   Chat    │           │  │  │
+│  │  │  │ (Vision)  │              │  (Text)   │           │  │  │
+│  │  │  └─────┬─────┘              └─────┬─────┘           │  │  │
+│  │  │        │                          │                  │  │  │
+│  │  │        └──────────┬───────────────┘                  │  │  │
+│  │  │                   ▼                                  │  │  │
+│  │  │            ┌─────────────┐                          │  │  │
+│  │  │            │   Combine   │                          │  │  │
+│  │  │            │   Verdicts  │                          │  │  │
+│  │  │            └─────────────┘                          │  │  │
+│  │  └──────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Agent 1: Scalp Analyzer (LangGraph)
+
+**File:** `wsb_snake/analysis/scalp_langgraph.py`
+
+### Purpose
+Validate 0DTE scalping patterns through a structured 5-node decision workflow.
+
+### Node Roles
+
+#### Node 1: VWAP Analysis
+**Role:** Assess VWAP relationship quality
+
+**Input:**
+- Current price
+- VWAP value
+- Pattern type (reclaim/rejection/bounce)
+- Recent price action
+
+**Output:**
+```python
+{
+    "vwap_quality": "strong" | "moderate" | "weak",
+    "distance_from_vwap_pct": 0.15,
+    "vwap_trending": "up" | "down" | "flat",
+    "recommendation": "proceed" | "caution" | "avoid"
+}
+```
+
+#### Node 2: Momentum Analysis
+**Role:** Confirm momentum supports entry direction
+
+**Input:**
+- Price change percentage
+- Volume ratio
+- Direction (long/short)
+- RSI, MACD values
+
+**Output:**
+```python
+{
+    "momentum_confirmed": True | False,
+    "momentum_strength": "strong" | "moderate" | "weak",
+    "divergence_detected": False,
+    "recommendation": "proceed" | "caution" | "avoid"
+}
+```
+
+#### Node 3: Trap Detection
+**Role:** Identify failed breakout/breakdown opportunities
+
+**Input:**
+- Recent high/low breaks
+- Volume on break
+- Price rejection patterns
+- Trapped buyer/seller zones
+
+**Output:**
+```python
+{
+    "trap_detected": True | False,
+    "trap_type": "bull_trap" | "bear_trap" | None,
+    "trapped_participants": "buyers" | "sellers" | None,
+    "squeeze_potential": "high" | "medium" | "low"
+}
+```
+
+#### Node 4: Entry Timing
+**Role:** Determine optimal entry point
+
+**Input:**
+- Current bid/ask spread
+- Recent candle patterns
+- Session time
+- Time to next resistance/support
+
+**Output:**
+```python
+{
+    "optimal_entry": True | False,
+    "entry_reason": "pullback_complete" | "breakout_confirmed" | etc,
+    "wait_for": "next_candle" | "pullback" | None,
+    "timing_score": 85  # 0-100
+}
+```
+
+#### Node 5: Final Verdict
+**Role:** Synthesize all analyses into actionable decision
+
+**Input:**
+- All previous node outputs
+- Pattern confidence
+- Risk parameters
+
+**Output:**
+```python
+{
+    "verdict": "CALLS" | "PUTS" | "NO_TRADE",
+    "confidence": 78,  # 0-100
+    "entry_price": 602.50,
+    "target_price": 603.10,
+    "stop_loss": 601.90,
+    "reasoning": "Strong VWAP reclaim with momentum confirmation..."
+}
+```
+
+---
+
+## Agent 2: Predator Stack (Multi-Model)
+
+**File:** `wsb_snake/analysis/predator_stack.py`
+
+### Purpose
+Parallel AI analysis using multiple models for speed and accuracy.
+
+### Model Roles
+
+#### OpenAI GPT-4o (Vision)
+**Role:** Candlestick chart pattern analysis
+
+**Capabilities:**
+- Analyze candlestick chart images
+- Identify visual patterns (doji, hammer, engulfing)
+- Assess VWAP band relationships
+- Detect volume profile anomalies
+
+**Input:**
+- Base64 encoded chart image
+- Context string (ticker, pattern, price, VWAP)
+
+**Output:**
+```python
+PredatorAnalysis(
+    verdict="STRIKE_CALLS",
+    confidence=75.0,
+    entry_quality="EXCELLENT",
+    vwap_analysis="Price reclaiming VWAP with volume",
+    delta_analysis="Buyers in control",
+    trap_risk="LOW",
+    timing_score=80,
+    reasoning="Clean VWAP reclaim with momentum...",
+    model_used="gpt-4o"
+)
+```
+
+#### DeepSeek (Text)
+**Role:** News sentiment analysis
+
+**Capabilities:**
+- Analyze news headlines
+- Determine sentiment (bullish/bearish/neutral)
+- Identify trading bias
+- Assess news urgency
+
+**Input:**
+- List of news headlines
+- Ticker symbol
+- Current price
+- Detected pattern
+
+**Output:**
+```python
+{
+    "sentiment": "bullish",
+    "bias": "CALLS",
+    "urgency": "high",
+    "confidence": 70,
+    "key_catalyst": "Apple announces record iPhone sales",
+    "reasoning": "Positive earnings guidance..."
+}
+```
+
+### Verdict Combination Logic
+
+```python
+def combine_verdicts(chart: PredatorAnalysis, news: Dict) -> Dict:
+    """
+    Agreement Scenarios:
+    1. Both CALLS → STRONG_CALLS (+15% confidence)
+    2. Both PUTS → STRONG_PUTS (+15% confidence)
+    3. Disagree → Trust chart, reduce confidence (-20%)
+    4. One neutral → Use the signal
+    5. Both neutral → NO_TRADE
+    """
+```
+
+---
+
+## Agent Communication
+
+### State Management
+
+LangGraph maintains state across nodes:
+
+```python
+class ScalpAnalyzerState(TypedDict):
+    # Input
+    ticker: str
+    pattern: str
+    price: float
+    vwap: float
+    bars: List[Dict]
+    
+    # Node outputs
+    vwap_analysis: Dict
+    momentum_analysis: Dict
+    trap_detection: Dict
+    entry_timing: Dict
+    
+    # Final output
+    verdict: str
+    confidence: float
+    reasoning: str
+```
+
+### Edge Conditions
+
+Nodes can short-circuit based on conditions:
+
+```python
+def should_continue(state: ScalpAnalyzerState) -> str:
+    # If VWAP analysis says avoid, skip to verdict
+    if state["vwap_analysis"]["recommendation"] == "avoid":
+        return "final_verdict"
+    
+    # Otherwise continue to next node
+    return "momentum_analysis"
+```
+
+---
+
+## Prompt Engineering
+
+### System Prompts
+
+#### Chart Analysis (OpenAI)
+```
+You are an expert 0DTE options scalper analyzing candlestick charts.
+Focus on: VWAP relationship, volume profile, price action quality.
+Be DECISIVE - traders need clear signals, not hedged language.
+Always respond in the exact format specified.
+```
+
+#### News Analysis (DeepSeek)
+```
+You are a financial news analyst for 0DTE options trading.
+Analyze headlines for immediate trading impact.
+Be DECISIVE - determine if news supports CALLS, PUTS, or NONE.
+Consider: sentiment, urgency, and direct price impact.
+```
+
+---
+
+## Error Handling
+
+### Fallback Chain
+
+```
+1. OpenAI (Primary for charts)
+   ↓ (if fails)
+2. DeepSeek (Text-only fallback)
+   ↓ (if fails)
+3. Gemini (Suspended - ToS violation)
+   ↓ (if fails)
+4. No AI - Proceed with algorithm only
+```
+
+### Timeout Handling
+
+```python
+async with httpx.AsyncClient(timeout=30.0) as client:
+    try:
+        response = await client.post(url, json=payload)
+    except httpx.TimeoutException:
+        logger.warning("AI timeout - using fallback")
+        return fallback_analysis()
+```
+
+---
+
+## Performance Metrics
+
+| Metric | Target | Current |
+|--------|--------|---------|
+| OpenAI latency | < 3s | ~2.5s |
+| DeepSeek latency | < 2s | ~1.5s |
+| Parallel total | < 3s | ~2.5s |
+| Accuracy | > 60% | TBD |
+| Daily cost | < $5 | ~$1.50 |
+
+# WSB Snake - N8N Workflow Catalog
+
+## Automation Workflows
+
+This document catalogs potential N8N workflows for extending WSB Snake functionality.
+
+---
+
+## Overview
+
+N8N can be used to:
+- Extend notification channels
+- Create data pipelines
+- Build custom dashboards
+- Integrate with external services
+
+---
+
+## Workflow 1: Multi-Channel Alert Distribution
+
+**Purpose:** Distribute alerts beyond Telegram
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Telegram   │────▶│    N8N      │────▶│   Discord   │
+│   Webhook   │     │   Router    │     │   Webhook   │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                           │
+                           ├────────────▶ Slack
+                           │
+                           ├────────────▶ Email
+                           │
+                           └────────────▶ SMS (Twilio)
+```
+
+**Trigger:** Webhook from WSB Snake
+**Nodes:**
+1. Webhook trigger
+2. JSON parser
+3. Router (by alert type)
+4. Discord HTTP Request
+5. Slack HTTP Request
+6. Email node
+7. Twilio SMS node
+
+---
+
+## Workflow 2: Daily Performance Report
+
+**Purpose:** Generate and send daily trading summary
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│  Fetch DB   │────▶│  Generate   │
+│  4:30 PM ET │     │   Stats     │     │   Report    │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │    Send     │
+                                        │   Report    │
+                                        └─────────────┘
+```
+
+**Schedule:** Daily at 4:30 PM ET
+**Nodes:**
+1. Cron trigger
+2. HTTP Request to `/api/stats`
+3. HTML template generator
+4. Email send
+5. Archive to Google Sheets
+
+---
+
+## Workflow 3: Economic Calendar Monitor
+
+**Purpose:** Alert before major economic events
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│   Fetch     │────▶│   Filter    │
+│  8:00 AM ET │     │  Calendar   │     │  High Impact│
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   Alert     │
+                                        │  30m before │
+                                        └─────────────┘
+```
+
+**Schedule:** Daily at 8:00 AM ET
+**Nodes:**
+1. Cron trigger
+2. Finnhub economic calendar fetch
+3. Filter for CPI, FOMC, Jobs reports
+4. Schedule alert 30 minutes before
+5. Telegram notification
+
+---
+
+## Workflow 4: Position Sync Backup
+
+**Purpose:** Backup position data to external storage
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│   Fetch     │────▶│   Write     │
+│  Every 5m   │     │  Positions  │     │  to Sheet   │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+**Schedule:** Every 5 minutes during market hours
+**Nodes:**
+1. Cron trigger with market hours filter
+2. HTTP Request to `/api/positions`
+3. Google Sheets append row
+
+---
+
+## Workflow 5: Error Alert Escalation
+
+**Purpose:** Escalate critical errors
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Webhook   │────▶│   Check     │────▶│   PagerDuty │
+│   Error     │     │  Severity   │     │    Alert    │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                           │
+                           └──────────▶ Log to Airtable
+```
+
+**Trigger:** Webhook on error
+**Nodes:**
+1. Webhook trigger
+2. Severity router (INFO/WARN/ERROR/CRITICAL)
+3. PagerDuty integration (CRITICAL only)
+4. Airtable logging (all errors)
+
+---
+
+## Workflow 6: Weekly Learning Summary
+
+**Purpose:** Summarize learning module insights
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│  Query DB   │────▶│  Generate   │
+│  Sunday 6PM │     │  Learnings  │     │   Summary   │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │ OpenAI      │
+                                        │ Summarize   │
+                                        └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   Email     │
+                                        │   Report    │
+                                        └─────────────┘
+```
+
+**Schedule:** Sunday 6:00 PM ET
+**Nodes:**
+1. Cron trigger
+2. SQLite query for week's patterns
+3. OpenAI summarization
+4. Email report
+
+---
+
+## Workflow 7: Unusual Volume Scanner
+
+**Purpose:** Alert on unusual volume spikes
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│   Finviz    │────▶│   Filter    │
+│  Every 15m  │     │   Scrape    │     │   > 3x Vol  │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │  Telegram   │
+                                        │   Alert     │
+                                        └─────────────┘
+```
+
+**Schedule:** Every 15 minutes
+**Nodes:**
+1. Cron trigger
+2. HTTP Request to Finviz
+3. HTML parser
+4. Volume filter (> 3x average)
+5. Telegram notification
+
+---
+
+## Workflow 8: Options Flow Monitor
+
+**Purpose:** Track unusual options activity
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Cron      │────▶│  Barchart   │────▶│   Filter    │
+│  Every 30m  │     │   Scrape    │     │   Sweeps    │
+└─────────────┘     └─────────────┘     └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   Match     │
+                                        │  Universe   │
+                                        └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   Alert     │
+                                        └─────────────┘
+```
+
+**Schedule:** Every 30 minutes
+**Nodes:**
+1. Cron trigger
+2. HTTP Request to Barchart
+3. Filter for sweeps > $1M
+4. Match against ticker universe
+5. Telegram alert
+
+---
+
+## Implementation Notes
+
+### Webhook Configuration
+
+WSB Snake can trigger N8N webhooks by adding to notification code:
+
+```python
+import requests
+
+def trigger_n8n_workflow(workflow_url: str, data: dict):
+    try:
+        requests.post(workflow_url, json=data, timeout=5)
+    except Exception as e:
+        logger.warning(f"N8N trigger failed: {e}")
+```
+
+### Authentication
+
+For secure N8N webhook calls:
+1. Generate webhook token in N8N
+2. Store in Replit Secrets as `N8N_WEBHOOK_TOKEN`
+3. Include in header: `X-N8N-Token: {token}`
+
+### Rate Limiting
+
+Respect N8N instance limits:
+- Free: 5 executions/minute
+- Pro: 50 executions/minute
+
+---
+
+## Deployment Options
+
+| Option | Pros | Cons |
+|--------|------|------|
+| N8N Cloud | Managed, reliable | Cost |
+| Self-hosted | Free, customizable | Maintenance |
+| Replit integration | Same platform | Resource sharing |
+
+# WSB Snake - Product Requirements Document (PRD)
+
+## Executive Summary
+
+WSB Snake is an autonomous 0DTE options scalping engine that combines algorithmic pattern detection with AI-powered confirmation to execute paper trades on Alpaca. The system targets 15-30% gains on quick scalp trades while maintaining strict risk management.
+
+---
+
+## Product Vision
+
+**Mission:** Provide surgical precision in detecting high-probability 0DTE trading opportunities.
+
+**Vision:** An autonomous trading system that learns from its performance and continuously improves its predictive accuracy.
+
+---
+
+## Target Users
+
+1. **Primary:** Options traders seeking automated 0DTE signals
+2. **Secondary:** Algorithmic trading enthusiasts
+3. **Tertiary:** Quantitative researchers studying market microstructure
+
+---
+
+## Core Features
+
+### F1: Multi-Ticker Scanning
+- **Description:** Continuously scan 29 tickers for scalping opportunities
+- **Frequency:** Every 30 seconds during market hours
+- **Tickers:** SPY, QQQ, IWM, AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, NFLX, COIN, MARA, RIOT, PLTR, SOFI, NIO, BABA, SNAP, GME, AMC, BBBY, HOOD, LCID, RIVN, F, UBER, DIS
+
+### F2: Pattern Detection
+- **Description:** Detect 10 intraday scalping patterns
+- **Patterns:**
+  - VWAP Reclaim/Rejection/Bounce
+  - Momentum Surge (Long/Short)
+  - Breakout/Breakdown
+  - Failed Breakout/Breakdown
+  - Squeeze Fire
+- **Confidence:** Calculate base confidence 0-100%
+
+### F3: AI Confirmation (Parallel)
+- **Description:** Use AI for pattern validation
+- **Architecture:**
+  - OpenAI GPT-4o: Candlestick chart vision analysis
+  - DeepSeek: News sentiment analysis (text)
+  - Both run simultaneously
+- **Output:** STRIKE_CALLS, STRIKE_PUTS, NO_TRADE, or ABORT
+
+### F4: Automated Trading
+- **Description:** Execute paper trades on Alpaca
+- **Triggers:**
+  - Alert at 60%+ confidence
+  - Auto-execute at 70%+ AND AI confirmed
+- **Limits:**
+  - $1,500 max per trade
+  - $6,000 max daily exposure
+  - 5 max concurrent positions
+
+### F5: Position Monitoring
+- **Description:** Monitor open positions for exits
+- **Frequency:** Every 5 seconds
+- **Exit Conditions:**
+  - Target: +20%
+  - Stop: -15%
+  - Time: 45 minutes
+  - EOD: 3:55 PM ET
+
+### F6: Telegram Alerts
+- **Description:** Real-time notifications
+- **Alert Types:**
+  - Entry signals
+  - Auto-execution confirmations
+  - Position exits
+  - Session summaries
+
+### F7: Learning System
+- **Description:** Adaptive improvement
+- **Components:**
+  - Pattern Memory: Learn from successful patterns
+  - Time Learning: Optimize for time-of-day
+  - Session Learnings: Apply daily lessons
+
+---
+
+## Non-Functional Requirements
+
+### NFR1: Performance
+- Signal detection: < 500ms per ticker
+- AI analysis: < 5 seconds
+- Order execution: < 1 second
+- Total signal-to-trade: < 10 seconds
+
+### NFR2: Reliability
+- System uptime: 99.5% during market hours
+- Auto-recovery from API failures
+- Graceful degradation without AI
+
+### NFR3: Safety
+- Paper trading only (no real money)
+- Hard position limits
+- Mandatory EOD close
+- Rate limiting on all APIs
+
+### NFR4: Cost Control
+- AI budget: $5/day max
+- OpenAI calls: 50/day max
+- Sniper mode to reduce unnecessary calls
+
+---
+
+## Success Metrics
+
+### KPI1: Signal Quality
+- Target: 55%+ win rate
+- Measure: Winning trades / Total trades
+
+### KPI2: Risk-Adjusted Return
+- Target: 1.5+ Sharpe ratio
+- Measure: Return / Volatility
+
+### KPI3: Execution Efficiency
+- Target: < 5 second signal-to-trade
+- Measure: Time from pattern detection to order placed
+
+### KPI4: System Health
+- Target: < 5% error rate
+- Measure: Failed API calls / Total calls
+
+---
+
+## Roadmap
+
+### Phase 1: Foundation (Complete)
+- [x] Core pattern detection
+- [x] Alpaca paper trading
+- [x] Telegram alerts
+- [x] Basic AI confirmation
+
+### Phase 2: AI Enhancement (Complete)
+- [x] Multi-model AI (OpenAI + DeepSeek)
+- [x] Parallel analysis
+- [x] Sniper mode cost control
+- [x] Rate limiting
+
+### Phase 3: Learning (In Progress)
+- [x] Pattern memory
+- [x] Time-of-day learning
+- [ ] Reinforcement learning for thresholds
+- [ ] Automatic parameter optimization
+
+### Phase 4: Scale (Future)
+- [ ] Real money trading (opt-in)
+- [ ] Multi-account support
+- [ ] Web dashboard
+- [ ] Mobile app
+
+---
+
+## Risk Assessment
+
+### R1: API Reliability
+- **Risk:** External APIs may be unavailable
+- **Mitigation:** Fallback chains, graceful degradation
+
+### R2: AI Cost Overrun
+- **Risk:** AI calls could exceed budget
+- **Mitigation:** Hard caps, sniper mode, rate limits
+
+### R3: False Signals
+- **Risk:** Patterns may not predict actual moves
+- **Mitigation:** AI confirmation, learning system
+
+### R4: Regulatory
+- **Risk:** Paper trading rules may change
+- **Mitigation:** Stay informed, maintain compliance
+
+---
+
+## Appendix
+
+### A1: Ticker Universe
+
+| Category | Tickers |
+|----------|---------|
+| Index ETFs | SPY, QQQ, IWM |
+| Mega Cap | AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL |
+| Growth | AMD, NFLX, UBER |
+| Crypto-Related | COIN, MARA, RIOT |
+| Meme Stocks | GME, AMC, BBBY, HOOD |
+| EV/Tech | NIO, LCID, RIVN, PLTR, SOFI |
+| Other | BABA, SNAP, F, DIS |
+
+### A2: Confidence Boost Breakdown
+
+| Source | Max Boost |
+|--------|-----------|
+| Base pattern | 60% |
+| Volume (2x+) | +10% |
+| Momentum (0.3%+) | +8% |
+| VWAP alignment | +5% |
+| Pattern memory | +15% |
+| Time-of-day | +10% |
+| AI confirmation | +10% |
+| Chart+News agree | +10% |
+| **Max Possible** | **128%** |
+
+### A3: Exit Priority
+
+1. TARGET HIT (+20%) - Immediate
+2. STOP LOSS (-15%) - Immediate
+3. TIME DECAY (45 min) - Forced
+4. EOD (3:55 PM ET) - Mandatory
+
+# WSB Snake - RBAC Matrix
+
+## Role-Based Access Control
+
+This document defines roles and their permissions within the WSB Snake system.
+
+---
+
+## Roles Overview
+
+| Role | Description | Access Level |
+|------|-------------|--------------|
+| **SYSTEM** | Automated system processes | Full execution |
+| **OPERATOR** | Human system administrator | Full control |
+| **VIEWER** | Read-only monitoring | View only |
+| **API_CLIENT** | External API consumers | Limited API |
+
+---
+
+## Permission Matrix
+
+### Trading Permissions
+
+| Permission | SYSTEM | OPERATOR | VIEWER | API_CLIENT |
+|------------|--------|----------|--------|------------|
+| View positions | ✅ | ✅ | ✅ | ✅ |
+| View signals | ✅ | ✅ | ✅ | ✅ |
+| View account | ✅ | ✅ | ✅ | ❌ |
+| Place orders | ✅ | ✅ | ❌ | ❌ |
+| Close positions | ✅ | ✅ | ❌ | ❌ |
+| Close all positions | ✅ | ✅ | ❌ | ❌ |
+| Modify orders | ❌ | ✅ | ❌ | ❌ |
+
+### Configuration Permissions
+
+| Permission | SYSTEM | OPERATOR | VIEWER | API_CLIENT |
+|------------|--------|----------|--------|------------|
+| View config | ✅ | ✅ | ✅ | ❌ |
+| Modify thresholds | ❌ | ✅ | ❌ | ❌ |
+| Modify limits | ❌ | ✅ | ❌ | ❌ |
+| Enable/disable AI | ❌ | ✅ | ❌ | ❌ |
+| Modify ticker universe | ❌ | ✅ | ❌ | ❌ |
+
+### System Permissions
+
+| Permission | SYSTEM | OPERATOR | VIEWER | API_CLIENT |
+|------------|--------|----------|--------|------------|
+| Start system | ✅ | ✅ | ❌ | ❌ |
+| Stop system | ❌ | ✅ | ❌ | ❌ |
+| Restart system | ❌ | ✅ | ❌ | ❌ |
+| View logs | ✅ | ✅ | ✅ | ❌ |
+| Clear logs | ❌ | ✅ | ❌ | ❌ |
+| Access secrets | ✅ | ❌ | ❌ | ❌ |
+| Modify secrets | ❌ | ✅ (via Replit) | ❌ | ❌ |
+
+### Data Permissions
+
+| Permission | SYSTEM | OPERATOR | VIEWER | API_CLIENT |
+|------------|--------|----------|--------|------------|
+| Read database | ✅ | ✅ | ✅ | ❌ |
+| Write database | ✅ | ✅ | ❌ | ❌ |
+| Delete records | ❌ | ✅ | ❌ | ❌ |
+| Export data | ❌ | ✅ | ✅ | ❌ |
+| Backup database | ✅ | ✅ | ❌ | ❌ |
+
+### API Permissions
+
+| Permission | SYSTEM | OPERATOR | VIEWER | API_CLIENT |
+|------------|--------|----------|--------|------------|
+| GET /health | ✅ | ✅ | ✅ | ✅ |
+| GET /api/status | ✅ | ✅ | ✅ | ✅ |
+| GET /api/positions | ✅ | ✅ | ✅ | ✅ |
+| GET /api/signals | ✅ | ✅ | ✅ | ✅ |
+| GET /api/account | ✅ | ✅ | ✅ | ❌ |
+| POST /api/positions/close | ✅ | ✅ | ❌ | ❌ |
+| PATCH /api/config | ❌ | ✅ | ❌ | ❌ |
+| WS /ws/updates | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+## Role Definitions
+
+### SYSTEM Role
+
+The automated system process that:
+- Executes trading logic
+- Monitors positions
+- Sends alerts
+- Records data
+
+**Cannot:**
+- Stop itself permanently
+- Access secrets directly (uses env vars)
+- Bypass safety limits
+
+### OPERATOR Role
+
+A human administrator who:
+- Monitors system health
+- Adjusts configuration
+- Handles emergencies
+- Reviews performance
+
+**Access Methods:**
+- Replit console
+- API endpoints
+- Telegram commands (if implemented)
+
+### VIEWER Role
+
+A read-only observer who:
+- Views dashboard
+- Monitors positions
+- Reviews signals
+- Exports reports
+
+**Cannot:**
+- Modify any settings
+- Execute trades
+- Access sensitive data
+
+### API_CLIENT Role
+
+An external system that:
+- Consumes status endpoints
+- Receives position updates
+- Integrates with other tools
+
+**Cannot:**
+- Execute trades
+- Access account data
+- Modify configuration
+
+---
+
+## Authentication Methods
+
+### Current Implementation
+
+| Method | Status |
+|--------|--------|
+| API Keys | 🔲 Not implemented |
+| JWT Tokens | 🔲 Not implemented |
+| Basic Auth | 🔲 Not implemented |
+| Replit Auth | 🔲 Possible |
+
+### Planned Implementation
+
+```python
+# API Key authentication
+from fastapi import Header, HTTPException
+
+async def verify_api_key(x_api_key: str = Header(...)):
+    if x_api_key not in VALID_API_KEYS:
+        raise HTTPException(status_code=401)
+    return get_role_for_key(x_api_key)
+```
+
+---
+
+## Audit Logging
+
+All permission-requiring actions are logged:
+
+```python
+@audit_log
+async def close_position(position_id: str, role: Role):
+    log.info(f"[AUDIT] {role.name} closing position {position_id}")
+    # ... execution
+```
+
+**Audit Log Format:**
+```
+2026-01-28 15:30:05 | AUDIT | OPERATOR | close_position | SPY260128C00602000 | SUCCESS
+2026-01-28 15:30:10 | AUDIT | VIEWER | close_position | DENIED | insufficient_permissions
+```
+
+---
+
+## Emergency Overrides
+
+### OPERATOR Emergency Actions
+
+In emergency situations, OPERATOR can:
+1. **Kill Switch:** Stop all trading immediately
+2. **Force Close:** Close all positions regardless of P&L
+3. **Disable AI:** Turn off AI confirmation
+4. **Manual Mode:** Disable auto-execution
+
+### Override Logging
+
+All overrides are specially logged:
+
+```
+2026-01-28 15:30:05 | EMERGENCY | OPERATOR | kill_switch | ACTIVATED
+2026-01-28 15:30:05 | EMERGENCY | OPERATOR | force_close_all | 3 positions closed
+```
+
+---
+
+## Future Enhancements
+
+### Planned Roles
+
+| Role | Description |
+|------|-------------|
+| ADMIN | Full access + user management |
+| TRADER | Can place manual trades |
+| ANALYST | Extended data access |
+
+### Planned Features
+
+- Multi-user support
+- Role assignment UI
+- Permission groups
+- Temporary access tokens
+- IP whitelisting
+
+# WSB Snake - System Operator Handbook
+
+## Purpose
+This handbook provides operational guidance for running the WSB Snake 0DTE options trading engine. It covers startup procedures, monitoring, troubleshooting, and emergency procedures.
+
+---
+
+## 1. System Overview
+
+WSB Snake is an autonomous 0DTE options scalping engine that:
+- Scans 29 tickers every 30 seconds during market hours
+- Uses AI (OpenAI GPT-4o + DeepSeek) for pattern confirmation
+- Auto-executes trades on Alpaca paper trading account
+- Monitors positions and auto-exits at targets/stops
+- Sends all alerts via Telegram
+
+**Operating Hours:** 9:30 AM - 4:00 PM ET (market hours)
+**After Hours:** System sleeps, no trading
+
+---
+
+## 2. Startup Procedures
+
+### 2.1 Normal Startup
+```bash
+cd /home/runner/workspace
+python3 main.py
+```
+
+### 2.2 Background Startup (Production)
+```bash
+nohup python3 main.py > /tmp/wsb_snake.log 2>&1 &
+```
+
+### 2.3 Verify Startup
+```bash
+# Check process is running
+ps aux | grep "python3 main.py"
+
+# Check logs
+tail -50 /tmp/wsb_snake.log
+
+# Verify ET time is correct
+python3 -c "from wsb_snake.utils.session_regime import get_eastern_time; print(get_eastern_time())"
+```
+
+---
+
+## 3. Key Operational Parameters
+
+| Parameter | Value | Location |
+|-----------|-------|----------|
+| Alert Threshold | 60% | spy_scalper.py |
+| Auto-Execute Threshold | 70% | spy_scalper.py |
+| Max Per Trade | $1,500 | alpaca_executor.py |
+| Max Daily Exposure | $6,000 | alpaca_executor.py |
+| Max Concurrent Positions | 5 | alpaca_executor.py |
+| Target Exit | +20% | alpaca_executor.py |
+| Stop Loss | -15% | alpaca_executor.py |
+| Time Decay Exit | 45 minutes | alpaca_executor.py |
+| EOD Close | 3:55 PM ET | alpaca_executor.py |
+
+---
+
+## 4. Monitoring
+
+### 4.1 Live Log Monitoring
+```bash
+tail -f /tmp/wsb_snake.log
+```
+
+### 4.2 Key Log Messages to Watch
+- `🎯 APEX PREDATOR STRIKE` - Trade signal detected
+- `📈 Alpaca AUTO-EXECUTE` - Trade placed
+- `✅ ORDER FILLED` - Trade confirmed
+- `🎯 TARGET HIT` - Profit taken
+- `STOP LOSS` - Loss cut
+- `❌ Rate limited` - AI calls throttled
+
+### 4.3 API Budget Check
+```python
+from wsb_snake.analysis.predator_stack import predator_stack
+print(predator_stack.get_budget_status())
+```
+
+---
+
+## 5. Troubleshooting
+
+### 5.1 No Trades Firing
+1. Check market is open: `is_market_open()` should return True
+2. Check confidence thresholds aren't too high
+3. Verify AI API keys are set in Secrets
+4. Check rate limiting hasn't blocked calls
+
+### 5.2 AI Not Working
+```python
+from wsb_snake.analysis.predator_stack import predator_stack
+print(f"OpenAI: {predator_stack.openai_available}")
+print(f"DeepSeek: {predator_stack.deepseek_available}")
+```
+
+### 5.3 Alpaca Connection Issues
+```python
+from wsb_snake.trading.alpaca_executor import alpaca_executor
+print(alpaca_executor.get_account_info())
+```
+
+---
+
+## 6. Emergency Procedures
+
+### 6.1 Stop All Trading Immediately
+```bash
+pkill -f "python3 main.py"
+```
+
+### 6.2 Close All Positions
+```python
+from wsb_snake.trading.alpaca_executor import alpaca_executor
+alpaca_executor.close_all_0dte_positions()
+```
+
+### 6.3 Manual Position Close
+```python
+alpaca_executor.close_position("SPY260128C00600000")
+```
+
+---
+
+## 7. Daily Checklist
+
+### Pre-Market (Before 9:30 AM ET)
+- [ ] Verify system is running
+- [ ] Check Alpaca account balance
+- [ ] Verify API keys are valid
+- [ ] Review previous day's performance
+
+### During Market Hours
+- [ ] Monitor Telegram for alerts
+- [ ] Check for error messages in logs
+- [ ] Verify positions are being tracked
+
+### Post-Market (After 4:00 PM ET)
+- [ ] Confirm all 0DTE positions closed
+- [ ] Review session statistics
+- [ ] Check API usage/budget
+
+---
+
+## 8. Secret Management
+
+Required secrets in Replit Secrets:
+- `ALPACA_API_KEY` - Alpaca trading API key
+- `ALPACA_SECRET_KEY` - Alpaca secret key
+- `OPENAI_API_KEY` - OpenAI GPT-4o for chart vision
+- `DEEPSEEK_API_KEY` - DeepSeek for news analysis
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token
+- `TELEGRAM_CHAT_ID` - Your Telegram chat ID
+- `POLYGON_API_KEY` - Polygon.io market data
+- `FINNHUB_API_KEY` - Finnhub news/sentiment
+
+---
+
+## 9. Contact & Escalation
+
+For critical issues:
+1. Stop the bot immediately
+2. Close all positions manually on Alpaca
+3. Review logs for root cause
+4. Document the incident
