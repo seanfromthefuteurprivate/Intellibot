@@ -22,10 +22,23 @@ from wsb_snake.utils.session_regime import is_market_open
 
 logger = get_logger(__name__)
 
+# ========== SCALPING STRATEGY - CONSERVATIVE AI USAGE ==========
+# PHILOSOPHY: Don't burn API credits on noise. Only call AI for
+# high-conviction setups that have a high probability of profit.
+#
+# AI is called ONLY when:
+# 1. Strong candlestick pattern detected (strength >= 4) AND
+# 2. Multiple confirming signals (patterns, news, volume, flow)
+#
+# This ensures we're pursuing sure-shot scalping opportunities.
+# ================================================================
+
 # Minimum pattern strength to trigger AI analysis (1-5 scale)
+# Strength 4+ = engulfing, morning star, three soldiers, etc.
 MIN_PATTERN_STRENGTH_FOR_AI = 4
+
 # Minimum number of patterns to trigger AI analysis
-MIN_PATTERNS_FOR_AI = 2
+MIN_PATTERNS_FOR_AI = 3  # RAISED from 2 - need stronger confluence
 
 
 class ChartBrain:

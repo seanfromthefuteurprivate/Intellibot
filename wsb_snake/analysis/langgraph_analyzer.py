@@ -99,8 +99,78 @@ class GeminiRateLimiter:
             }
 
 
-# Global rate limiter instance
+# Global rate limiter instances
 gemini_rate_limiter = GeminiRateLimiter()
+
+
+class OpenAIRateLimiter:
+    """Rate limiter for OpenAI API to conserve credits.
+
+    SCALPING PHILOSOPHY: Only call AI for high-conviction setups.
+    Don't burn credits on noise - focus on sure-shot opportunities.
+
+    Conservative limits:
+    - 15 RPM (requests per minute)
+    - 200 RPD (requests per day) - preserve credits for actual opportunities
+    """
+
+    def __init__(self, rpm_limit: int = 15, rpd_limit: int = 200):
+        self.rpm_limit = rpm_limit
+        self.rpd_limit = rpd_limit
+        self.minute_requests: List[float] = []
+        self.daily_requests: int = 0
+        self.daily_reset_date: date = date.today()
+        self.lock = threading.Lock()
+
+    def can_make_request(self) -> bool:
+        """Check if we can make a request without exceeding limits."""
+        with self.lock:
+            now = time.time()
+            today = date.today()
+
+            # Reset daily counter if new day
+            if today > self.daily_reset_date:
+                self.daily_requests = 0
+                self.daily_reset_date = today
+                logger.info("OpenAI rate limiter: Daily counter reset")
+
+            # Check daily limit
+            if self.daily_requests >= self.rpd_limit:
+                logger.warning(f"OpenAI daily limit reached ({self.rpd_limit} requests) - conserving credits")
+                return False
+
+            # Clean old minute requests
+            self.minute_requests = [t for t in self.minute_requests if now - t < 60]
+
+            # Check minute limit
+            if len(self.minute_requests) >= self.rpm_limit:
+                logger.warning(f"OpenAI minute limit reached ({self.rpm_limit} RPM)")
+                return False
+
+            return True
+
+    def record_request(self):
+        """Record that a request was made."""
+        with self.lock:
+            self.minute_requests.append(time.time())
+            self.daily_requests += 1
+            logger.info(f"OpenAI API call: {self.daily_requests}/{self.rpd_limit} today")
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limit status."""
+        with self.lock:
+            now = time.time()
+            recent = [t for t in self.minute_requests if now - t < 60]
+            return {
+                "daily_used": self.daily_requests,
+                "daily_limit": self.rpd_limit,
+                "minute_used": len(recent),
+                "minute_limit": self.rpm_limit,
+                "can_request": self.can_make_request()
+            }
+
+
+openai_rate_limiter = OpenAIRateLimiter()
 
 
 class ChartAnalysisState(TypedDict):
@@ -181,7 +251,17 @@ class LangGraphChartAnalyzer:
         return workflow.compile()
     
     async def _call_vision(self, image_base64: str, prompt: str) -> str:
-        """Call GPT-4o vision with Gemini fallback."""
+        """Call GPT-4o vision with Gemini fallback.
+
+        SCALPING STRATEGY: Only call for high-conviction setups.
+        Rate limited to conserve credits for actual opportunities.
+        """
+        # Check OpenAI rate limits first
+        if not openai_rate_limiter.can_make_request():
+            status = openai_rate_limiter.get_status()
+            logger.warning(f"OpenAI rate limited - {status['daily_used']}/{status['daily_limit']} today. Using Gemini fallback.")
+            return await self._call_gemini_fallback(image_base64, prompt)
+
         # Try OpenAI first
         try:
             message = HumanMessage(
@@ -201,7 +281,8 @@ class LangGraphChartAnalyzer:
                 SystemMessage(content=CHART_ANALYST_PROMPT),
                 message
             ])
-            
+
+            openai_rate_limiter.record_request()
             return response.content
             
         except Exception as e:
