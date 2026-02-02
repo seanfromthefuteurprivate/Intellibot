@@ -3,15 +3,20 @@ Session Regime Detector
 
 Determines current market session and trading regime.
 Implements logic gates for different time windows.
+Market character (trend_up / trend_down / chop) from SPY bars for conditional 0DTE.
 """
 
 from datetime import datetime, time
 from enum import Enum
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import pytz
 
 from wsb_snake.config import SESSION_WINDOWS
 from wsb_snake.utils.logger import log
+
+# Thresholds for regime from price vs SMA (0.2% = chop band)
+REGIME_TREND_UP_PCT = 0.2   # close > SMA * (1 + this) => trend_up
+REGIME_TREND_DOWN_PCT = -0.2  # close < SMA * (1 + this) => trend_down
 
 
 class SessionType(Enum):
@@ -173,6 +178,47 @@ def should_scan_for_signals() -> bool:
     # Scan during ALL market hours including lunch
     # Lunch may be choppy but real setups still happen
     return True
+
+
+def get_market_regime(ticker: str = "SPY", bars: Optional[List[Dict[str, Any]]] = None) -> RegimeType:
+    """
+    Compute market character from recent bars: trend_up, trend_down, or chop.
+    Uses slope of price vs SMA: close above SMA => trend_up, below => trend_down, else chop.
+    """
+    try:
+        if bars is None:
+            from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
+            bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=20)
+        if not bars or len(bars) < 10:
+            return RegimeType.UNKNOWN
+        closes = [b.get("c", b.get("close", 0)) for b in bars[:10]]
+        if not all(closes):
+            return RegimeType.UNKNOWN
+        sma = sum(closes) / len(closes)
+        current = closes[0]
+        if sma <= 0:
+            return RegimeType.UNKNOWN
+        pct = (current - sma) / sma * 100
+        if pct >= REGIME_TREND_UP_PCT:
+            return RegimeType.TREND_UP
+        if pct <= REGIME_TREND_DOWN_PCT:
+            return RegimeType.TREND_DOWN
+        return RegimeType.CHOP
+    except Exception as e:
+        log.debug(f"Regime detection error: {e}")
+        return RegimeType.UNKNOWN
+
+
+def get_market_regime_info(ticker: str = "SPY") -> Dict[str, Any]:
+    """Return regime and whether to allow scalps (skip or reduce in chop)."""
+    regime = get_market_regime(ticker)
+    return {
+        "regime": regime.value,
+        "is_chop": regime == RegimeType.CHOP,
+        "is_trend_up": regime == RegimeType.TREND_UP,
+        "is_trend_down": regime == RegimeType.TREND_DOWN,
+        "confidence_penalty_in_chop": 10,  # Subtract from confidence when chop
+    }
 
 
 def get_0dte_urgency() -> str:

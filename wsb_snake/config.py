@@ -46,6 +46,21 @@ ZERO_DTE_UNIVERSE = [
 # ETFs with daily 0DTE options (not just Friday weeklies)
 DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM", "SLV", "GLD", "USO", "XLE"]
 
+# WSB Wilder Plan: Momentum (small-cap / thematic) – weeks to months
+# Trim on sector weakness; let runners run (see WSB_WIN_STRATEGY_AND_UNCHAINED_PLAN.md)
+MOMENTUM_UNIVERSE = [
+    "RKLB", "ASTS", "LUNR", "PL", "ONDS", "POET", "SLS", "NBIS",
+    "ENPH", "USAR", "THH", "CLSK", "MU", "INTC",
+]
+
+# WSB Wilder Plan: LEAPS / Macro – 1–3 year thesis (commodity + index + mega-cap)
+LEAPS_UNIVERSE = [
+    "SLV", "GLD", "GDX", "GDXJ", "USO", "XLE",  # Commodities / energy
+    "SPY", "QQQ", "IWM",  # Index ETFs
+    "META", "AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "PYPL",  # Mega caps
+]
+LEAPS_EXPIRY_MONTHS_MIN = 12  # Only consider options with >= 12 months to expiry
+
 # Session time windows (Eastern Time)
 SESSION_WINDOWS = {
     "premarket": (4, 0, 9, 30),      # 4:00 AM - 9:30 AM ET

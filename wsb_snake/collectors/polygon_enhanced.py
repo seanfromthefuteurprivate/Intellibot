@@ -146,6 +146,38 @@ class EnhancedPolygonAdapter:
             return bars
         return []
     
+    def get_daily_bars(
+        self,
+        ticker: str,
+        limit: int = 70,
+    ) -> List[Dict]:
+        """Get daily OHLCV bars for trend/SMA (e.g. 50-day)."""
+        to_date = date.today()
+        from_date = to_date - timedelta(days=limit + 10)
+        endpoint = f"/v2/aggs/ticker/{ticker}/range/1/day/{from_date.isoformat()}/{to_date.isoformat()}"
+        data = self._request(endpoint, {"limit": limit, "sort": "desc"})
+        if data and "results" in data:
+            bars = []
+            for bar in data["results"]:
+                bars.append({
+                    "t": bar.get("t", 0),
+                    "timestamp": bar.get("t", 0),
+                    "o": bar.get("o", 0),
+                    "open": bar.get("o", 0),
+                    "h": bar.get("h", 0),
+                    "high": bar.get("h", 0),
+                    "l": bar.get("l", 0),
+                    "low": bar.get("l", 0),
+                    "c": bar.get("c", 0),
+                    "close": bar.get("c", 0),
+                    "v": bar.get("v", 0),
+                    "volume": bar.get("v", 0),
+                    "vwap": bar.get("vw", 0),
+                    "n": bar.get("n", 0),
+                })
+            return bars
+        return []
+    
     def get_ultra_fast_bars(
         self, 
         ticker: str, 

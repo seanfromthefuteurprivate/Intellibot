@@ -24,6 +24,8 @@ from wsb_snake.engines.orchestrator import run_pipeline, send_daily_summary, run
 from wsb_snake.engines.learning_memory import learning_memory
 from wsb_snake.engines.chart_brain import get_chart_brain
 from wsb_snake.engines.spy_scalper import spy_scalper
+from wsb_snake.engines.momentum_engine import start_momentum_engine
+from wsb_snake.engines.leaps_engine import start_leaps_engine
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 
@@ -64,8 +66,10 @@ def send_startup_ping():
 • Time ET: {session_info['current_time_et']}
 • Power Hour: {'YES' if session_info['is_power_hour'] else 'No'}
 
-🎯 **Focus:** ETF Scalping (SPY, QQQ, IWM, GDX)
+🎯 **Focus:** ETF Scalping + Momentum + LEAPS (UNHINGED)
 📍 **EOD Close:** 3:55 PM ET (automatic)
+🚀 **Momentum:** 2min scan | trim +50% trail +20%
+📈 **LEAPS:** 30min scan | trim +50% trail +20%
 
 ⚡ Hunting for 15%+ daily returns. Maximum aggression.
 """
@@ -122,6 +126,12 @@ def main():
     log.info("Starting SPY 0DTE Scalper (hawk mode)...")
     spy_scalper.start()
     log.info("SPY Scalper active - watching for 15-30% scalp opportunities")
+    
+    # UNHINGED: Momentum + LEAPS engines (WSB Wilder Plan)
+    log.info("Starting Momentum Engine (2min scan)...")
+    start_momentum_engine()
+    log.info("Starting LEAPS/Macro Engine (30min scan)...")
+    start_leaps_engine()
     
     # Start Zero Greed Exit Protocol - mechanical ruthless exit system
     log.info("Starting Zero Greed Exit Protocol...")
