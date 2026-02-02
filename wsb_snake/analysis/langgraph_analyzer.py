@@ -128,9 +128,16 @@ class LangGraphChartAnalyzer:
             return await self._call_gemini_fallback(image_base64, prompt)
     
     async def _call_gemini_fallback(self, image_base64: str, prompt: str) -> str:
-        """Fallback to Gemini 2.0 Flash when OpenAI fails."""
-        if not GEMINI_API_KEY:
-            logger.warning("Gemini API key not available, trying DeepSeek directly")
+        """Fallback to Gemini 2.0 Flash when OpenAI fails.
+
+        NOTE: Gemini is currently disabled - going directly to DeepSeek.
+        Re-enable by setting GEMINI_ENABLED=true in environment.
+        """
+        import os
+        gemini_enabled = os.environ.get('GEMINI_ENABLED', 'false').lower() == 'true'
+
+        if not GEMINI_API_KEY or not gemini_enabled:
+            logger.info("Gemini disabled or unavailable, using DeepSeek fallback")
             return await self._call_deepseek_fallback(image_base64, prompt)
         
         try:
