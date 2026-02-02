@@ -1,13 +1,20 @@
 """
 LangGraph AI Chart Analyzer - Uses GPT-4o vision (primary) or Gemini (fallback)
 to analyze candlestick charts with pattern recognition and trade recommendations.
+
+RATE LIMITING: Gemini has strict rate limits. We enforce:
+- Max 10 requests per minute
+- Max 100 requests per day
+- Only call when candlestick patterns + news confluence detected
 """
 import asyncio
 import os
 import httpx
+import time
 from typing import Dict, Any, List, Optional, TypedDict, Annotated
-from datetime import datetime
+from datetime import datetime, date
 import operator
+import threading
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -20,6 +27,80 @@ logger = get_logger(__name__)
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+GEMINI_ENABLED = os.environ.get('GEMINI_ENABLED', 'false').lower() == 'true'
+
+
+class GeminiRateLimiter:
+    """Rate limiter for Gemini API to prevent bans.
+
+    Free tier limits:
+    - 15 RPM (requests per minute)
+    - 1,500 RPD (requests per day)
+    - 1M tokens per minute
+
+    We use conservative limits to stay safe:
+    - 10 RPM
+    - 100 RPD (to leave headroom)
+    """
+
+    def __init__(self, rpm_limit: int = 10, rpd_limit: int = 100):
+        self.rpm_limit = rpm_limit
+        self.rpd_limit = rpd_limit
+        self.minute_requests: List[float] = []
+        self.daily_requests: int = 0
+        self.daily_reset_date: date = date.today()
+        self.lock = threading.Lock()
+
+    def can_make_request(self) -> bool:
+        """Check if we can make a request without exceeding limits."""
+        with self.lock:
+            now = time.time()
+            today = date.today()
+
+            # Reset daily counter if new day
+            if today > self.daily_reset_date:
+                self.daily_requests = 0
+                self.daily_reset_date = today
+                logger.info("Gemini rate limiter: Daily counter reset")
+
+            # Check daily limit
+            if self.daily_requests >= self.rpd_limit:
+                logger.warning(f"Gemini daily limit reached ({self.rpd_limit} requests)")
+                return False
+
+            # Clean old minute requests
+            self.minute_requests = [t for t in self.minute_requests if now - t < 60]
+
+            # Check minute limit
+            if len(self.minute_requests) >= self.rpm_limit:
+                logger.warning(f"Gemini minute limit reached ({self.rpm_limit} RPM)")
+                return False
+
+            return True
+
+    def record_request(self):
+        """Record that a request was made."""
+        with self.lock:
+            self.minute_requests.append(time.time())
+            self.daily_requests += 1
+            logger.info(f"Gemini API call recorded: {self.daily_requests}/{self.rpd_limit} today, {len(self.minute_requests)}/{self.rpm_limit} this minute")
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limit status."""
+        with self.lock:
+            now = time.time()
+            recent = [t for t in self.minute_requests if now - t < 60]
+            return {
+                "daily_used": self.daily_requests,
+                "daily_limit": self.rpd_limit,
+                "minute_used": len(recent),
+                "minute_limit": self.rpm_limit,
+                "can_request": self.can_make_request()
+            }
+
+
+# Global rate limiter instance
+gemini_rate_limiter = GeminiRateLimiter()
 
 
 class ChartAnalysisState(TypedDict):
@@ -130,14 +211,20 @@ class LangGraphChartAnalyzer:
     async def _call_gemini_fallback(self, image_base64: str, prompt: str) -> str:
         """Fallback to Gemini 2.0 Flash when OpenAI fails.
 
-        NOTE: Gemini is currently disabled - going directly to DeepSeek.
-        Re-enable by setting GEMINI_ENABLED=true in environment.
-        """
-        import os
-        gemini_enabled = os.environ.get('GEMINI_ENABLED', 'false').lower() == 'true'
+        RATE LIMITED: Uses conservative limits to prevent API bans:
+        - 10 requests per minute
+        - 100 requests per day
 
-        if not GEMINI_API_KEY or not gemini_enabled:
+        Only called when significant patterns are detected (enforced by ChartBrain).
+        """
+        if not GEMINI_API_KEY or not GEMINI_ENABLED:
             logger.info("Gemini disabled or unavailable, using DeepSeek fallback")
+            return await self._call_deepseek_fallback(image_base64, prompt)
+
+        # Check rate limits before making request
+        if not gemini_rate_limiter.can_make_request():
+            status = gemini_rate_limiter.get_status()
+            logger.warning(f"Gemini rate limited - daily: {status['daily_used']}/{status['daily_limit']}, minute: {status['minute_used']}/{status['minute_limit']}")
             return await self._call_deepseek_fallback(image_base64, prompt)
         
         try:
@@ -168,6 +255,7 @@ class LangGraphChartAnalyzer:
                 
                 if "candidates" in result and result["candidates"]:
                     text = result["candidates"][0]["content"]["parts"][0]["text"]
+                    gemini_rate_limiter.record_request()
                     logger.info("Gemini fallback successful")
                     return text
                     

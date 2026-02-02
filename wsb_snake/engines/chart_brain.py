@@ -305,6 +305,91 @@ class ChartBrain:
     def request_priority_analysis(self, ticker: str):
         """Request priority analysis for a ticker (adds to front of queue)."""
         self.analysis_queue.put(ticker)
+
+    def analyze_with_confluence(
+        self,
+        ticker: str,
+        has_news_signal: bool = False,
+        has_sentiment_signal: bool = False,
+        has_options_flow: bool = False
+    ) -> Optional[Dict]:
+        """Analyze ticker ONLY if there's confluence of multiple signals.
+
+        This is the STRATEGIC AI entry point - only calls Gemini/OpenAI when:
+        1. Strong candlestick patterns detected AND
+        2. At least one other signal type (news, sentiment, options flow)
+
+        This prevents wasting API calls on noise and focuses on high-conviction setups.
+
+        Args:
+            ticker: Stock ticker to analyze
+            has_news_signal: True if there's a relevant news catalyst
+            has_sentiment_signal: True if sentiment is strongly bullish/bearish
+            has_options_flow: True if unusual options activity detected
+
+        Returns:
+            Analysis dict if confluence found and AI called, None otherwise
+        """
+        try:
+            bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=60)
+            if not bars or len(bars) < 10:
+                return None
+
+            # Run local pattern detection first
+            patterns = candlestick_analyzer.analyze(bars, lookback=10)
+            strong_patterns = [p for p in patterns if p.strength >= MIN_PATTERN_STRENGTH_FOR_AI]
+
+            # Calculate confluence score
+            confluence_signals = sum([
+                len(strong_patterns) >= 1,  # Strong pattern
+                len(patterns) >= 3,         # Multiple patterns
+                has_news_signal,
+                has_sentiment_signal,
+                has_options_flow
+            ])
+
+            # Need at least 2 confluence signals to call AI
+            if confluence_signals < 2:
+                logger.debug(f"ChartBrain: {ticker} - insufficient confluence ({confluence_signals}/2 needed)")
+                return None
+
+            # Confluence detected - call AI
+            logger.info(f"🎯 ChartBrain CONFLUENCE: {ticker} - {confluence_signals} signals (patterns: {[p.name for p in patterns[:2]]}, news: {has_news_signal}, sentiment: {has_sentiment_signal}, flow: {has_options_flow})")
+
+            self.ai_calls_made += 1
+
+            chart_base64 = self.chart_generator.generate_chart(
+                ticker=ticker,
+                ohlcv_data=bars,
+                timeframe="5min"
+            )
+
+            if not chart_base64:
+                return None
+
+            analysis = self.analyzer.analyze_chart_sync(
+                ticker=ticker,
+                chart_base64=chart_base64,
+                timeframe="5min",
+                current_price=bars[-1].get('c', 0) if bars else 0
+            )
+
+            with self.cache_lock:
+                self.analysis_cache[ticker] = {
+                    "timestamp": datetime.now(),
+                    "analysis": analysis,
+                    "confidence": analysis.get("confidence_score", 0.0),
+                    "recommendation": self._extract_direction(analysis.get("trade_recommendation", "")),
+                    "patterns": [p.name for p in patterns],
+                    "confluence_score": confluence_signals,
+                    "source": "confluence_ai"
+                }
+
+            return self.analysis_cache[ticker]
+
+        except Exception as e:
+            logger.error(f"ChartBrain confluence analysis error for {ticker}: {e}")
+            return None
     
     def get_all_analyses(self) -> Dict[str, Dict]:
         """Get all cached analyses."""
