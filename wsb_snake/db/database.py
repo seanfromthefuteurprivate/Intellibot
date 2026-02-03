@@ -155,7 +155,7 @@ def init_database():
         CREATE TABLE IF NOT EXISTS daily_summaries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL UNIQUE,
-            
+
             -- Stats
             total_signals INTEGER DEFAULT 0,
             alerts_sent INTEGER DEFAULT 0,
@@ -163,21 +163,40 @@ def init_database():
             wins INTEGER DEFAULT 0,
             losses INTEGER DEFAULT 0,
             scratches INTEGER DEFAULT 0,
-            
+
             -- Performance
             win_rate REAL,
             avg_r_multiple REAL,
             total_r REAL,
-            
+
             -- Best/Worst
             best_ticker TEXT,
             best_r REAL,
             worst_ticker TEXT,
             worst_r REAL,
-            
+
             -- Notes
             regime_notes TEXT,
-            
+
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Trade performance table - granular analytics
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_performance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            engine TEXT,
+            trade_type TEXT,
+            entry_hour INTEGER,
+            session TEXT,
+            pnl REAL,
+            pnl_pct REAL,
+            exit_reason TEXT,
+            holding_time_seconds INTEGER,
+            signal_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -325,6 +344,115 @@ def get_daily_stats(date_str: str = None) -> Dict:
         "total_r": trade_stats["total_r"] or 0,
         "win_rate": (trade_stats["wins"] / trade_stats["total"]) if trade_stats["total"] else 0,
     }
+
+
+def save_outcome(outcome_data: Dict) -> int:
+    """
+    Save a trade outcome to the database.
+
+    Args:
+        outcome_data: Dict with keys:
+            - signal_id: Optional[int]
+            - entry_price: float
+            - exit_price: float
+            - max_price: float (MFE)
+            - min_price: float (MAE)
+            - outcome_type: str ("win", "loss", "scratch", "timeout")
+            - pnl: float
+            - pnl_pct: float
+            - exit_reason: str
+            - symbol: str
+            - trade_type: str
+            - engine: str
+            - entry_time: datetime
+            - exit_time: datetime
+            - holding_time_seconds: int
+            - session: str
+
+    Returns:
+        The inserted outcome ID
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Insert into outcomes table
+    signal_id = outcome_data.get("signal_id")
+    if signal_id:
+        # Calculate r_multiple
+        entry_price = outcome_data.get("entry_price", 0)
+        exit_price = outcome_data.get("exit_price", 0)
+        outcome_type = outcome_data.get("outcome_type", "scratch")
+
+        if outcome_type == "win":
+            r_multiple = abs(exit_price - entry_price) / max(abs(entry_price * 0.01), 0.01)
+        elif outcome_type == "loss":
+            r_multiple = -abs(exit_price - entry_price) / max(abs(entry_price * 0.01), 0.01)
+        else:
+            r_multiple = 0
+
+        cursor.execute("""
+            INSERT INTO outcomes (
+                signal_id, entry_price, exit_price, max_price, min_price,
+                r_multiple, outcome_type, hit_target_1, hit_stop
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            signal_id,
+            outcome_data.get("entry_price"),
+            outcome_data.get("exit_price"),
+            outcome_data.get("max_price", outcome_data.get("exit_price")),
+            outcome_data.get("min_price", outcome_data.get("exit_price")),
+            r_multiple,
+            outcome_type,
+            1 if outcome_type == "win" else 0,
+            1 if outcome_type == "loss" else 0,
+        ))
+        outcome_id = cursor.lastrowid
+    else:
+        outcome_id = 0
+
+    # Insert into trade_performance for analytics
+    entry_time = outcome_data.get("entry_time")
+    entry_hour = entry_time.hour if entry_time else None
+    trade_date = entry_time.strftime("%Y-%m-%d") if entry_time else datetime.utcnow().strftime("%Y-%m-%d")
+
+    cursor.execute("""
+        INSERT INTO trade_performance (
+            trade_date, symbol, engine, trade_type, entry_hour, session,
+            pnl, pnl_pct, exit_reason, holding_time_seconds, signal_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        trade_date,
+        outcome_data.get("symbol"),
+        outcome_data.get("engine"),
+        outcome_data.get("trade_type"),
+        entry_hour,
+        outcome_data.get("session"),
+        outcome_data.get("pnl"),
+        outcome_data.get("pnl_pct"),
+        outcome_data.get("exit_reason"),
+        outcome_data.get("holding_time_seconds"),
+        signal_id,
+    ))
+
+    # Update daily_summaries
+    cursor.execute("""
+        INSERT INTO daily_summaries (date, paper_trades, wins, losses)
+        VALUES (?, 1, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+            paper_trades = paper_trades + 1,
+            wins = wins + excluded.wins,
+            losses = losses + excluded.losses
+    """, (
+        trade_date,
+        1 if outcome_data.get("outcome_type") == "win" else 0,
+        1 if outcome_data.get("outcome_type") == "loss" else 0,
+    ))
+
+    conn.commit()
+    conn.close()
+
+    log.info(f"Saved outcome for {outcome_data.get('symbol')}: {outcome_data.get('outcome_type')} (${outcome_data.get('pnl', 0):+.2f})")
+    return outcome_id
 
 
 # Initialize on import

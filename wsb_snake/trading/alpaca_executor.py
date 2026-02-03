@@ -20,6 +20,7 @@ from wsb_snake.trading.risk_governor import (
     get_risk_governor,
     TradingEngine,
 )
+from wsb_snake.trading.outcome_recorder import outcome_recorder
 
 logger = get_logger(__name__)
 
@@ -64,6 +65,7 @@ class AlpacaPosition:
     exit_reason: Optional[str] = None
     engine: str = "scalper"  # scalper | momentum | macro – for trim-and-hold
     trimmed: bool = False  # True after partial exit at +50%
+    signal_id: Optional[int] = None  # Links to signals table for learning
 
 
 class AlpacaExecutor:
@@ -604,6 +606,7 @@ No overnight risk. Fresh start tomorrow!
         pattern: str,
         engine: TradingEngine = TradingEngine.SCALPER,
         expiry_override: Optional[datetime] = None,
+        signal_id: Optional[int] = None,
     ) -> Optional[AlpacaPosition]:
         """
         Execute a scalp trade entry.
@@ -884,6 +887,7 @@ Confidence: {confidence:.0f}%
             status=PositionStatus.PENDING,
             alpaca_order_id=order.get("id"),
             engine=engine.value,
+            signal_id=signal_id,
         )
         
         with self._lock:
@@ -948,11 +952,31 @@ Reason: {reason}
         self.daily_pnl += position.pnl  # For risk governor kill switch
         if position.pnl > 0:
             self.winning_trades += 1
-        
+
+        # Record outcome to all learning systems
+        position.exit_reason = reason
+        try:
+            outcome_recorder.record_trade_outcome(
+                signal_id=position.signal_id,
+                symbol=position.symbol,
+                trade_type=position.trade_type,
+                entry_price=position.entry_price,
+                exit_price=current_price,
+                pnl=position.pnl,
+                pnl_pct=position.pnl_pct,
+                exit_reason=reason,
+                entry_time=position.entry_time or datetime.now(),
+                exit_time=position.exit_time or datetime.now(),
+                engine=position.engine,
+                bars=None,  # Could fetch bars here if needed for pattern learning
+            )
+        except Exception as e:
+            logger.error(f"Failed to record outcome: {e}")
+
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
-        
+
         emoji = "💰" if position.pnl > 0 else "🛑"
-        
+
         message = f"""{emoji} **ALPACA PAPER TRADE CLOSED**
 
 **{position.trade_type}** {position.symbol}
