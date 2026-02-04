@@ -28,6 +28,8 @@ from wsb_snake.engines.momentum_engine import start_momentum_engine
 from wsb_snake.engines.leaps_engine import start_leaps_engine
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.trading.alpaca_executor import alpaca_executor
+from wsb_snake.learning.deep_study import run_idle_study
+from wsb_snake.collectors.screenshot_system import screenshot_system
 
 
 def send_startup_ping():
@@ -167,6 +169,14 @@ def main():
     
     # Daily report: 4:15 PM ET (after market close)
     schedule.every().day.at("16:15").do(run_daily_report)
+
+    # Screenshot learning: Start background watcher
+    log.info("Starting Screenshot Learning System...")
+    screenshot_system.start()
+    log.info("Screenshot watcher active - learning from Google Drive")
+
+    # Deep study: Run during off-market hours (every 30 min)
+    schedule.every(30).minutes.do(run_idle_study)
     
     # Run immediately on startup if market-appropriate
     log.info("Running initial pipeline check...")

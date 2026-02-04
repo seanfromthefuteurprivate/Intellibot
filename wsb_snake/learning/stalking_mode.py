@@ -496,6 +496,8 @@ class StalkingMode:
                 trade_type=setup.trade_type,
                 action="WATCH"
             )
+            setup.alerted = True  # FIX: Prevent repeated alerts
+            self._save_setup(setup)
             
         elif setup.distance_to_trigger <= setup.alert_at_pct and not setup.alerted:
             alert = StalkAlert(
@@ -513,6 +515,8 @@ class StalkingMode:
                 trade_type=setup.trade_type,
                 action="WATCH"
             )
+            setup.alerted = True  # FIX: Prevent repeated alerts
+            self._save_setup(setup)
         
         if alert:
             self.alerts.append(alert)
