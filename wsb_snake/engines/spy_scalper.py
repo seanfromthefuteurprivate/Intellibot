@@ -33,6 +33,7 @@ from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.learning.session_learnings import session_learnings, battle_plan
+from wsb_snake.learning.trade_learner import trade_learner
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 from wsb_snake.db.database import get_connection
 from wsb_snake.trading.alpaca_executor import alpaca_executor
@@ -1086,7 +1087,26 @@ class SPYScalper:
             # Penalize during poor trading hours
             setup.confidence -= 10
             setup.notes += f" | Poor trading hour (quality {quality_score:.0f})"
-        
+
+        # 3. Screenshot learning boost (from learned winning trades)
+        try:
+            trade_type = "CALLS" if setup.direction == "long" else "PUTS"
+            current_hour = datetime.now().hour
+            learning_boost, boost_reasons = trade_learner.get_confidence_adjustment(
+                ticker=self.symbol,
+                trade_type=trade_type,
+                current_hour=current_hour,
+                pattern=setup.pattern.value if setup.pattern else None
+            )
+            if learning_boost > 0:
+                # Add to pattern_memory_boost (they stack)
+                setup.pattern_memory_boost += learning_boost * 100  # Convert 0.15 to 15 points
+                if boost_reasons:
+                    setup.notes += f" | Screenshot: {boost_reasons[0][:50]}"
+                    log.info(f"Screenshot learning boost +{learning_boost:.0%}: {boost_reasons[0]}")
+        except Exception as e:
+            log.debug(f"Screenshot learning check failed: {e}")
+
         return setup
     
     def _get_ai_confirmation(self, setup: ScalpSetup, ticker: str = "SPY") -> ScalpSetup:

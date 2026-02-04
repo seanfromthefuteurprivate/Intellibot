@@ -18,6 +18,7 @@ from enum import Enum
 
 from wsb_snake.utils.logger import log
 from wsb_snake.db.database import get_connection
+from wsb_snake.learning.trade_learner import trade_learner
 
 
 class ActionType(Enum):
@@ -174,7 +175,27 @@ class ProbabilityGenerator:
             pressure_score * self.weights.get("pressure", 0.33) +
             surge_score * self.weights.get("surge", 0.33)
         )
-        
+
+        # Apply screenshot learning boost/penalty
+        direction_guess = self._determine_direction(ignition, pressure, surge)
+        trade_type = "CALLS" if direction_guess == "long" else "PUTS"
+        current_hour = datetime.now().hour
+        try:
+            learning_boost, boost_reasons = trade_learner.get_confidence_adjustment(
+                ticker=ticker,
+                trade_type=trade_type,
+                current_hour=current_hour,
+                pattern=None  # Could extract from ignition/pressure signals
+            )
+            if learning_boost != 0:
+                # Apply boost as percentage of score (e.g., +15% boost = score * 1.15)
+                combined_score = combined_score * (1 + learning_boost)
+                combined_score = min(100, max(0, combined_score))  # Clamp 0-100
+                if boost_reasons:
+                    log.info(f"Screenshot learning boost for {ticker}: {learning_boost:+.0%} - {boost_reasons[0]}")
+        except Exception as e:
+            log.debug(f"Screenshot learning check failed: {e}")
+
         # Convert to probability (sigmoid-like transformation)
         probability_win = self._score_to_probability(combined_score)
         
