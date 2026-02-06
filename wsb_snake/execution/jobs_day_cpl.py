@@ -737,13 +737,15 @@ class JobsDayCPL:
                     if CPL_AUTO_EXECUTE:
                         try:
                             option_premium = call.entry_trigger.get("price", 0)
-                            # Direction: CALL = long, PUT = short
-                            direction = "long" if call.side == "CALL" else "short"
+                            # Direction: Always "long" since we're BUYING options (calls or puts)
+                            # "short" would mean shorting, but we're buying to open
+                            # The option_type (call/put) determines bullish vs bearish bet
+                            direction = "long"
                             # Target/stop based on option premium (not underlying price!)
                             target_price = option_premium * 1.20  # +20% target
                             stop_loss = option_premium * 0.85     # -15% stop
 
-                            # FIX: Pass strike and option_symbol directly from CPL
+                            # FIX: Pass strike, option_symbol, and option_type directly from CPL
                             # Previously we passed option_premium as entry_price, which the executor
                             # incorrectly used to calculate strike (e.g., $1.43 -> strike $1!)
                             alpaca_pos = alpaca_executor.execute_scalp_entry(
@@ -757,6 +759,7 @@ class JobsDayCPL:
                                 engine=TradingEngine.SCALPER,
                                 strike_override=call.strike,  # Use CPL's strike directly
                                 option_symbol_override=call.option_symbol,  # Use CPL's option symbol directly
+                                option_type_override=call.side.lower(),  # "call" or "put" from CPL
                             )
                             if alpaca_pos:
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} @ ${option_premium:.2f} -> {alpaca_pos.option_symbol}")

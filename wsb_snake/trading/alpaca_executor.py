@@ -724,6 +724,7 @@ No overnight risk. Fresh start tomorrow!
         signal_id: Optional[int] = None,
         strike_override: Optional[float] = None,
         option_symbol_override: Optional[str] = None,
+        option_type_override: Optional[str] = None,  # 'call' or 'put' - overrides direction-based default
     ) -> Optional[AlpacaPosition]:
         """
         Execute a scalp trade entry.
@@ -760,8 +761,13 @@ No overnight risk. Fresh start tomorrow!
                 logger.warning("Max concurrent positions reached, skipping entry")
                 return None
         
-        trade_type = "CALLS" if direction == "long" else "PUTS"
-        option_type = "call" if direction == "long" else "put"
+        # Option type: use override if provided (for CPL), else infer from direction
+        if option_type_override:
+            option_type = option_type_override.lower()
+            trade_type = "CALLS" if option_type == "call" else "PUTS"
+        else:
+            trade_type = "CALLS" if direction == "long" else "PUTS"
+            option_type = "call" if direction == "long" else "put"
         
         # CRITICAL VALIDATION: Reject trades with invalid parameters
         if stop_loss <= 0:
