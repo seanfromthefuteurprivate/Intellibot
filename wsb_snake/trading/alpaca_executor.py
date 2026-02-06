@@ -860,7 +860,8 @@ No overnight risk. Fresh start tomorrow!
         if strike_override and option_symbol_override:
             # CPL provided exact strike and option symbol - use them directly
             strike = strike_override
-            option_symbol = option_symbol_override
+            # Strip "O:" prefix if present (Polygon uses "O:SPY...", Alpaca uses "SPY...")
+            option_symbol = option_symbol_override.replace("O:", "") if option_symbol_override.startswith("O:") else option_symbol_override
             quote = self.get_option_quote(option_symbol)
             if quote:
                 option_price = float(quote.get("ap", 0))
