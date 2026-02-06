@@ -18,6 +18,7 @@ from enum import Enum
 
 from wsb_snake.utils.logger import get_logger
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.notifications.message_templates import action_line_exit, copy_line_exit
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,10 @@ class TrackedPosition:
     exit_reason: Optional[ExitReason] = None
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
+    # Optional: so alert matches Webull (chain strike + DTE)
+    strike: Optional[float] = None
+    dte: Optional[int] = None
+    price_type: str = "underlying"  # "underlying" | "option" — what entry/exit prices refer to
     
     @property
     def is_active(self) -> bool:
@@ -106,7 +111,10 @@ class ZeroGreedExit:
         target_price: float,
         stop_loss: float,
         max_hold_minutes: int = 60,
-        price_getter: Optional[Callable] = None
+        price_getter: Optional[Callable] = None,
+        strike: Optional[float] = None,
+        dte: Optional[int] = None,
+        price_type: str = "underlying",
     ) -> bool:
         """
         Add a position to track for automatic exit.
@@ -201,21 +209,35 @@ class ZeroGreedExit:
             action = "EXIT IMMEDIATELY"
         
         hold_time = (position.exit_time - position.entry_time).total_seconds() / 60
-        
+        dte_val = position.dte if position.dte is not None else 0
+        strike_val = position.strike if position.strike is not None else 0.0
+        side = "PUT" if "PUT" in (position.trade_type or "").upper() else "CALL"
+        # Line 1: one-glance EXIT — same format as CPL so you never miss closing
+        action_first = action_line_exit(
+            position.ticker, side, dte_val, strike_val, pnl, current_price, position.entry_price, contracts=1
+        )
+        copy_first = copy_line_exit(position.ticker, side, strike_val, 1)
+        dte_line = f"📅 DTE: {position.dte} (0 = today expiry)\n" if position.dte is not None else ""
+        strike_line = f"🎯 Strike: ${position.strike:.2f}\n" if position.strike is not None else ""
+        price_label = "Option premium" if getattr(position, "price_type", "underlying") == "option" else "Underlying price"
         alert_msg = f"""
+{action_first}
+{copy_first}
+
 {'='*40}
 {header}
 {'='*40}
 
 📊 {position.ticker} {position.trade_type}
 {'📈' if position.direction == 'long' else '📉'} Direction: {position.direction.upper()}
-
-💵 ENTRY: ${position.entry_price:.2f}
-💵 EXIT: ${current_price:.2f}
+{dte_line}{strike_line}
+💵 ENTRY ({price_label}): ${position.entry_price:.2f}
+💵 EXIT ({price_label}): ${current_price:.2f}
 {pnl_emoji} P&L: {pnl:+.1f}%
 
 ⏱️ Hold Time: {hold_time:.1f} min
 
+_Match to Webull: same ticker → Options → Chain → same DTE (0D = 0DTE), same strike._
 {'='*40}
 🚨 {action} 🚨
 {'='*40}

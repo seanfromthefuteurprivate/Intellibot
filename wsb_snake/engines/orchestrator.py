@@ -67,11 +67,8 @@ from wsb_snake.learning.event_outcomes import event_outcome_db
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.learning.session_learnings import session_learnings, battle_plan
 from wsb_snake.engines.spy_scalper import spy_scalper
-from wsb_snake.trading.alpaca_executor import AlpacaExecutor
+from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.config import ZERO_DTE_UNIVERSE
-
-# Initialize Alpaca executor for REAL paper trading
-alpaca_executor = AlpacaExecutor()
 
 
 class SnakeOrchestrator:
