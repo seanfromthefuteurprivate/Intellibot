@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 import json
 import os
+from wsb_snake.config import SESSION_LEARNINGS_PATH, DATA_DIR
 from wsb_snake.utils.logger import log
 
 
@@ -31,7 +32,8 @@ class SessionLearnings:
     
     def __init__(self):
         self.insights: List[TradingInsight] = []
-        self.db_path = "wsb_snake_data/session_learnings.json"
+        os.makedirs(DATA_DIR, exist_ok=True)
+        self.db_path = SESSION_LEARNINGS_PATH
         self._load_insights()
         
         # Encode today's session learnings (Jan 26, 2026)

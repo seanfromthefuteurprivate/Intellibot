@@ -145,6 +145,7 @@ alpaca_executor.close_position("SPY260128C00600000")
 - [ ] Confirm all 0DTE positions closed
 - [ ] Review session statistics
 - [ ] Check API usage/budget
+- [ ] Run backup (optional): `./script/backup_state.sh` or cron daily after 16:15 ET — backs up `wsb_snake_data/wsb_snake.db` and `session_learnings.json` to `wsb_snake_data/backups/` (keeps last 30)
 
 ---
 

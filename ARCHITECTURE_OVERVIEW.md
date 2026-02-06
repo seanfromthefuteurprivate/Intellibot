@@ -85,8 +85,8 @@
 ### 6. Trading (Execution)
 | Component | Function |
 |-----------|----------|
-| `alpaca_executor.py` | Order placement, position monitoring |
-| `zero_greed_exit.py` | Mechanical exit enforcement |
+| `alpaca_executor.py` | **Single executor:** order placement, position monitoring, all closes (target/stop/time/EOD). Module-level instance only; all engines use it. |
+| `zero_greed_exit.py` | Sends Telegram alerts when target/stop/time hit; does not place close orders. Actual exits: `alpaca_executor._check_exits()` every 5s + dedicated EOD schedule 3:55 PM ET in main. |
 
 ### 7. Notifications
 | Component | Channel |

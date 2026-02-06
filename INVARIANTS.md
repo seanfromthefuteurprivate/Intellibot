@@ -75,8 +75,12 @@ CHECK: if current_price <= stop_loss: execute_exit("STOP_LOSS")
 ### INV-009: Zero Greed Protocol
 ```
 INVARIANT: No position escapes mechanical exit rules
-ENFORCED IN: zero_greed_exit.py
+ENFORCED IN: alpaca_executor._check_exits() (every 5s) and dedicated EOD schedule (3:55 PM ET)
 PRINCIPLE: Target hit = IMMEDIATE EXIT, no exceptions
+
+NOTE: zero_greed_exit.py sends Telegram alerts when target/stop/time conditions are met.
+Actual order placement to close positions is performed only by AlpacaExecutor (monitor loop + close_all_0dte_positions).
+Single executor: all trading and position monitoring use the module-level alpaca_executor; no other AlpacaExecutor instances.
 ```
 
 ---

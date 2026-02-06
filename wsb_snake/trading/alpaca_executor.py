@@ -166,23 +166,24 @@ class AlpacaExecutor:
     ETF_TICKERS = ['SPY', 'QQQ', 'IWM', 'GLD', 'GDX', 'SLV', 'XLE', 'XLF', 'TLT', 'USO', 'UNG', 'HYG']
     ETF_PRIORITY = True  # Prioritize ETFs for scalping (higher win rate)
 
-    # ========== SMART 0DTE EXIT SETTINGS - FEB 6 ==========
-    # TRAILING STOP SYSTEM:
-    # - Initial stop: -12%
-    # - At +10% profit: move stop to BREAKEVEN
-    # - At +15% profit: move stop to +8%
-    # - At +20% profit: move stop to +12%
-    # - Target: +30% (let winners run, trailing stop protects gains)
+    # ========== MAX MODE - AGGRESSIVE LAST HOUR TRADING - FEB 6 ==========
+    # QUICK PROFIT SYSTEM:
+    # - Take profit FAST at +10% (don't wait, book it!)
+    # - Trailing stop kicks in at +5% (move to breakeven)
+    # - At +8% profit: move stop to +5%
+    # - Initial stop: -8% (tight risk control)
+    # - Max hold: 8 minutes (quick scalps only)
     #
-    # This ensures:
-    # 1. We never let a +10% winner become a loser
-    # 2. We lock in increasing profits as price moves
-    # 3. We still aim for big wins but protect capital
+    # MAX MODE PHILOSOPHY:
+    # 1. Enter with conviction, exit with profit
+    # 2. Don't let winners turn to losers
+    # 3. Quick rotations - capture volatility, move on
+    # 4. Predator mode - strike fast, book profit, hunt again
     #
     # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    _SCALP_TARGET_PCT_DEFAULT = 1.30   # +30% target (trailing stop protects at lower levels)
-    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% initial stop
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 15  # 15 MIN - balance theta decay vs move completion
+    _SCALP_TARGET_PCT_DEFAULT = 1.10   # +10% target (QUICK PROFIT - don't be greedy!)
+    _SCALP_STOP_PCT_DEFAULT = 0.92     # -8% initial stop (tight risk)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 8  # 8 MIN - quick scalps, fast rotations
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -1337,25 +1338,25 @@ Reason: Order was {order_status}
                 # Calculate current profit percentage
                 profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
 
-                # TRAILING STOP LOGIC - move stop up as profit grows
-                if profit_pct >= 0.20:  # +20% profit
-                    # Move stop to +12% (lock in 12% minimum)
-                    new_stop = position.entry_price * 1.12
+                # MAX MODE TRAILING STOP - aggressive profit protection
+                if profit_pct >= 0.08:  # +8% profit
+                    # Move stop to +5% (lock in 5% minimum - almost at target!)
+                    new_stop = position.entry_price * 1.05
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to +12% (${new_stop:.2f})")
-                elif profit_pct >= 0.15:  # +15% profit
-                    # Move stop to +8% (lock in 8% minimum)
-                    new_stop = position.entry_price * 1.08
-                    if position.stop_loss < new_stop:
-                        position.stop_loss = new_stop
-                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to +8% (${new_stop:.2f})")
-                elif profit_pct >= 0.10:  # +10% profit
-                    # Move stop to breakeven (lock in entry)
+                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to +5% (${new_stop:.2f})")
+                elif profit_pct >= 0.05:  # +5% profit
+                    # Move stop to breakeven (never let winner become loser!)
                     new_stop = position.entry_price * 1.0
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to BREAKEVEN (${new_stop:.2f})")
+                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to BREAKEVEN (${new_stop:.2f})")
+                elif profit_pct >= 0.03:  # +3% profit
+                    # Move stop to -3% (reduce risk early)
+                    new_stop = position.entry_price * 0.97
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to -3% (${new_stop:.2f})")
 
                 # Check exits
                 if current_price >= position.target_price:

@@ -9,6 +9,14 @@ import time
 import schedule
 from datetime import datetime
 
+# EOD close: run once per day when >= 3:55 PM ET (dedicated trigger, not pipeline-dependent)
+_last_eod_run_date = None
+
+
+def get_last_eod_run_date():
+    """Return the date (ET) when EOD close last ran, or None. Used by health/status."""
+    return _last_eod_run_date
+
 from wsb_snake.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from wsb_snake.utils.logger import log
 
@@ -100,13 +108,75 @@ def run_scheduled_pipeline():
         log.info(f"Skipping pipeline - session: {session_info['session']}")
 
 
+def run_eod_check():
+    """Dedicated 3:55 PM ET trigger: close all 0DTE positions once per day. Does not depend on pipeline."""
+    global _last_eod_run_date
+    if not alpaca_executor.should_close_for_eod():
+        return
+    import pytz
+    et = pytz.timezone("US/Eastern")
+    now_et = datetime.now(et)
+    today_et = now_et.date()
+    if _last_eod_run_date == today_et:
+        return
+    _last_eod_run_date = today_et
+    closed = alpaca_executor.close_all_0dte_positions()
+    log.info(f"EOD scheduled close ran: {closed} position(s) closed at {now_et.strftime('%H:%M')} ET")
+
+
 def run_daily_report():
-    """Send end-of-day report at market close."""
+    """Send end-of-day report at 4:15 PM ET: win rate, avg R, top/worst, 2X/4X/20X tiers."""
     log.info("Sending daily report...")
+    try:
+        from wsb_snake.notifications.daily_report import send_daily_report as send_daily_report_telegram
+        send_daily_report_telegram()
+    except Exception as e:
+        log.warning("Daily report (new) failed: %s", e)
     send_daily_summary()
-    
     # Apply weight decay for next day
     learning_memory.apply_daily_decay()
+
+
+def _jobs_report_tracker_should_run() -> bool:
+    """True if we should still run the jobs report tracker (until Fri Feb 6, 5 PM ET)."""
+    try:
+        import pytz
+        et = pytz.timezone("America/New_York")
+        now_et = datetime.now(et)
+        from datetime import date
+        end_date = date(2026, 2, 6)
+        if now_et.date() > end_date:
+            return False
+        if now_et.date() == end_date and now_et.hour >= 17:
+            return False
+        return True
+    except Exception:
+        return True
+
+
+def run_jobs_report_tracker_once():
+    """Refresh NFP Feb 6 playbook (watchlist + option plays). Runs every 30 min until Fri 5 PM ET."""
+    if not _jobs_report_tracker_should_run():
+        return
+    try:
+        from wsb_snake.event_driven.jobs_report_tracker import (
+            JobsReportTracker,
+            JOBS_REPORT_EVENT_DATE,
+            JOBS_REPORT_WATCHLIST,
+            BUDGET_WEBBULL_USD,
+        )
+        from wsb_snake.config import DATA_DIR
+        import os
+        tracker = JobsReportTracker(
+            event_date=JOBS_REPORT_EVENT_DATE,
+            watchlist=JOBS_REPORT_WATCHLIST,
+            budget_usd=BUDGET_WEBBULL_USD,
+        )
+        out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), DATA_DIR)
+        tracker.run(output_dir=out_dir)
+        log.info("Jobs report playbook updated (NFP Feb 6)")
+    except Exception as e:
+        log.warning(f"Jobs report tracker skip: {e}")
 
 
 def main():
@@ -167,6 +237,9 @@ def main():
     # Main pipeline: every 10 minutes during market hours
     schedule.every(10).minutes.do(run_scheduled_pipeline)
     
+    # EOD close: every minute check; at 3:55 PM ET close all 0DTE (guaranteed, not pipeline-dependent)
+    schedule.every(1).minutes.do(run_eod_check)
+    
     # Daily report: 4:15 PM ET (after market close)
     schedule.every().day.at("16:15").do(run_daily_report)
 
@@ -177,6 +250,12 @@ def main():
 
     # Deep study: Run during off-market hours (every 30 min)
     schedule.every(30).minutes.do(run_idle_study)
+    
+    # Jobs report tracker: refresh NFP Feb 6 playbook every 30 min until Fri 5 PM ET
+    schedule.every(30).minutes.do(run_jobs_report_tracker_once)
+    if _jobs_report_tracker_should_run():
+        log.info("Running jobs report tracker (NFP Feb 6)...")
+        run_jobs_report_tracker_once()
     
     # Run immediately on startup if market-appropriate
     log.info("Running initial pipeline check...")

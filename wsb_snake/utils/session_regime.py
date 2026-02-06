@@ -136,6 +136,7 @@ def get_session_info() -> Dict:
         "is_power_hour": is_power_hour(),
         "is_final_hour": is_final_hour(),
         "is_lunch_chop": is_lunch_chop(),
+        "is_friday_event_day": is_friday_event_day(),
         "current_time_et": now.strftime("%H:%M:%S"),
         "minutes_to_close": max(0, minutes_to_close),
         "minutes_to_power_hour": max(0, minutes_to_power_hour),
@@ -143,11 +144,18 @@ def get_session_info() -> Dict:
     }
 
 
+def is_friday_event_day() -> bool:
+    """True when today is Friday (big event day: NFP, etc.). Full send — no lunch back-off."""
+    now = get_eastern_time()
+    return now.weekday() == 4  # Monday=0, Friday=4
+
+
 def get_session_signal_multiplier(session: SessionType) -> float:
     """
     Get signal quality multiplier based on session.
     
     Signals during lunch are penalized, power hour signals get boosted.
+    On Friday (event day): full send — lunch at 1.0, no back-off.
     """
     multipliers = {
         SessionType.PREMARKET: 0.5,
@@ -159,7 +167,11 @@ def get_session_signal_multiplier(session: SessionType) -> float:
         SessionType.AFTERHOURS: 0.3,
         SessionType.CLOSED: 0.0,
     }
-    return multipliers.get(session, 0.5)
+    base = multipliers.get(session, 0.5)
+    # Friday event day: full send — no lunch penalty
+    if is_friday_event_day() and session == SessionType.LUNCH:
+        return 1.0
+    return base
 
 
 def should_scan_for_signals() -> bool:

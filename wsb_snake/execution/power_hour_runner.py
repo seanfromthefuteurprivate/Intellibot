@@ -42,15 +42,16 @@ POWER_HOUR_WATCHLIST = [
     "GLD", "SLV",             # Metals
 ]
 
-# Minimum conviction to trade
-MIN_CONVICTION = 70
+# ========== MAX MODE SETTINGS - AGGRESSIVE LAST HOUR ==========
+# Minimum conviction to trade (lowered for more opportunities)
+MIN_CONVICTION = 55  # MAX MODE: Lower threshold, more trades
 
 # Power hour timing (ET)
 POWER_HOUR_START = 15  # 3 PM
 POWER_HOUR_END = 16    # 4 PM
 
-# Scan interval
-SCAN_INTERVAL_SECONDS = 30
+# Scan interval - FAST scanning for MAX MODE
+SCAN_INTERVAL_SECONDS = 10  # MAX MODE: Scan every 10 seconds!
 
 # Track executed trades to avoid duplicates
 _executed_this_session: set = set()

@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 import pytz
 
-from wsb_snake.trading.alpaca_executor import AlpacaExecutor
+from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.collectors.market_data import get_market_data
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
 
@@ -86,7 +86,6 @@ class InstitutionalScalper:
     }
     
     def __init__(self):
-        self.executor = AlpacaExecutor()
         self.et = pytz.timezone('US/Eastern')
         self.daily_trades = 0
         self.daily_pnl = 0.0
@@ -190,7 +189,7 @@ class InstitutionalScalper:
         """
         log.info(f"Executing institutional setup: {setup.ticker} {setup.direction}")
         
-        result = self.executor.execute_scalp_entry(
+        result = alpaca_executor.execute_scalp_entry(
             underlying=setup.ticker,
             direction=setup.direction,
             entry_price=setup.entry_price,
@@ -228,7 +227,7 @@ Max Hold: {setup.time_horizon_minutes} minutes"""
         3. Time decay exit for 0DTE
         4. Trail stops on winners
         """
-        positions = self.executor.get_options_positions()
+        positions = alpaca_executor.get_options_positions()
         now = datetime.now(self.et)
         
         actions = {
@@ -247,7 +246,7 @@ Max Hold: {setup.time_horizon_minutes} minutes"""
             # RULE: Take profits at +10% or better
             if pnl_pct >= 10:
                 log.info(f"PROFIT TARGET: {sym} at {pnl_pct:+.1f}%")
-                self.executor.close_position(sym)
+                alpaca_executor.close_position(sym)
                 self.win_count += 1
                 self.daily_pnl += (current - entry) * int(p.get('qty', 0)) * 100
                 actions['profits_taken'] += 1
@@ -260,7 +259,7 @@ INSTITUTIONAL DISCIPLINE PAYS""")
             # RULE: Cut losses at -15%
             elif pnl_pct <= -15:
                 log.info(f"STOP TRIGGERED: {sym} at {pnl_pct:+.1f}%")
-                self.executor.close_position(sym)
+                alpaca_executor.close_position(sym)
                 self.loss_count += 1
                 self.daily_pnl += (current - entry) * int(p.get('qty', 0)) * 100
                 actions['stops_hit'] += 1
@@ -274,7 +273,7 @@ MECHANICAL DISCIPLINE - PRESERVED CAPITAL""")
             elif self._is_0dte(sym) and now.hour >= 14 and now.minute >= 30:
                 if pnl_pct < 5:  # Not enough profit for theta risk
                     log.info(f"TIME DECAY EXIT: {sym} at {pnl_pct:+.1f}%")
-                    self.executor.close_position(sym)
+                    alpaca_executor.close_position(sym)
                     actions['time_exits'] += 1
         
         return actions
@@ -311,7 +310,7 @@ MECHANICAL DISCIPLINE - PRESERVED CAPITAL""")
         mgmt = self.manage_positions()
         
         # Step 2: Check if we have room for new trades
-        positions = self.executor.get_options_positions()
+        positions = alpaca_executor.get_options_positions()
         slots = max(0, 3 - len(positions))
         
         result = {

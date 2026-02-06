@@ -1,0 +1,6 @@
+# Phase 3: CPL full send at 9:30 AM every weekday (Mon–Fri)
+# Run: crontab scripts/crontab.example  (or copy line below into crontab -e)
+30 9 * * 1-5 /Users/seankuesia/Downloads/Intellibot/scripts/run_phase3_go_live.sh
+
+# Phase 2 (optional): dry-run pre-open
+# 25 9 * * 1-5 /Users/seankuesia/Downloads/Intellibot/scripts/run_phase2_arm.sh

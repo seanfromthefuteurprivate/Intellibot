@@ -68,8 +68,9 @@ class ApexConvictionEngine:
     }
 
     # Conviction thresholds
-    STRONG_CONVICTION = 80
-    TRADE_THRESHOLD = 70
+    # MAX MODE THRESHOLDS - Aggressive trading
+    STRONG_CONVICTION = 65  # Was 80 - now more signals qualify as "strong"
+    TRADE_THRESHOLD = 55    # Was 70 - now find more opportunities
     AVOID_THRESHOLD = 40
 
     # Power hour settings (3:00-4:00 PM ET)
@@ -542,7 +543,8 @@ class ApexConvictionEngine:
         bullish_weight = sum(s.score * s.weight for s in signals if s.direction == "BULLISH")
         bearish_weight = sum(s.score * s.weight for s in signals if s.direction == "BEARISH")
 
-        if bullish_weight > bearish_weight * 1.2:
+        # MAX MODE: Lower the bar for direction clarity (was 1.2, now 1.1)
+        if bullish_weight > bearish_weight * 1.1:
             if conviction_score >= self.STRONG_CONVICTION:
                 direction = "STRONG_LONG"
                 action = "BUY_CALLS"
@@ -552,7 +554,7 @@ class ApexConvictionEngine:
             else:
                 direction = "NEUTRAL"
                 action = "NO_TRADE"
-        elif bearish_weight > bullish_weight * 1.2:
+        elif bearish_weight > bullish_weight * 1.1:  # MAX MODE: was 1.2
             if conviction_score >= self.STRONG_CONVICTION:
                 direction = "STRONG_SHORT"
                 action = "BUY_PUTS"

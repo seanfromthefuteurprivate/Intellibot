@@ -91,6 +91,37 @@ class PolygonOptionsAdapter:
         
         return []
     
+    def get_chain_for_expiration(
+        self,
+        ticker: str,
+        spot_price: float,
+        expiration_date: str,
+        strike_range: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Get options chain for a specific expiration date (e.g. jobs report Friday).
+        
+        Args:
+            ticker: Underlying symbol
+            spot_price: Current price of underlying
+            expiration_date: YYYY-MM-DD (e.g. "2026-02-06")
+            strike_range: Number of strikes above/below ATM
+            
+        Returns:
+            Dict with calls, puts, metrics, GEX, max pain, walls (same shape as get_0dte_chain).
+        """
+        strike_step = 1 if spot_price < 200 else 5 if spot_price < 500 else 10
+        strike_gte = spot_price - (strike_range * strike_step)
+        strike_lte = spot_price + (strike_range * strike_step)
+        contracts = self.get_options_chain(
+            ticker=ticker,
+            expiration_date=expiration_date,
+            strike_price_gte=strike_gte,
+            strike_price_lte=strike_lte,
+            limit=200,
+        )
+        return self._build_chain_result(ticker, spot_price, expiration_date, contracts)
+
     def get_0dte_chain(self, ticker: str, spot_price: float, strike_range: int = 10) -> Dict[str, Any]:
         """
         Get 0DTE options chain centered around spot price with full analysis.
@@ -104,19 +135,26 @@ class PolygonOptionsAdapter:
             Dict with calls, puts, computed metrics, GEX, max pain, and walls
         """
         today = date.today().strftime("%Y-%m-%d")
-        
         strike_step = 1 if spot_price < 200 else 5 if spot_price < 500 else 10
         strike_gte = spot_price - (strike_range * strike_step)
         strike_lte = spot_price + (strike_range * strike_step)
-        
         contracts = self.get_options_chain(
             ticker=ticker,
             expiration_date=today,
             strike_price_gte=strike_gte,
             strike_price_lte=strike_lte,
-            limit=200
+            limit=200,
         )
-        
+        return self._build_chain_result(ticker, spot_price, today, contracts)
+
+    def _build_chain_result(
+        self,
+        ticker: str,
+        spot_price: float,
+        expiration_date: str,
+        contracts: List[Dict],
+    ) -> Dict[str, Any]:
+        """Parse raw contract list into calls/puts and compute GEX, max pain, walls."""
         calls = []
         puts = []
         
@@ -173,7 +211,7 @@ class PolygonOptionsAdapter:
         return {
             "ticker": ticker,
             "spot_price": spot_price,
-            "expiration": today,
+            "expiration": expiration_date,
             "atm_strike": atm_strike,
             "calls": calls,
             "puts": puts,
