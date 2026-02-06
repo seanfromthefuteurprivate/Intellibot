@@ -86,13 +86,15 @@ def _is_market_open() -> bool:
 def _get_spot_price(ticker: str) -> Optional[float]:
     """Get current spot price."""
     try:
-        quote = polygon_options.get_quote(ticker) if polygon_options else None
-        if quote and quote.get("price"):
-            return float(quote["price"])
+        # PRIMARY: Use polygon_enhanced snapshot (more reliable)
         if polygon_enhanced:
             snap = polygon_enhanced.get_snapshot(ticker)
             if snap and snap.get("price"):
                 return float(snap["price"])
+        # FALLBACK: Try polygon_options quote
+        quote = polygon_options.get_quote(ticker) if polygon_options else None
+        if quote and quote.get("price"):
+            return float(quote["price"])
     except Exception as e:
         logger.debug(f"Price fetch failed {ticker}: {e}")
     return None
