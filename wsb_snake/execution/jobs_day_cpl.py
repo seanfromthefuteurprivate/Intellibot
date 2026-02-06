@@ -194,26 +194,39 @@ def _is_execution_ready(call: JobsDayCall) -> tuple[bool, Optional[str]]:
     return True, None
 
 
-def _event_tier(spot: float, strike: float, side: str, entry_price: float) -> str:
+def _event_tier(spot: float, strike: float, side: str, entry_price: float, momentum_score: float = 50) -> str:
     """
-    Classify potential event magnitude: 2X (+50–99%), 4X (+100–399%), 20X (+400%+).
-    Prioritizes OTM lottery-style setups for capitalization on big moves.
+    SMART TIER: Classify with momentum weighting.
+    High momentum + ATM = better than low momentum + OTM lottery.
+    Prioritizes setups where momentum confirms direction.
     """
     if not spot or spot <= 0 or entry_price <= 0:
         return "2X"
+
+    # Calculate OTM percentage
     if side.upper() == "CALL":
         otm_pct = ((strike - spot) / spot) * 100 if strike > spot else 0
     else:
         otm_pct = ((spot - strike) / spot) * 100 if strike < spot else 0
-    # Cheap OTM = high multiplier potential
-    if entry_price < 0.25 and otm_pct >= 0.5:
+
+    # ATM or slight OTM with high momentum = BEST (reliable 2-4x moves)
+    if otm_pct < 1.0 and momentum_score >= 65:
+        return "4X"  # ATM with strong momentum
+    if otm_pct < 2.0 and momentum_score >= 55:
+        return "4X"  # Near-money with decent momentum
+
+    # Deep OTM lottery only if momentum is VERY strong
+    if entry_price < 0.25 and otm_pct >= 0.5 and momentum_score >= 70:
         return "20X"
-    if entry_price < 0.50 and otm_pct >= 0.3:
+    if entry_price < 0.50 and otm_pct >= 0.3 and momentum_score >= 60:
         return "20X"
-    if entry_price < 0.80 and otm_pct >= 0.2:
+
+    # Moderate setups need momentum confirmation
+    if entry_price < 0.80 and otm_pct >= 0.2 and momentum_score >= 55:
         return "4X"
-    if entry_price < 1.50 or otm_pct >= 0.1:
+    if momentum_score >= 60:
         return "4X"
+
     return "2X"
 
 
@@ -271,6 +284,59 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
     except Exception:
         pass
     return None
+
+
+def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
+    """
+    SMART ENTRY: Validate momentum/trend before entry.
+    Only buy CALLS when trending up, PUTS when trending down.
+    Returns: (is_valid, confidence_score, reason)
+    """
+    try:
+        # 1. Get 5-minute bars for trend analysis
+        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=6)
+        if not bars or len(bars) < 3:
+            return True, 50, "insufficient_data"
+
+        # 2. Calculate momentum (last 3 bars direction) - bars[0] is most recent
+        closes = [b.get('close', b.get('c', 0)) for b in bars[:3]]
+        if not all(closes):
+            return True, 50, "missing_close_data"
+
+        is_uptrend = closes[0] > closes[1] > closes[2]  # Most recent > older = uptrend
+        is_downtrend = closes[0] < closes[1] < closes[2]  # Most recent < older = downtrend
+
+        # 3. Get RSI for overbought/oversold check
+        rsi = 50  # Default neutral
+        try:
+            rsi_data = polygon_enhanced.get_rsi(ticker) if hasattr(polygon_enhanced, 'get_rsi') else None
+            if rsi_data and rsi_data.get('current'):
+                rsi = float(rsi_data['current'])
+        except Exception:
+            pass
+
+        # 4. Validate direction alignment
+        if side.upper() == "CALL":
+            if is_downtrend:
+                return False, 20, f"MOMENTUM_REJECT: {ticker} downtrend, skip CALL"
+            if rsi > 75:
+                return False, 25, f"MOMENTUM_REJECT: {ticker} RSI {rsi:.0f} overbought, skip CALL"
+            confidence = 70 if is_uptrend else 50
+            if rsi < 35:
+                confidence += 15  # Oversold bounce potential
+        else:  # PUT
+            if is_uptrend:
+                return False, 20, f"MOMENTUM_REJECT: {ticker} uptrend, skip PUT"
+            if rsi < 25:
+                return False, 25, f"MOMENTUM_REJECT: {ticker} RSI {rsi:.0f} oversold, skip PUT"
+            confidence = 70 if is_downtrend else 50
+            if rsi > 65:
+                confidence += 15  # Overbought reversal potential
+
+        return True, confidence, "momentum_ok"
+    except Exception as e:
+        logger.debug(f"Entry quality check failed {ticker}: {e}")
+        return True, 50, "check_failed"
 
 
 def _check_exits_and_emit_sells(broadcast: bool, dry_run: bool, untruncated_tails: bool = False) -> List[JobsDayCall]:
@@ -551,6 +617,12 @@ class JobsDayCPL:
                         logger.info(reject_reason)
                         continue
 
+                    # SMART ENTRY: Momentum validation (only buy CALLS in uptrend, PUTS in downtrend)
+                    is_momentum_ok, momentum_conf, momentum_reason = _check_entry_quality(ticker, side, price)
+                    if not is_momentum_ok:
+                        logger.info(momentum_reason)
+                        continue
+
                     # Affordability: untruncated = cost <= session_balance; else cost <= MAX_COST_PER_CONTRACT
                     max_cap = _session_balance if untruncated_tails else None
                     if not _is_affordable(c, max_cap_override=max_cap):
@@ -574,15 +646,16 @@ class JobsDayCPL:
                         tp_pcts=[25, 50, 100],
                         option_symbol=opt_symbol,
                         regime=regime,
-                        confidence=75.0,
+                        confidence=momentum_conf,  # REAL confidence from momentum check
                         reasons=[
                             f"CPL {regime}",
-                            f"NFP scenario: {regime}",
+                            f"Momentum: {momentum_conf:.0f}%",
                         ],
                         window=window,
                     )
                     job_call.spot_at_alert = price
-                    job_call.event_tier = _event_tier(price, strike, side, entry_price)
+                    job_call.momentum_confidence = momentum_conf  # Store for Alpaca
+                    job_call.event_tier = _event_tier(price, strike, side, entry_price, momentum_conf)
                     candidates.append(job_call)
 
         # Prioritize 2X / 4X / 20X events: sort by tier (20X first, then 4X, then 2X)
@@ -742,8 +815,11 @@ class JobsDayCPL:
                             # The option_type (call/put) determines bullish vs bearish bet
                             direction = "long"
                             # Target/stop based on option premium (not underlying price!)
-                            target_price = option_premium * 1.20  # +20% target
-                            stop_loss = option_premium * 0.85     # -15% stop
+                            target_price = option_premium * 1.25  # +25% target (wider for 0DTE)
+                            stop_loss = option_premium * 0.88     # -12% stop (slightly wider)
+
+                            # Real confidence from momentum check (not fake 85%)
+                            real_confidence = getattr(call, 'momentum_confidence', 50)
 
                             # FIX: Pass strike, option_symbol, and option_type directly from CPL
                             # Previously we passed option_premium as entry_price, which the executor
@@ -754,7 +830,7 @@ class JobsDayCPL:
                                 entry_price=option_premium,  # Still needed for validation
                                 target_price=target_price,
                                 stop_loss=stop_loss,
-                                confidence=85.0,  # CPL calls are high confidence
+                                confidence=real_confidence,  # REAL confidence from momentum analysis
                                 pattern=f"CPL_{call.side}",
                                 engine=TradingEngine.SCALPER,
                                 strike_override=call.strike,  # Use CPL's strike directly

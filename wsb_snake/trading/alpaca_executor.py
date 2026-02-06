@@ -166,17 +166,17 @@ class AlpacaExecutor:
     ETF_TICKERS = ['SPY', 'QQQ', 'IWM', 'GLD', 'GDX', 'SLV', 'XLE', 'XLF', 'TLT', 'USO', 'UNG', 'HYG']
     ETF_PRIORITY = True  # Prioritize ETFs for scalping (higher win rate)
 
-    # ========== FIXED SCALP EXIT SETTINGS - JAN 29 ==========
-    # PROBLEM: 0DTE theta decay was killing positions
-    # - Old +25% target rarely hit before theta ate gains
-    # - Old -20% stop too wide, let theta drain positions
-    # - Old 30min hold = death by theta decay
+    # ========== SMART 0DTE EXIT SETTINGS - FEB 6 ==========
+    # PROBLEM: Previous +12% target too tight, getting stopped by theta before move completes
+    # - 0DTE needs BIGGER moves to overcome theta decay
+    # - Need to hold longer for the move to play out
+    # - Only enter when momentum confirms direction (see CPL smart entry)
     #
-    # FIX: Quick in, quick out. Take small wins, cut fast.
+    # FIX: Wider exits + momentum-confirmed entries = higher win rate
     # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    _SCALP_TARGET_PCT_DEFAULT = 1.12   # +12% target (achievable in 5-10 mins)
-    _SCALP_STOP_PCT_DEFAULT = 0.92     # -8% stop (CUT FAST before theta kills)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 12  # 12 MIN MAX - theta decays fast on 0DTE
+    _SCALP_TARGET_PCT_DEFAULT = 1.25   # +25% target (need bigger wins for 0DTE)
+    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% stop (slightly wider, momentum-confirmed entries)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 20  # 20 MIN - more time for momentum move to play out
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
