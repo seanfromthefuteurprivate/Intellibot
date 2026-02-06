@@ -722,6 +722,8 @@ No overnight risk. Fresh start tomorrow!
         engine: TradingEngine = TradingEngine.SCALPER,
         expiry_override: Optional[datetime] = None,
         signal_id: Optional[int] = None,
+        strike_override: Optional[float] = None,
+        option_symbol_override: Optional[str] = None,
     ) -> Optional[AlpacaPosition]:
         """
         Execute a scalp trade entry.
@@ -838,50 +840,63 @@ No overnight risk. Fresh start tomorrow!
         expiry = expiry.replace(tzinfo=None)
         
         logger.info(f"Selected expiry {expiry.strftime('%Y-%m-%d')} for {underlying} (0DTE: {underlying in daily_0dte_tickers}, ET hour: {now_et.hour})")
-        
-        # Calculate strike at proper interval for this underlying
-        interval = self.get_strike_interval(underlying, entry_price)
-        
-        # Try multiple strikes from ITM to OTM to find affordable option
+
+        # ========== STRIKE & OPTION SYMBOL RESOLUTION ==========
+        # If CPL passes strike_override and option_symbol_override, use them directly
+        # This fixes the bug where entry_price (option premium) was used to calculate strike
         max_contract_cost = self.MAX_PER_TRADE  # $1000 max per trade
-        strikes_to_try = 5  # Try up to 5 different strikes
-        
         option_price = 0
         bid_price = 0
         strike = 0
         option_symbol = ""
         quote = {}
-        
-        # Strike offsets: [ITM, ATM, slight OTM, moderate OTM, far OTM]
-        strike_offsets = [-1, 0, 1, 2, 3]  # Number of intervals from ATM
-        
-        for offset in strike_offsets:
-            if direction == "long":
-                # For calls: negative offset = ITM (cheaper delta), positive = OTM
-                strike = self.round_to_strike(entry_price - interval * offset, interval, "nearest")
-            else:
-                # For puts: negative offset = ITM, positive = OTM (cheaper)
-                strike = self.round_to_strike(entry_price + interval * offset, interval, "nearest")
-            
-            option_symbol = self.format_option_symbol(
-                underlying, expiry, strike,
-                "C" if option_type == "call" else "P"
-            )
-            
+
+        if strike_override and option_symbol_override:
+            # CPL provided exact strike and option symbol - use them directly
+            strike = strike_override
+            option_symbol = option_symbol_override
             quote = self.get_option_quote(option_symbol)
-            if not quote:
-                continue
-            
-            option_price = float(quote.get("ap", 0))
-            bid_price = float(quote.get("bp", 0))
-            
-            if option_price > 0 and bid_price > 0:
-                contract_cost = option_price * 100
-                if contract_cost <= max_contract_cost:
-                    logger.info(f"Selected strike ${strike:.0f} (interval: ${interval}) for {underlying} @ ${entry_price:.2f}")
-                    break
+            if quote:
+                option_price = float(quote.get("ap", 0))
+                bid_price = float(quote.get("bp", 0))
+            logger.info(f"Using CPL-provided strike ${strike:.0f} and symbol {option_symbol}")
+        else:
+            # Original logic: calculate strike from underlying price
+            # NOTE: entry_price here should be the UNDERLYING price, not option premium
+            # For CPL calls, we now pass strike_override so this branch won't be used
+            interval = self.get_strike_interval(underlying, entry_price)
+            strikes_to_try = 5  # Try up to 5 different strikes
+
+            # Strike offsets: [ITM, ATM, slight OTM, moderate OTM, far OTM]
+            strike_offsets = [-1, 0, 1, 2, 3]  # Number of intervals from ATM
+
+            for offset in strike_offsets:
+                if direction == "long":
+                    # For calls: negative offset = ITM (cheaper delta), positive = OTM
+                    strike = self.round_to_strike(entry_price - interval * offset, interval, "nearest")
                 else:
-                    logger.info(f"Strike ${strike:.0f} too expensive (${contract_cost:.0f}/contract), trying further OTM...")
+                    # For puts: negative offset = ITM, positive = OTM (cheaper)
+                    strike = self.round_to_strike(entry_price + interval * offset, interval, "nearest")
+
+                option_symbol = self.format_option_symbol(
+                    underlying, expiry, strike,
+                    "C" if option_type == "call" else "P"
+                )
+
+                quote = self.get_option_quote(option_symbol)
+                if not quote:
+                    continue
+
+                option_price = float(quote.get("ap", 0))
+                bid_price = float(quote.get("bp", 0))
+
+                if option_price > 0 and bid_price > 0:
+                    contract_cost = option_price * 100
+                    if contract_cost <= max_contract_cost:
+                        logger.info(f"Selected strike ${strike:.0f} (interval: ${interval}) for {underlying} @ ${entry_price:.2f}")
+                        break
+                    else:
+                        logger.info(f"Strike ${strike:.0f} too expensive (${contract_cost:.0f}/contract), trying further OTM...")
         
         # Check if we found an affordable option
         if not quote or option_price <= 0:

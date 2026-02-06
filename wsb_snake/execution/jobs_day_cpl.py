@@ -736,25 +736,30 @@ class JobsDayCPL:
                     # ========== ALPACA AUTO-EXECUTION ==========
                     if CPL_AUTO_EXECUTE:
                         try:
-                            entry_price = call.entry_trigger.get("price", 0)
+                            option_premium = call.entry_trigger.get("price", 0)
                             # Direction: CALL = long, PUT = short
                             direction = "long" if call.side == "CALL" else "short"
-                            # Target/stop based on entry price
-                            target_price = entry_price * 1.20  # +20% target
-                            stop_loss = entry_price * 0.85     # -15% stop
+                            # Target/stop based on option premium (not underlying price!)
+                            target_price = option_premium * 1.20  # +20% target
+                            stop_loss = option_premium * 0.85     # -15% stop
 
+                            # FIX: Pass strike and option_symbol directly from CPL
+                            # Previously we passed option_premium as entry_price, which the executor
+                            # incorrectly used to calculate strike (e.g., $1.43 -> strike $1!)
                             alpaca_pos = alpaca_executor.execute_scalp_entry(
                                 underlying=call.underlying,
                                 direction=direction,
-                                entry_price=entry_price,
+                                entry_price=option_premium,  # Still needed for validation
                                 target_price=target_price,
                                 stop_loss=stop_loss,
                                 confidence=85.0,  # CPL calls are high confidence
                                 pattern=f"CPL_{call.side}",
                                 engine=TradingEngine.SCALPER,
+                                strike_override=call.strike,  # Use CPL's strike directly
+                                option_symbol_override=call.option_symbol,  # Use CPL's option symbol directly
                             )
                             if alpaca_pos:
-                                logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} @ ${entry_price:.2f} -> {alpaca_pos.option_symbol}")
+                                logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} @ ${option_premium:.2f} -> {alpaca_pos.option_symbol}")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
