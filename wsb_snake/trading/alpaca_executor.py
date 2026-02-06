@@ -167,16 +167,22 @@ class AlpacaExecutor:
     ETF_PRIORITY = True  # Prioritize ETFs for scalping (higher win rate)
 
     # ========== SMART 0DTE EXIT SETTINGS - FEB 6 ==========
-    # PROBLEM: Previous +12% target too tight, getting stopped by theta before move completes
-    # - 0DTE needs BIGGER moves to overcome theta decay
-    # - Need to hold longer for the move to play out
-    # - Only enter when momentum confirms direction (see CPL smart entry)
+    # TRAILING STOP SYSTEM:
+    # - Initial stop: -12%
+    # - At +10% profit: move stop to BREAKEVEN
+    # - At +15% profit: move stop to +8%
+    # - At +20% profit: move stop to +12%
+    # - Target: +30% (let winners run, trailing stop protects gains)
     #
-    # FIX: Wider exits + momentum-confirmed entries = higher win rate
+    # This ensures:
+    # 1. We never let a +10% winner become a loser
+    # 2. We lock in increasing profits as price moves
+    # 3. We still aim for big wins but protect capital
+    #
     # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    _SCALP_TARGET_PCT_DEFAULT = 1.25   # +25% target (need bigger wins for 0DTE)
-    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% stop (slightly wider, momentum-confirmed entries)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 20  # 20 MIN - more time for momentum move to play out
+    _SCALP_TARGET_PCT_DEFAULT = 1.30   # +30% target (trailing stop protects at lower levels)
+    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% initial stop
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 15  # 15 MIN - balance theta decay vs move completion
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -1325,11 +1331,38 @@ Reason: Order was {order_status}
                         self.execute_exit(position, "STOP LOSS", current_price)
                     continue
                 
-                # Scalper: target, stop, or max hold (30 min to limit theta decay losses)
+                # Scalper: TRAILING STOP + target + max hold
+                # Lock in profits as they grow - don't let winners become losers!
+
+                # Calculate current profit percentage
+                profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
+
+                # TRAILING STOP LOGIC - move stop up as profit grows
+                if profit_pct >= 0.20:  # +20% profit
+                    # Move stop to +12% (lock in 12% minimum)
+                    new_stop = position.entry_price * 1.12
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to +12% (${new_stop:.2f})")
+                elif profit_pct >= 0.15:  # +15% profit
+                    # Move stop to +8% (lock in 8% minimum)
+                    new_stop = position.entry_price * 1.08
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to +8% (${new_stop:.2f})")
+                elif profit_pct >= 0.10:  # +10% profit
+                    # Move stop to breakeven (lock in entry)
+                    new_stop = position.entry_price * 1.0
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"TRAIL STOP: {position.option_symbol} stop moved to BREAKEVEN (${new_stop:.2f})")
+
+                # Check exits
                 if current_price >= position.target_price:
                     self.execute_exit(position, "TARGET HIT 🎯", current_price)
                 elif current_price <= position.stop_loss:
-                    self.execute_exit(position, "STOP LOSS", current_price)
+                    exit_reason = "STOP LOSS" if position.stop_loss <= position.entry_price else f"TRAIL STOP (+{(position.stop_loss/position.entry_price-1)*100:.0f}%)"
+                    self.execute_exit(position, exit_reason, current_price)
                 elif position.entry_time:
                     elapsed = (datetime.now() - position.entry_time).total_seconds() / 60
                     if elapsed >= self.SCALP_MAX_HOLD_MINUTES:
