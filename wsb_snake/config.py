@@ -1,7 +1,9 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# override=True ensures .env values take precedence over shell environment
+# This fixes the issue where stale shell env vars override valid .env credentials
+load_dotenv(override=True)
 
 # Reddit
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
@@ -72,5 +74,7 @@ SESSION_WINDOWS = {
     "afterhours": (16, 0, 20, 0),     # 4:00 PM - 8:00 PM ET
 }
 
-# Database
-DB_PATH = "wsb_snake.db"
+# Database and data directory (persistent state)
+DATA_DIR = os.getenv("WSB_SNAKE_DATA_DIR", "wsb_snake_data")
+DB_PATH = os.getenv("WSB_SNAKE_DB_PATH", os.path.join(DATA_DIR, "wsb_snake.db"))
+SESSION_LEARNINGS_PATH = os.path.join(DATA_DIR, "session_learnings.json")
