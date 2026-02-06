@@ -1049,8 +1049,16 @@ Confidence: {confidence:.0f}%
             self.positions[position_id] = position
             self.daily_trade_count += 1  # Increment daily trade counter
             self.daily_exposure_used += estimated_cost  # Track margin utilization
-        
+
         logger.info(f"Trade {self.daily_trade_count}/{self.MAX_CONCURRENT_POSITIONS} | Exposure: ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE}")
+
+        # AUTO-START MONITORING: Ensure exit monitoring is running
+        # This fixes the bug where positions were opened but never closed
+        if not self.running:
+            # First sync any existing positions from Alpaca (from previous runs)
+            self.sync_existing_positions()
+            self.start_monitoring()
+            logger.info("Position monitoring auto-started with existing positions synced")
         
         # Confirmation alert after order placed
         confirm_message = f"""✅ **BUY ORDER PLACED**
