@@ -114,6 +114,7 @@ def main():
     parser.add_argument("--untruncated-tails", action="store_true", help="Paper trader Friday: sequential $250->5 figures, human execution via Telegram")
     parser.add_argument("--high-hitters", type=int, default=0, metavar="N", help="Send top N 20X/4X BUY alerts to Telegram (5-10 recommended); no position tracking")
     parser.add_argument("--power-hour", action="store_true", help="Overtime: 30s scans from now until 4:00 PM ET, up to 20 calls/run, find all opportunities")
+    parser.add_argument("--execute", action="store_true", help="Auto-execute CPL calls on Alpaca paper trading")
     args = parser.parse_args()
 
     # Power hour: 30s loop until close, higher target, shorter cooldown — big moves in remaining ~4h
@@ -133,6 +134,13 @@ def main():
         import wsb_snake.execution.jobs_day_cpl as cpl_module
         cpl_module.UNTRUNCATED_TAILS = True
         print("[PAPER TRADER] UNTRUNCATED_TAILS=1 | Sequential $250 -> 5 figures | Human executes from Telegram")
+
+    # Auto-execute on Alpaca: set CPL module flag from CLI or env
+    auto_execute = args.execute or (os.environ.get("CPL_AUTO_EXECUTE", "").strip().lower() in ("1", "true", "yes"))
+    if auto_execute:
+        import wsb_snake.execution.jobs_day_cpl as cpl_module
+        cpl_module.CPL_AUTO_EXECUTE = True
+        print("[ALPACA EXECUTE] CPL_AUTO_EXECUTE=1 | All BUY calls will be executed on Alpaca paper trading")
 
     if not args.broadcast and not args.dry_run and args.high_hitters <= 0:
         print("Use --dry-run (generate only, no Telegram/DB) or --broadcast (Telegram + DB) or --high-hitters N")
