@@ -178,6 +178,17 @@ class AlpacaExecutor:
     _SCALP_STOP_PCT_DEFAULT = 0.92     # -8% stop (CUT FAST before theta kills)
     _SCALP_MAX_HOLD_MINUTES_DEFAULT = 12  # 12 MIN MAX - theta decays fast on 0DTE
 
+    # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
+    # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
+    # so Telegram price = order price (price-matched execution).
+    # Default: false (market orders) for faster fills.
+    # Set ALPACA_USE_LIMIT_ORDERS=true to enable.
+    USE_LIMIT_ORDERS = os.environ.get("ALPACA_USE_LIMIT_ORDERS", "false").lower() == "true"
+    # For limit buys: add small buffer above ask to improve fill probability
+    LIMIT_BUY_BUFFER_PCT = 0.02  # 2% above ask
+    # For limit sells: subtract small buffer below bid for faster exit
+    LIMIT_SELL_BUFFER_PCT = 0.02  # 2% below bid
+
     def __init__(self):
         self.api_key = os.environ.get("ALPACA_API_KEY", "")
         self.api_secret = os.environ.get("ALPACA_SECRET_KEY", "")
@@ -206,13 +217,17 @@ class AlpacaExecutor:
         self.SCALP_MAX_HOLD_MINUTES = int(_v) if _v is not None else self._SCALP_MAX_HOLD_MINUTES_DEFAULT
 
         mode = "LIVE" if self.LIVE_TRADING else "Paper"
+        order_mode = "LIMIT (price-matched)" if self.USE_LIMIT_ORDERS else "MARKET"
         logger.info(f"AlpacaExecutor initialized - {mode} trading mode")
+        logger.info(f"Order mode: {order_mode}")
         logger.info(f"Scalper exit: target +{(self.SCALP_TARGET_PCT-1)*100:.0f}% | stop {(self.SCALP_STOP_PCT-1)*100:.0f}% | max hold {self.SCALP_MAX_HOLD_MINUTES}min")
         logger.info(f"Max daily exposure: ${self.MAX_DAILY_EXPOSURE} ($1k cash + $3k margin)")
         logger.info(f"Max per trade: ${self.MAX_PER_TRADE} | Max concurrent: {self.MAX_CONCURRENT_POSITIONS}")
-        
+
         if self.LIVE_TRADING:
             logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
+        if self.USE_LIMIT_ORDERS:
+            logger.info("📍 LIMIT ORDERS ENABLED: Entry/exit prices will match Telegram alerts")
         
     @property
     def headers(self) -> Dict[str, str]:
@@ -601,18 +616,28 @@ No overnight risk. Fresh start tomorrow!
             logger.error(f"Order error: {e}")
             return None
     
-    def sell_option_by_symbol(self, option_symbol: str, qty: int) -> Optional[Dict]:
-        """Sell (reduce) option position by symbol and qty. For partial closes."""
+    def sell_option_by_symbol(
+        self, option_symbol: str, qty: int, limit_price: Optional[float] = None
+    ) -> Optional[Dict]:
+        """Sell (reduce) option position by symbol and qty. For partial closes.
+
+        If limit_price is provided, uses a limit order at that price.
+        Otherwise uses market order.
+        """
         if qty <= 0:
             return None
         try:
+            order_type = "limit" if limit_price else "market"
             order_data = {
                 "symbol": option_symbol,
                 "qty": str(qty),
                 "side": "sell",
-                "type": "market",
+                "type": order_type,
                 "time_in_force": "day",
             }
+            if limit_price:
+                order_data["limit_price"] = str(round(limit_price, 2))
+
             resp = requests.post(
                 f"{self.BASE_URL}/v2/orders",
                 headers=self.headers,
@@ -627,8 +652,33 @@ No overnight risk. Fresh start tomorrow!
             logger.error(f"Partial sell error {option_symbol}: {e}")
             return None
 
-    def close_position(self, option_symbol: str) -> Optional[Dict]:
-        """Close an existing position by selling."""
+    def close_position(self, option_symbol: str, limit_price: Optional[float] = None) -> Optional[Dict]:
+        """Close an existing position by selling.
+
+        If limit_price is provided and USE_LIMIT_ORDERS is enabled, uses a limit sell.
+        Otherwise uses the DELETE /positions endpoint (market close).
+        """
+        # If limit order mode and we have a price, use sell_option_by_symbol with limit
+        if self.USE_LIMIT_ORDERS and limit_price:
+            # Get current position qty
+            try:
+                resp = requests.get(
+                    f"{self.BASE_URL}/v2/positions/{option_symbol}",
+                    headers=self.headers,
+                    timeout=10
+                )
+                if resp.status_code == 200:
+                    pos_data = resp.json()
+                    qty = int(pos_data.get("qty", 0))
+                    if qty > 0:
+                        # Apply buffer: sell slightly below bid for faster fill
+                        adjusted_price = round(limit_price * (1 - self.LIMIT_SELL_BUFFER_PCT), 2)
+                        logger.info(f"Closing {option_symbol} with LIMIT @ ${adjusted_price:.2f} (bid: ${limit_price:.2f})")
+                        return self.sell_option_by_symbol(option_symbol, qty, adjusted_price)
+            except Exception as e:
+                logger.warning(f"Could not get position qty for limit close, falling back to market: {e}")
+
+        # Default: market close via DELETE
         try:
             resp = requests.delete(
                 f"{self.BASE_URL}/v2/positions/{option_symbol}",
@@ -907,12 +957,24 @@ No overnight risk. Fresh start tomorrow!
         opt_char = "C" if option_type == "call" else "P"
         option_spec_str = f"{underlying} ${strike:.0f} {opt_char} exp {expiry.strftime('%m/%d')} ({dte} DTE)"
 
+        # Determine order type and limit price
+        if self.USE_LIMIT_ORDERS:
+            # Limit buy: use ask + small buffer for better fill probability
+            limit_price = round(option_price * (1 + self.LIMIT_BUY_BUFFER_PCT), 2)
+            entry_order_type = "limit"
+            order_type_label = f"LIMIT @ ${limit_price:.2f}"
+        else:
+            limit_price = None
+            entry_order_type = "market"
+            order_type_label = "MARKET"
+
         # Send BUY alert to Telegram in parallel with order execution
         buy_message = f"""🟢 **BUY ORDER SENDING**
 
 **Option:** {option_spec_str}
 Contracts: {qty}
 Entry (option): ${option_price:.2f}
+Order Type: {order_type_label}
 Pattern: {pattern}
 Confidence: {confidence:.0f}%
 
@@ -925,7 +987,7 @@ Confidence: {confidence:.0f}%
             daemon=True
         )
         alert_thread.start()
-        
+
         # Execute order on Alpaca (runs in parallel with alert)
         order = self.place_option_order(
             underlying=underlying,
@@ -934,7 +996,8 @@ Confidence: {confidence:.0f}%
             option_type=option_type,
             side="buy",
             qty=qty,
-            order_type="market"
+            order_type=entry_order_type,
+            limit_price=limit_price
         )
         
         if not order:
@@ -973,6 +1036,7 @@ Confidence: {confidence:.0f}%
 **Option:** {option_spec_str}
 Contracts: {qty}
 Entry (option): ${option_price:.2f}
+Order Type: {order_type_label}
 Target (option): ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
 Stop (option): ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 
@@ -990,21 +1054,31 @@ Status: PENDING FILL
         # Get option spec for alert
         option_spec_str = position.option_spec_line()
 
+        # Determine order type for exit
+        if self.USE_LIMIT_ORDERS:
+            exit_limit_price = round(current_price * (1 - self.LIMIT_SELL_BUFFER_PCT), 2)
+            exit_order_type_label = f"LIMIT @ ${exit_limit_price:.2f}"
+        else:
+            exit_limit_price = None
+            exit_order_type_label = "MARKET"
+
         # Send SELL alert to Telegram in parallel with order execution
         sell_message = f"""🔴 **SELL ORDER SENDING**
 
 **Option:** {option_spec_str}
 Contracts: {position.qty}
 Entry (option): ${position.entry_price:.2f}
-Current (option): ${current_price:.2f}
+Exit (option): ${current_price:.2f}
+Order Type: {exit_order_type_label}
 Reason: {reason}
 
 ⏳ Closing on Alpaca...
 """
         threading.Thread(target=send_telegram_alert, args=(sell_message,), daemon=True).start()
-        
+
         # Execute close on Alpaca (runs in parallel with alert)
-        result = self.close_position(position.option_symbol)
+        # Pass current_price for limit order mode
+        result = self.close_position(position.option_symbol, limit_price=current_price)
         
         # Only mark closed if close was successful
         if result is None:
