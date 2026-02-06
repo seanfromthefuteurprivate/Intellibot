@@ -67,6 +67,67 @@ class AlpacaPosition:
     trimmed: bool = False  # True after partial exit at +50%
     signal_id: Optional[int] = None  # Links to signals table for learning
 
+    def option_spec_line(self) -> str:
+        """
+        Return a human-readable option spec line for Telegram alerts.
+        Example: "SPY $590 C exp 01/25 (0 DTE)"
+        """
+        parsed = _parse_option_symbol(self.option_symbol)
+        if not parsed:
+            return f"{self.symbol} {self.trade_type}"
+
+        underlying, expiry_str, opt_type, strike = parsed
+        # Parse expiry to compute DTE
+        try:
+            expiry_date = datetime.strptime(expiry_str, "%y%m%d").date()
+            today = datetime.now().date()
+            dte = (expiry_date - today).days
+            dte_str = f"{dte} DTE" if dte >= 0 else "EXPIRED"
+        except:
+            dte_str = "? DTE"
+
+        opt_char = "C" if opt_type == "C" else "P"
+        exp_formatted = f"{expiry_str[2:4]}/{expiry_str[4:6]}"  # MMDD from YYMMDD
+        return f"{underlying} ${strike:.0f} {opt_char} exp {exp_formatted} ({dte_str})"
+
+
+def _parse_option_symbol(option_symbol: str) -> Optional[tuple]:
+    """
+    Parse OCC option symbol into components.
+    Example: SPY260125C00590000 -> ("SPY", "260125", "C", 590.0)
+    Returns: (underlying, expiry_str, option_type, strike) or None
+    """
+    if not option_symbol or len(option_symbol) < 15:
+        return None
+
+    # Find where digits start (end of underlying)
+    underlying_end = 0
+    for i, c in enumerate(option_symbol):
+        if c.isdigit():
+            underlying_end = i
+            break
+
+    if underlying_end == 0:
+        return None
+
+    underlying = option_symbol[:underlying_end]
+    rest = option_symbol[underlying_end:]
+
+    # Format: YYMMDD + C/P + 8-digit strike (strike * 1000)
+    if len(rest) < 15:
+        return None
+
+    expiry_str = rest[:6]  # YYMMDD
+    opt_type = rest[6]     # C or P
+    strike_str = rest[7:15]  # 8 digits
+
+    try:
+        strike = int(strike_str) / 1000.0
+    except:
+        return None
+
+    return (underlying, expiry_str, opt_type, strike)
+
 
 class AlpacaExecutor:
     """
@@ -262,14 +323,18 @@ class AlpacaExecutor:
             logger.info(f"   Target: ${target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%) | Stop: ${stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)")
             
             synced_count += 1
-            
+
+            # Get option spec for alert
+            sync_option_spec = new_pos.option_spec_line()
+
             # Alert about synced positions
             send_telegram_alert(f"""🔄 **SYNCED POSITION**
-{underlying} {trade_type}
-Entry: ${entry_price:.2f}
-Current: ${current_price:.2f} ({pnl_pct:+.1f}%)
-Target: ${target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
-Stop: ${stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
+
+**Option:** {sync_option_spec}
+Entry (option): ${entry_price:.2f}
+Current (option): ${current_price:.2f} ({pnl_pct:+.1f}%)
+Target (option): ${target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop (option): ${stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 
 _Position picked up from restart - now monitoring_""")
         
@@ -836,13 +901,18 @@ No overnight risk. Fresh start tomorrow!
         
         logger.info(f"Executing {trade_type} entry: {qty}x {option_symbol} @ ~${option_price:.2f}")
         
+        # Compute DTE for alerts
+        today = datetime.now().date()
+        dte = (expiry.date() - today).days if hasattr(expiry, 'date') else 0
+        opt_char = "C" if option_type == "call" else "P"
+        option_spec_str = f"{underlying} ${strike:.0f} {opt_char} exp {expiry.strftime('%m/%d')} ({dte} DTE)"
+
         # Send BUY alert to Telegram in parallel with order execution
         buy_message = f"""🟢 **BUY ORDER SENDING**
 
-**{trade_type}** {underlying}
-Strike: ${strike:.0f} | Exp: {expiry.strftime('%m/%d')}
+**Option:** {option_spec_str}
 Contracts: {qty}
-Est. Price: ${option_price:.2f}
+Entry (option): ${option_price:.2f}
 Pattern: {pattern}
 Confidence: {confidence:.0f}%
 
@@ -900,12 +970,11 @@ Confidence: {confidence:.0f}%
         # Confirmation alert after order placed
         confirm_message = f"""✅ **BUY ORDER PLACED**
 
-**{trade_type}** {underlying}
-Strike: ${strike:.0f} | Exp: {expiry.strftime('%m/%d')}
+**Option:** {option_spec_str}
 Contracts: {qty}
-Est. Entry: ${option_price:.2f}
-Target: ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
-Stop: ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
+Entry (option): ${option_price:.2f}
+Target (option): ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop (option): ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 
 Order ID: `{order.get('id', 'N/A')[:8]}...`
 Status: PENDING FILL
@@ -917,14 +986,17 @@ Status: PENDING FILL
     def execute_exit(self, position: AlpacaPosition, reason: str, current_price: float):
         """Execute exit for a position."""
         logger.info(f"Executing exit for {position.option_symbol}: {reason}")
-        
+
+        # Get option spec for alert
+        option_spec_str = position.option_spec_line()
+
         # Send SELL alert to Telegram in parallel with order execution
         sell_message = f"""🔴 **SELL ORDER SENDING**
 
-**{position.trade_type}** {position.symbol}
+**Option:** {option_spec_str}
 Contracts: {position.qty}
-Entry: ${position.entry_price:.2f}
-Current: ${current_price:.2f}
+Entry (option): ${position.entry_price:.2f}
+Current (option): ${current_price:.2f}
 Reason: {reason}
 
 ⏳ Closing on Alpaca...
@@ -979,12 +1051,12 @@ Reason: {reason}
 
         message = f"""{emoji} **ALPACA PAPER TRADE CLOSED**
 
-**{position.trade_type}** {position.symbol}
+**Option:** {option_spec_str}
 Exit Reason: {reason}
 Contracts: {position.qty}
 
-Entry: ${position.entry_price:.2f}
-Exit: ${current_price:.2f}
+Entry (option): ${position.entry_price:.2f}
+Exit (option): ${current_price:.2f}
 P&L: ${position.pnl:+.2f} ({position.pnl_pct:+.1f}%)
 
 **Session Stats:**
@@ -1062,15 +1134,19 @@ Total P&L: ${self.total_pnl:+.2f}
                     logger.info(f"Order filled: {position.option_symbol} @ ${position.entry_price:.2f}")
                     logger.info(f"  Total Cost: ${actual_cost:.2f} | Target: ${position.target_price:.2f} | Stop: ${position.stop_loss:.2f}")
                     
+                    # Get option spec for alert
+                    fill_option_spec = position.option_spec_line()
+
                     message = f"""✅ **ORDER FILLED**
 
-**{position.trade_type}** {position.symbol}
-Filled: {position.qty}x @ ${position.entry_price:.2f}
+**Option:** {fill_option_spec}
+Filled: {position.qty}x
+Entry (option): ${position.entry_price:.2f}
 Total Cost: ${actual_cost:.2f}
 
 **EXIT LEVELS (AUTOMATIC):**
-Target: ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
-Stop: ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
+Target (option): ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.0f}%)
+Stop (option): ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
 """
                     send_telegram_alert(message)
@@ -1079,11 +1155,13 @@ Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
                     position.status = PositionStatus.CANCELLED
                     order_status = order.get('status', 'unknown')
                     logger.warning(f"Order {order_status}: {position.option_symbol}")
-                    
+
+                    # Get option spec for alert
+                    cancel_option_spec = position.option_spec_line()
+
                     send_telegram_alert(f"""⚠️ **ORDER {order_status.upper()}**
-                    
-{position.trade_type} {position.symbol}
-Symbol: {position.option_symbol}
+
+**Option:** {cancel_option_spec}
 Reason: Order was {order_status}
 """)
     
@@ -1097,9 +1175,13 @@ Reason: Order was {order_status}
         if result:
             position.qty -= sell_qty
             position.trimmed = True
+            trim_option_spec = position.option_spec_line()
             send_telegram_alert(
-                f"✂️ **TRIM** {position.trade_type} {position.symbol} sold {sell_qty} @ ~${current_price:.2f} "
-                f"(+{(current_price/position.entry_price-1)*100:.0f}%) – letting rest run"
+                f"✂️ **TRIM**\n\n**Option:** {trim_option_spec}\n"
+                f"Sold {sell_qty} contracts\n"
+                f"Entry (option): ${position.entry_price:.2f}\n"
+                f"Exit (option): ${current_price:.2f} (+{(current_price/position.entry_price-1)*100:.0f}%)\n"
+                f"Remaining: {position.qty} contracts – letting rest run"
             )
             logger.info(f"Trimmed {position.option_symbol}: sold {sell_qty}, {position.qty} left")
             return True

@@ -1337,21 +1337,12 @@ class SPYScalper:
             stalking_mode._save_setup(stalking_mode.stalked[stalk_setup_id])
             log.info(f"Stalking mode tracking exit for {stalk_setup_id}")
         
-        # Add to Zero Greed Exit for mechanical ruthless exit tracking
-        position_id = f"{ticker.lower()}_scalp_{datetime.utcnow().strftime('%H%M%S')}"
-        zero_greed_exit.add_position(
-            position_id=position_id,
-            ticker=ticker,
-            direction=setup.direction,
-            trade_type=trade_type,
-            entry_price=setup.entry_price,
-            target_price=setup.target_price,
-            stop_loss=setup.stop_loss,
-            max_hold_minutes=60,  # 1 hour max for 0DTE
-            price_getter=self._get_current_price
-        )
-        log.info(f"🔪 Zero Greed Exit tracking: {position_id}")
-        
+        # NOTE: We do NOT add Alpaca-executed option scalps to Zero Greed Exit.
+        # Reason: Zero Greed uses underlying prices, so its alerts would show stock price
+        # (e.g. CLOSE @ $82.39) instead of option premium. Alpaca executor monitors the
+        # same position with option quotes and sends alerts with option spec (strike, DTE)
+        # and Entry/Exit (option premium), so the user can match to Webull's options chain.
+
         # Execute REAL paper trade on Alpaca
         total_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
         try:
