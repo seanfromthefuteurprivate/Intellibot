@@ -13,6 +13,8 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "python:wsb-snake:v1.0")
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Optional: Separate channel for Alpaca execution status (keeps main channel clean)
+TELEGRAM_ALPACA_CHAT_ID = os.getenv("TELEGRAM_ALPACA_CHAT_ID")
 
 # Alpaca (Paper Trading + News)
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")

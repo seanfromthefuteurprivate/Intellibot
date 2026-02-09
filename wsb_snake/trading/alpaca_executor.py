@@ -15,7 +15,7 @@ import threading
 import time
 
 from wsb_snake.utils.logger import get_logger
-from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.notifications.telegram_channels import send_signal, send_alpaca_status
 from wsb_snake.trading.risk_governor import (
     get_risk_governor,
     TradingEngine,
@@ -378,8 +378,8 @@ class AlpacaExecutor:
             # Get option spec for alert
             sync_option_spec = new_pos.option_spec_line()
 
-            # Alert about synced positions
-            send_telegram_alert(f"""🔄 **SYNCED POSITION**
+            # Alert about synced positions - Alpaca channel only (execution status)
+            send_alpaca_status(f"""🔄 **SYNCED POSITION**
 
 **Option:** {sync_option_spec}
 Entry (option): ${entry_price:.2f}
@@ -586,7 +586,8 @@ _Position picked up from restart - now monitoring_""")
                 logger.error(f"Failed to close 0DTE position {symbol}: {e}")
         
         if closed > 0:
-            send_telegram_alert(f"""⏰ **END OF DAY - 0DTE POSITIONS CLOSED**
+            # Send to main channel - important for all users
+            send_signal(f"""⏰ **END OF DAY - 0DTE POSITIONS CLOSED**
 
 Closed {closed} position(s) before market close.
 Time: {now_et.strftime('%I:%M %p ET')}
@@ -747,11 +748,11 @@ No overnight risk. Fresh start tomorrow!
             return resp.json()
         except requests.exceptions.HTTPError as e:
             logger.error(f"Failed to close position {option_symbol}: {e.response.text if e.response else e}")
-            send_telegram_alert(f"⚠️ Failed to close {option_symbol}: {str(e)[:100]}")
+            send_alpaca_status(f"⚠️ Failed to close {option_symbol}: {str(e)[:100]}")
             return None
         except Exception as e:
             logger.error(f"Failed to close position {option_symbol}: {e}")
-            send_telegram_alert(f"⚠️ Failed to close {option_symbol}: {str(e)[:100]}")
+            send_alpaca_status(f"⚠️ Failed to close {option_symbol}: {str(e)[:100]}")
             return None
     
     def get_order_status(self, order_id: str) -> Optional[Dict]:
@@ -811,7 +812,7 @@ No overnight risk. Fresh start tomorrow!
         )
         if not allowed:
             logger.warning(f"Risk governor blocked trade: {reason}")
-            send_telegram_alert(f"⏸️ Risk governor: {reason}")
+            send_alpaca_status(f"⏸️ Risk governor: {reason}")
             return None
 
         with self._lock:
@@ -830,12 +831,12 @@ No overnight risk. Fresh start tomorrow!
         # CRITICAL VALIDATION: Reject trades with invalid parameters
         if stop_loss <= 0:
             logger.error(f"INVALID STOP LOSS ${stop_loss:.2f} - ABORTING (must be positive)")
-            send_telegram_alert(f"❌ Trade REJECTED: Invalid stop loss ${stop_loss:.2f} for {underlying}")
+            send_alpaca_status(f"❌ Trade REJECTED: Invalid stop loss ${stop_loss:.2f} for {underlying}")
             return None
-        
+
         if target_price <= 0:
             logger.error(f"INVALID TARGET ${target_price:.2f} - ABORTING (must be positive)")
-            send_telegram_alert(f"❌ Trade REJECTED: Invalid target ${target_price:.2f} for {underlying}")
+            send_alpaca_status(f"❌ Trade REJECTED: Invalid target ${target_price:.2f} for {underlying}")
             return None
         
         if entry_price <= 0:
@@ -846,20 +847,20 @@ No overnight risk. Fresh start tomorrow!
         if direction == "long":
             if stop_loss >= entry_price:
                 logger.error(f"INVALID LONG SETUP: Stop ${stop_loss:.2f} >= Entry ${entry_price:.2f}")
-                send_telegram_alert(f"❌ Trade REJECTED: Bad stop for LONG {underlying}")
+                send_alpaca_status(f"❌ Trade REJECTED: Bad stop for LONG {underlying}")
                 return None
             if target_price <= entry_price:
                 logger.error(f"INVALID LONG SETUP: Target ${target_price:.2f} <= Entry ${entry_price:.2f}")
-                send_telegram_alert(f"❌ Trade REJECTED: Bad target for LONG {underlying}")
+                send_alpaca_status(f"❌ Trade REJECTED: Bad target for LONG {underlying}")
                 return None
         else:  # short
             if stop_loss <= entry_price:
                 logger.error(f"INVALID SHORT SETUP: Stop ${stop_loss:.2f} <= Entry ${entry_price:.2f}")
-                send_telegram_alert(f"❌ Trade REJECTED: Bad stop for SHORT {underlying}")
+                send_alpaca_status(f"❌ Trade REJECTED: Bad stop for SHORT {underlying}")
                 return None
             if target_price >= entry_price:
                 logger.error(f"INVALID SHORT SETUP: Target ${target_price:.2f} >= Entry ${entry_price:.2f}")
-                send_telegram_alert(f"❌ Trade REJECTED: Bad target for SHORT {underlying}")
+                send_alpaca_status(f"❌ Trade REJECTED: Bad target for SHORT {underlying}")
                 return None
         
         # Validate R:R ratio is reasonable (at least 1:1)
@@ -868,7 +869,7 @@ No overnight risk. Fresh start tomorrow!
         rr_ratio = reward / risk if risk > 0 else 0
         if rr_ratio < 0.5:
             logger.error(f"BAD R:R RATIO {rr_ratio:.2f} - Risk ${risk:.2f} vs Reward ${reward:.2f}")
-            send_telegram_alert(f"❌ Trade REJECTED: Bad R:R {rr_ratio:.2f} for {underlying}")
+            send_alpaca_status(f"❌ Trade REJECTED: Bad R:R {rr_ratio:.2f} for {underlying}")
             return None
         
         logger.info(f"Validated trade: {underlying} {direction} Entry=${entry_price:.2f} Target=${target_price:.2f} Stop=${stop_loss:.2f} R:R={rr_ratio:.2f}")
@@ -971,14 +972,14 @@ No overnight risk. Fresh start tomorrow!
         # Check if we found an affordable option
         if not quote or option_price <= 0:
             logger.error(f"No valid quote found for {underlying} options - ABORTING trade")
-            send_telegram_alert(f"❌ Trade aborted: No valid {underlying} options available")
+            send_alpaca_status(f"❌ Trade aborted: No valid {underlying} options available")
             return None
-        
+
         # Explicit check: did we find an affordable option?
         contract_cost = option_price * 100
         if contract_cost > max_contract_cost:
             logger.error(f"No affordable {underlying} option found (cheapest: ${contract_cost:.0f}/contract > ${max_contract_cost:.0f} limit)")
-            send_telegram_alert(f"❌ Trade aborted: {underlying} options too expensive (cheapest ${contract_cost:.0f}/contract)")
+            send_alpaca_status(f"❌ Trade aborted: {underlying} options too expensive (cheapest ${contract_cost:.0f}/contract)")
             return None
         
         # Validate quote freshness (must be within 60 seconds)
@@ -995,7 +996,7 @@ No overnight risk. Fresh start tomorrow!
         
         if bid_price <= 0:
             logger.error(f"No bid for {option_symbol} - option may be illiquid - ABORTING")
-            send_telegram_alert(f"❌ Trade aborted: No bid for {option_symbol} (illiquid)")
+            send_alpaca_status(f"❌ Trade aborted: No bid for {option_symbol} (illiquid)")
             return None
         
         # Verify bid-ask spread is reasonable (< 20% of mid-price)
@@ -1048,14 +1049,14 @@ No overnight risk. Fresh start tomorrow!
         # Skip if position size is 0 (option too expensive for $1000 per trade limit)
         if qty == 0:
             logger.warning(f"Skipping trade - option ${option_price:.2f}/contract too expensive (>${self.MAX_PER_TRADE}/trade limit)")
-            send_telegram_alert(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} exceeds ${self.MAX_PER_TRADE}/trade max")
+            send_alpaca_status(f"⚠️ Trade skipped: {option_symbol} @ ${option_price:.2f} exceeds ${self.MAX_PER_TRADE}/trade max")
             return None
-        
+
         # Check daily exposure limit ($4,000 = $1k cash + $3k margin)
         remaining_exposure = self.MAX_DAILY_EXPOSURE - self.daily_exposure_used
         if estimated_cost > remaining_exposure:
             logger.warning(f"Daily exposure limit reached: Used ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE} - only ${remaining_exposure:.0f} remaining")
-            send_telegram_alert(f"⏸️ Exposure cap: ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE} used (margin limit)")
+            send_alpaca_status(f"⏸️ Exposure cap: ${self.daily_exposure_used:.0f}/${self.MAX_DAILY_EXPOSURE} used (margin limit)")
             return None
         
         logger.info(f"POSITION SIZE: {qty} contracts @ ${option_price:.2f} = ${estimated_cost:.2f}")
@@ -1080,7 +1081,7 @@ No overnight risk. Fresh start tomorrow!
             entry_order_type = "market"
             order_type_label = "MARKET"
 
-        # Send BUY alert to Telegram in parallel with order execution
+        # Send BUY alert to Alpaca channel (execution status)
         buy_message = f"""🟢 **BUY ORDER SENDING**
 
 **Option:** {option_spec_str}
@@ -1092,9 +1093,9 @@ Confidence: {confidence:.0f}%
 
 ⏳ Executing on Alpaca...
 """
-        # Send alert in parallel thread
+        # Send to Alpaca channel in parallel thread
         alert_thread = threading.Thread(
-            target=send_telegram_alert,
+            target=send_alpaca_status,
             args=(buy_message,),
             daemon=True
         )
@@ -1114,7 +1115,7 @@ Confidence: {confidence:.0f}%
         
         if not order:
             logger.error("Failed to place entry order")
-            send_telegram_alert(f"❌ BUY ORDER FAILED: {trade_type} {underlying}")
+            send_alpaca_status(f"❌ BUY ORDER FAILED: {trade_type} {underlying}")
             return None
         
         position_id = f"{underlying}_{datetime.now().strftime('%H%M%S')}"
@@ -1150,7 +1151,7 @@ Confidence: {confidence:.0f}%
             self.start_monitoring()
             logger.info("Position monitoring auto-started with existing positions synced")
         
-        # Confirmation alert after order placed
+        # Confirmation alert after order placed - goes to Alpaca channel
         confirm_message = f"""✅ **BUY ORDER PLACED**
 
 **Option:** {option_spec_str}
@@ -1163,7 +1164,7 @@ Stop (option): ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 Order ID: `{order.get('id', 'N/A')[:8]}...`
 Status: PENDING FILL
 """
-        threading.Thread(target=send_telegram_alert, args=(confirm_message,), daemon=True).start()
+        threading.Thread(target=send_alpaca_status, args=(confirm_message,), daemon=True).start()
         
         return position
     
@@ -1182,7 +1183,7 @@ Status: PENDING FILL
             exit_limit_price = None
             exit_order_type_label = "MARKET"
 
-        # Send SELL alert to Telegram in parallel with order execution
+        # Send SELL alert to Alpaca channel (execution status)
         sell_message = f"""🔴 **SELL ORDER SENDING**
 
 **Option:** {option_spec_str}
@@ -1194,7 +1195,7 @@ Reason: {reason}
 
 ⏳ Closing on Alpaca...
 """
-        threading.Thread(target=send_telegram_alert, args=(sell_message,), daemon=True).start()
+        threading.Thread(target=send_alpaca_status, args=(sell_message,), daemon=True).start()
 
         # Execute close on Alpaca (runs in parallel with alert)
         # Pass current_price for limit order mode
@@ -1251,7 +1252,8 @@ Reason: {reason}
 
         emoji = "💰" if position.pnl > 0 else "🛑"
 
-        message = f"""{emoji} **ALPACA PAPER TRADE CLOSED**
+        # Trade result - send to MAIN channel for all users
+        message = f"""{emoji} **TRADE CLOSED**
 
 **Option:** {option_spec_str}
 Exit Reason: {reason}
@@ -1265,7 +1267,7 @@ P&L: ${position.pnl:+.2f} ({position.pnl_pct:+.1f}%)
 Trades: {self.total_trades} | Win Rate: {win_rate:.0f}%
 Total P&L: ${self.total_pnl:+.2f}
 """
-        send_telegram_alert(message)
+        send_signal(message)
         
         return result
     
@@ -1320,7 +1322,7 @@ Total P&L: ${self.total_pnl:+.2f}
                     actual_cost = position.entry_price * position.qty * 100
                     if actual_cost > self.MAX_DAILY_EXPOSURE * 1.5:  # 50% tolerance = EMERGENCY CLOSE
                         logger.error(f"EMERGENCY: Filled cost ${actual_cost:.2f} exceeds ${self.MAX_DAILY_EXPOSURE * 1.5}!")
-                        send_telegram_alert(f"🚨 EMERGENCY: Position ${actual_cost:.2f} > limit - AUTO-CLOSING!")
+                        send_alpaca_status(f"🚨 EMERGENCY: Position ${actual_cost:.2f} > limit - AUTO-CLOSING!")
                         # Immediately close the oversized position
                         self.close_position(position.option_symbol)
                         position.status = PositionStatus.CLOSED
@@ -1336,7 +1338,7 @@ Total P&L: ${self.total_pnl:+.2f}
                         continue
                     elif actual_cost > self.MAX_DAILY_EXPOSURE * 0.5:  # Using more than half daily limit = WARNING
                         logger.warning(f"NOTE: Single trade ${actual_cost:.2f} using >{50}% of daily ${self.MAX_DAILY_EXPOSURE} limit")
-                        send_telegram_alert(f"⚠️ WARNING: Position cost ${actual_cost:.2f} slightly over limit")
+                        send_alpaca_status(f"⚠️ WARNING: Position cost ${actual_cost:.2f} slightly over limit")
                     
                     position.target_price = position.entry_price * self.SCALP_TARGET_PCT
                     position.stop_loss = position.entry_price * self.SCALP_STOP_PCT
@@ -1347,6 +1349,7 @@ Total P&L: ${self.total_pnl:+.2f}
                     # Get option spec for alert
                     fill_option_spec = position.option_spec_line()
 
+                    # Order filled - send to Alpaca channel (execution status)
                     message = f"""✅ **ORDER FILLED**
 
 **Option:** {fill_option_spec}
@@ -1359,7 +1362,7 @@ Target (option): ${position.target_price:.2f} (+{(self.SCALP_TARGET_PCT-1)*100:.
 Stop (option): ${position.stop_loss:.2f} ({(self.SCALP_STOP_PCT-1)*100:.0f}%)
 Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
 """
-                    send_telegram_alert(message)
+                    send_alpaca_status(message)
                 
                 elif order.get("status") in ["cancelled", "expired", "rejected"]:
                     position.status = PositionStatus.CANCELLED
@@ -1369,7 +1372,7 @@ Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
                     # Get option spec for alert
                     cancel_option_spec = position.option_spec_line()
 
-                    send_telegram_alert(f"""⚠️ **ORDER {order_status.upper()}**
+                    send_alpaca_status(f"""⚠️ **ORDER {order_status.upper()}**
 
 **Option:** {cancel_option_spec}
 Reason: Order was {order_status}
@@ -1386,7 +1389,8 @@ Reason: Order was {order_status}
             position.qty -= sell_qty
             position.trimmed = True
             trim_option_spec = position.option_spec_line()
-            send_telegram_alert(
+            # Trim notification - goes to MAIN channel as it's an action signal
+            send_signal(
                 f"✂️ **TRIM**\n\n**Option:** {trim_option_spec}\n"
                 f"Sold {sell_qty} contracts\n"
                 f"Entry (option): ${position.entry_price:.2f}\n"
