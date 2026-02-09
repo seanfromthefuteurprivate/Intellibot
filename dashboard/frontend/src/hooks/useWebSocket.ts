@@ -51,7 +51,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Map<string, MessageHandler>>(new Map());
   const reconnectAttemptsRef = useRef<number>(0);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldReconnectRef = useRef<boolean>(true);
 
   // Clear reconnect timeout

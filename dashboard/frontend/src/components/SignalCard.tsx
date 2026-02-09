@@ -2,18 +2,6 @@
 
 import * as React from "react";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { ChevronDown, ChevronUp, Clock, TrendingUp } from "lucide-react";
 
 // Signal tier types
@@ -46,41 +34,37 @@ export interface SignalCardProps {
 // Tier configuration for colors and styling
 const tierConfig: Record<
   SignalTier,
-  { bgColor: string; textColor: string; borderColor: string; label: string }
+  { bgGradient: string; borderColor: string; label: string }
 > = {
   S: {
-    bgColor: "bg-gradient-to-r from-yellow-500 to-amber-500",
-    textColor: "text-white",
-    borderColor: "border-yellow-400",
+    bgGradient: "linear-gradient(to right, #eab308, #f59e0b)",
+    borderColor: "#facc15",
     label: "S-Tier",
   },
   A: {
-    bgColor: "bg-gradient-to-r from-emerald-500 to-green-500",
-    textColor: "text-white",
-    borderColor: "border-emerald-400",
+    bgGradient: "linear-gradient(to right, #10b981, #22c55e)",
+    borderColor: "#34d399",
     label: "A-Tier",
   },
   B: {
-    bgColor: "bg-gradient-to-r from-blue-500 to-cyan-500",
-    textColor: "text-white",
-    borderColor: "border-blue-400",
+    bgGradient: "linear-gradient(to right, #3b82f6, #06b6d4)",
+    borderColor: "#60a5fa",
     label: "B-Tier",
   },
   C: {
-    bgColor: "bg-gradient-to-r from-slate-500 to-gray-500",
-    textColor: "text-white",
-    borderColor: "border-slate-400",
+    bgGradient: "linear-gradient(to right, #64748b, #6b7280)",
+    borderColor: "#94a3b8",
     label: "C-Tier",
   },
 };
 
 // Score bar color based on score value
-function getScoreBarColor(score: number): string {
-  if (score >= 90) return "bg-gradient-to-r from-yellow-400 to-amber-500";
-  if (score >= 75) return "bg-gradient-to-r from-emerald-400 to-green-500";
-  if (score >= 60) return "bg-gradient-to-r from-blue-400 to-cyan-500";
-  if (score >= 40) return "bg-gradient-to-r from-orange-400 to-amber-500";
-  return "bg-gradient-to-r from-red-400 to-rose-500";
+function getScoreBarGradient(score: number): string {
+  if (score >= 90) return "linear-gradient(to right, #facc15, #f59e0b)";
+  if (score >= 75) return "linear-gradient(to right, #34d399, #22c55e)";
+  if (score >= 60) return "linear-gradient(to right, #60a5fa, #06b6d4)";
+  if (score >= 40) return "linear-gradient(to right, #fb923c, #f59e0b)";
+  return "linear-gradient(to right, #f87171, #f43f5e)";
 }
 
 // Format timestamp for display
@@ -126,135 +110,318 @@ function formatVolume(value: number): string {
   return value.toString();
 }
 
-export function SignalCard({ signal, className }: SignalCardProps) {
+// Inline styles
+const styles: Record<string, React.CSSProperties> = {
+  card: {
+    position: "relative",
+    overflow: "hidden",
+    transition: "all 0.2s ease",
+    borderRadius: "8px",
+    backgroundColor: "#ffffff",
+    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1)",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#e5e7eb",
+  },
+  cardHeader: {
+    padding: "16px 16px 8px 16px",
+  },
+  headerRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
+  tickerContainer: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  ticker: {
+    fontSize: "1.875rem",
+    fontWeight: 700,
+    letterSpacing: "-0.025em",
+    color: "#111827",
+    margin: 0,
+  },
+  trendIcon: {
+    color: "#6b7280",
+  },
+  badge: {
+    padding: "4px 12px",
+    fontSize: "0.875rem",
+    fontWeight: 700,
+    color: "#ffffff",
+    borderRadius: "9999px",
+    display: "inline-block",
+  },
+  setupType: {
+    fontSize: "0.875rem",
+    fontWeight: 500,
+    color: "#6b7280",
+    marginTop: "4px",
+  },
+  cardContent: {
+    padding: "0 16px 16px 16px",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "16px",
+  },
+  scoreSection: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "8px",
+  },
+  scoreHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  scoreLabel: {
+    fontSize: "0.875rem",
+    fontWeight: 500,
+    color: "#6b7280",
+  },
+  scoreValue: {
+    fontSize: "1.125rem",
+    fontWeight: 700,
+    color: "#111827",
+  },
+  scoreMax: {
+    fontSize: "0.875rem",
+    fontWeight: 400,
+    color: "#6b7280",
+  },
+  scoreBarContainer: {
+    position: "relative" as const,
+    height: "12px",
+    width: "100%",
+    overflow: "hidden",
+    borderRadius: "9999px",
+    backgroundColor: "#f3f4f6",
+  },
+  scoreBar: {
+    height: "100%",
+    transition: "all 0.5s ease-out",
+    borderRadius: "9999px",
+  },
+  timestamp: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    fontSize: "0.875rem",
+    color: "#6b7280",
+  },
+  expandButton: {
+    display: "flex",
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: "8px",
+    border: "1px solid #e5e7eb",
+    backgroundColor: "rgba(249, 250, 251, 0.5)",
+    padding: "8px 16px",
+    fontSize: "0.875rem",
+    fontWeight: 500,
+    color: "#6b7280",
+    cursor: "pointer",
+    transition: "all 0.15s ease",
+  },
+  detailsContainer: {
+    marginTop: "12px",
+    borderRadius: "8px",
+    border: "1px solid #e5e7eb",
+    backgroundColor: "rgba(249, 250, 251, 0.3)",
+    padding: "16px",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "12px",
+  },
+  priceGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: "16px",
+  },
+  detailItem: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "4px",
+  },
+  detailLabel: {
+    fontSize: "0.75rem",
+    fontWeight: 500,
+    color: "#6b7280",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.05em",
+  },
+  detailValue: {
+    fontSize: "0.875rem",
+    fontWeight: 600,
+    color: "#111827",
+  },
+  detailValueGreen: {
+    fontSize: "0.875rem",
+    fontWeight: 600,
+    color: "#10b981",
+  },
+  detailValueRed: {
+    fontSize: "0.875rem",
+    fontWeight: 600,
+    color: "#ef4444",
+  },
+  metricsRow: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: "16px",
+  },
+  catalystsContainer: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "8px",
+  },
+  catalystsList: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: "8px",
+  },
+  catalystBadge: {
+    fontSize: "0.75rem",
+    padding: "4px 8px",
+    backgroundColor: "#f3f4f6",
+    color: "#374151",
+    borderRadius: "4px",
+    display: "inline-block",
+  },
+  notesText: {
+    fontSize: "0.875rem",
+    color: "#111827",
+    lineHeight: 1.625,
+  },
+};
+
+function SignalCard({ signal, className }: SignalCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const tierStyle = tierConfig[signal.tier];
-  const scoreBarColor = getScoreBarColor(signal.score);
+  const scoreBarGradient = getScoreBarGradient(signal.score);
   const hasDetails = signal.details && Object.keys(signal.details).length > 0;
 
+  const cardStyle: React.CSSProperties = {
+    ...styles.card,
+    borderLeftWidth: "4px",
+    borderLeftColor: tierStyle.borderColor,
+    boxShadow: isHovered
+      ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)"
+      : styles.card.boxShadow,
+  };
+
   return (
-    <Card
-      className={cn(
-        "relative overflow-hidden transition-all duration-200 hover:shadow-lg",
-        `border-l-4 ${tierStyle.borderColor}`,
-        className
-      )}
+    <div
+      className={className}
+      style={cardStyle}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between">
+      {/* Card Header */}
+      <div style={styles.cardHeader}>
+        <div style={styles.headerRow}>
           {/* Ticker Symbol */}
-          <div className="flex items-center gap-3">
-            <h3 className="text-3xl font-bold tracking-tight text-foreground">
-              {signal.ticker}
-            </h3>
-            <TrendingUp className="h-5 w-5 text-muted-foreground" />
+          <div style={styles.tickerContainer}>
+            <h3 style={styles.ticker}>{signal.ticker}</h3>
+            <TrendingUp size={20} style={styles.trendIcon} />
           </div>
 
           {/* Tier Badge */}
-          <Badge
-            className={cn(
-              "px-3 py-1 text-sm font-bold",
-              tierStyle.bgColor,
-              tierStyle.textColor
-            )}
+          <span
+            style={{
+              ...styles.badge,
+              background: tierStyle.bgGradient,
+            }}
           >
             {tierStyle.label}
-          </Badge>
+          </span>
         </div>
 
         {/* Setup Type */}
-        <p className="text-sm font-medium text-muted-foreground">
-          {signal.setupType}
-        </p>
-      </CardHeader>
+        <p style={styles.setupType}>{signal.setupType}</p>
+      </div>
 
-      <CardContent className="space-y-4">
+      {/* Card Content */}
+      <div style={styles.cardContent}>
         {/* Score Section */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-muted-foreground">
-              Signal Score
-            </span>
-            <span className="text-lg font-bold text-foreground">
+        <div style={styles.scoreSection}>
+          <div style={styles.scoreHeader}>
+            <span style={styles.scoreLabel}>Signal Score</span>
+            <span style={styles.scoreValue}>
               {signal.score}
-              <span className="text-sm font-normal text-muted-foreground">
-                /100
-              </span>
+              <span style={styles.scoreMax}>/100</span>
             </span>
           </div>
 
           {/* Visual Score Bar */}
-          <div className="relative h-3 w-full overflow-hidden rounded-full bg-secondary">
+          <div style={styles.scoreBarContainer}>
             <div
-              className={cn(
-                "h-full transition-all duration-500 ease-out rounded-full",
-                scoreBarColor
-              )}
-              style={{ width: `${Math.min(Math.max(signal.score, 0), 100)}%` }}
+              style={{
+                ...styles.scoreBar,
+                width: `${Math.min(Math.max(signal.score, 0), 100)}%`,
+                background: scoreBarGradient,
+              }}
             />
           </div>
         </div>
 
         {/* Timestamp */}
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Clock className="h-4 w-4" />
+        <div style={styles.timestamp}>
+          <Clock size={16} />
           <span>{formatTimestamp(signal.timestamp)}</span>
         </div>
 
         {/* Expandable Details Section */}
         {hasDetails && (
-          <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-            <CollapsibleTrigger asChild>
-              <button
-                className={cn(
-                  "flex w-full items-center justify-between rounded-lg border border-border bg-muted/50 px-4 py-2",
-                  "text-sm font-medium text-muted-foreground",
-                  "transition-colors hover:bg-muted hover:text-foreground",
-                  "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                )}
-              >
-                <span>View Details</span>
-                {isExpanded ? (
-                  <ChevronUp className="h-4 w-4" />
-                ) : (
-                  <ChevronDown className="h-4 w-4" />
-                )}
-              </button>
-            </CollapsibleTrigger>
+          <div>
+            <button
+              style={styles.expandButton}
+              onClick={() => setIsExpanded(!isExpanded)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "#f3f4f6";
+                e.currentTarget.style.color = "#111827";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor =
+                  "rgba(249, 250, 251, 0.5)";
+                e.currentTarget.style.color = "#6b7280";
+              }}
+            >
+              <span>View Details</span>
+              {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
 
-            <CollapsibleContent className="mt-3">
-              <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+            {isExpanded && (
+              <div style={styles.detailsContainer}>
                 {/* Price Targets */}
                 {(signal.details?.entryPrice ||
                   signal.details?.targetPrice ||
                   signal.details?.stopLoss) && (
-                  <div className="grid grid-cols-3 gap-4">
+                  <div style={styles.priceGrid}>
                     {signal.details.entryPrice !== undefined && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Entry
-                        </p>
-                        <p className="text-sm font-semibold text-foreground">
+                      <div style={styles.detailItem}>
+                        <p style={styles.detailLabel}>Entry</p>
+                        <p style={styles.detailValue}>
                           {formatCurrency(signal.details.entryPrice)}
                         </p>
                       </div>
                     )}
                     {signal.details.targetPrice !== undefined && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Target
-                        </p>
-                        <p className="text-sm font-semibold text-emerald-500">
+                      <div style={styles.detailItem}>
+                        <p style={styles.detailLabel}>Target</p>
+                        <p style={styles.detailValueGreen}>
                           {formatCurrency(signal.details.targetPrice)}
                         </p>
                       </div>
                     )}
                     {signal.details.stopLoss !== undefined && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                          Stop Loss
-                        </p>
-                        <p className="text-sm font-semibold text-red-500">
+                      <div style={styles.detailItem}>
+                        <p style={styles.detailLabel}>Stop Loss</p>
+                        <p style={styles.detailValueRed}>
                           {formatCurrency(signal.details.stopLoss)}
                         </p>
                       </div>
@@ -263,33 +430,27 @@ export function SignalCard({ signal, className }: SignalCardProps) {
                 )}
 
                 {/* Risk/Reward and Volume */}
-                <div className="flex flex-wrap gap-4">
+                <div style={styles.metricsRow}>
                   {signal.details?.riskRewardRatio !== undefined && (
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                        R/R Ratio
-                      </p>
-                      <p className="text-sm font-semibold text-foreground">
+                    <div style={styles.detailItem}>
+                      <p style={styles.detailLabel}>R/R Ratio</p>
+                      <p style={styles.detailValue}>
                         1:{signal.details.riskRewardRatio.toFixed(1)}
                       </p>
                     </div>
                   )}
                   {signal.details?.volume !== undefined && (
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                        Volume
-                      </p>
-                      <p className="text-sm font-semibold text-foreground">
+                    <div style={styles.detailItem}>
+                      <p style={styles.detailLabel}>Volume</p>
+                      <p style={styles.detailValue}>
                         {formatVolume(signal.details.volume)}
                       </p>
                     </div>
                   )}
                   {signal.details?.momentum && (
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                        Momentum
-                      </p>
-                      <p className="text-sm font-semibold text-foreground">
+                    <div style={styles.detailItem}>
+                      <p style={styles.detailLabel}>Momentum</p>
+                      <p style={styles.detailValue}>
                         {signal.details.momentum}
                       </p>
                     </div>
@@ -299,19 +460,13 @@ export function SignalCard({ signal, className }: SignalCardProps) {
                 {/* Catalysts */}
                 {signal.details?.catalysts &&
                   signal.details.catalysts.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                        Catalysts
-                      </p>
-                      <div className="flex flex-wrap gap-2">
+                    <div style={styles.catalystsContainer}>
+                      <p style={styles.detailLabel}>Catalysts</p>
+                      <div style={styles.catalystsList}>
                         {signal.details.catalysts.map((catalyst, index) => (
-                          <Badge
-                            key={index}
-                            variant="secondary"
-                            className="text-xs"
-                          >
+                          <span key={index} style={styles.catalystBadge}>
                             {catalyst}
-                          </Badge>
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -319,21 +474,17 @@ export function SignalCard({ signal, className }: SignalCardProps) {
 
                 {/* Notes */}
                 {signal.details?.notes && (
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      Notes
-                    </p>
-                    <p className="text-sm text-foreground leading-relaxed">
-                      {signal.details.notes}
-                    </p>
+                  <div style={styles.detailItem}>
+                    <p style={styles.detailLabel}>Notes</p>
+                    <p style={styles.notesText}>{signal.details.notes}</p>
                   </div>
                 )}
               </div>
-            </CollapsibleContent>
-          </Collapsible>
+            )}
+          </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

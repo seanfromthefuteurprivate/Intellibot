@@ -174,7 +174,7 @@ const VixGauge: React.FC<VixGaugeProps> = ({ value, size = 200 }) => {
           fontSize={size * 0.08}
           fontWeight="500"
           fill={currentZone.color}
-          textTransform="uppercase"
+          style={{ textTransform: 'uppercase' }}
         >
           {currentZone.label}
         </text>

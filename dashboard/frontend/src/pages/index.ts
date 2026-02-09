@@ -1,8 +1,8 @@
 // Page exports
-export { Dashboard } from './Dashboard';
-export { Positions } from './Positions';
-export { Trades } from './Trades';
-export { Signals } from './Signals';
-export { Events } from './Events';
-export { Market } from './Market';
-export { Risk } from './Risk';
+export { default as Dashboard } from './Dashboard';
+export { default as Positions } from './Positions';
+export { default as Trades } from './Trades';
+export { default as Signals } from './Signals';
+export { default as Events } from './Events';
+export { default as Market } from './Market';
+export { default as Risk } from './Risk';

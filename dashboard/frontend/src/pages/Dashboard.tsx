@@ -369,7 +369,7 @@ const Dashboard: React.FC = () => {
       // Fetch market data
       const marketRes = await fetch('/api/market/data');
       if (marketRes.ok) {
-        const marketDataResult = await marketData.json();
+        const marketDataResult = await marketRes.json();
         setMarketData(marketDataResult);
       }
 
@@ -385,7 +385,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/events`;
     let ws: WebSocket | null = null;
-    let reconnectTimeout: NodeJS.Timeout;
+    let reconnectTimeout: ReturnType<typeof setTimeout>;
 
     const connect = () => {
       ws = new WebSocket(wsUrl);

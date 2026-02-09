@@ -1,21 +1,21 @@
 // PnL & Position Components
-export { PnLCard } from './PnLCard';
-export { PositionTable } from './PositionTable';
-export { TradeRow } from './TradeRow';
+export { default as PnLCard } from './PnLCard';
+export { default as PositionTable } from './PositionTable';
+export { default as TradeRow } from './TradeRow';
 
 // Signal & Event Components
-export { SignalCard } from './SignalCard';
-export { EventFeed } from './EventFeed';
+export { default as SignalCard } from './SignalCard';
+export { default as EventFeed } from './EventFeed';
 
 // Market Indicators
-export { VixGauge } from './VixGauge';
-export { RegimeBadge } from './RegimeBadge';
+export { default as VixGauge } from './VixGauge';
+export { default as RegimeBadge } from './RegimeBadge';
 
 // Layout Components
-export { Sidebar } from './Sidebar';
-export { TopBar } from './TopBar';
+export { default as Sidebar } from './Sidebar';
+export { default as TopBar } from './TopBar';
 
 // UI Components
-export { StatCard } from './StatCard';
-export { ProgressBar } from './ProgressBar';
-export { WinRateRing } from './WinRateRing';
+export { default as StatCard } from './StatCard';
+export { default as ProgressBar } from './ProgressBar';
+export { default as WinRateRing } from './WinRateRing';

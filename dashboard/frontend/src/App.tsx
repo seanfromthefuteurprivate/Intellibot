@@ -81,7 +81,7 @@ const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
 
   const connectWebSocket = useCallback(() => {
-    const wsUrl = process.env.REACT_APP_WS_URL || 'ws://localhost:8080/ws';
+    const wsUrl = '' || 'ws://localhost:8080/ws';
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
