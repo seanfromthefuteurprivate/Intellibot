@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from wsb_snake.utils.logger import get_logger
+from wsb_snake.learning.trade_learner import trade_learner
 
 logger = get_logger(__name__)
 
@@ -686,6 +687,24 @@ class ApexConvictionEngine:
 
         # Collect reasons from all signals
         reasons = [f"{s.source}: {s.reason}" for s in signals if s.score > 55]
+
+        # Apply screenshot learning boost
+        try:
+            trade_type = "CALLS" if direction in ["STRONG_LONG", "LONG"] else "PUTS"
+            current_hour = datetime.now().hour
+            learning_boost, boost_reasons = trade_learner.get_confidence_adjustment(
+                ticker=ticker,
+                trade_type=trade_type,
+                current_hour=current_hour,
+                pattern=None
+            )
+            if learning_boost > 0:
+                old_score = conviction_score
+                conviction_score = min(100, conviction_score * (1 + learning_boost))
+                reasons.append(f"screenshot_boost: +{learning_boost:.0%} ({', '.join(boost_reasons)})")
+                logger.info(f"Screenshot learning boost: {old_score:.1f} -> {conviction_score:.1f}")
+        except Exception as e:
+            logger.debug(f"Screenshot learning check: {e}")
 
         return ApexVerdict(
             ticker=ticker,

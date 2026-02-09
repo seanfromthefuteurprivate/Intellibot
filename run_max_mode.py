@@ -32,6 +32,7 @@ except ImportError:
 
 from wsb_snake.utils.logger import get_logger
 from wsb_snake.execution.apex_conviction_engine import apex_engine
+from wsb_snake.execution.regime_detector import regime_detector
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.notifications.telegram_bot import send_alert
@@ -165,9 +166,25 @@ Scan Interval: {SCAN_INTERVAL}s
     alpaca_executor.sync_existing_positions()
     alpaca_executor.start_monitoring()
 
+    # Warm up regime detector with initial data
+    logger.info("Warming up regime detector...")
+    try:
+        regime_state = regime_detector.fetch_and_update()
+        logger.info(f"Regime: {regime_state.regime.value} (confidence={regime_state.confidence:.0%})")
+    except Exception as e:
+        logger.warning(f"Regime warmup failed: {e}")
+
     while is_market_open():
         scan_count += 1
         now = now_et()
+
+        # Update regime every 5 minutes
+        if int(time.time()) % 300 < SCAN_INTERVAL:
+            try:
+                regime_state = regime_detector.fetch_and_update()
+                logger.info(f"Regime update: {regime_state.regime.value}")
+            except:
+                pass
 
         print(f"\n[{now.strftime('%H:%M:%S')}] 🔍 MAX MODE Scan #{scan_count}")
 

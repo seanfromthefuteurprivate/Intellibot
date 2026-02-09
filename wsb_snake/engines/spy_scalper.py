@@ -106,8 +106,8 @@ class SPYScalper:
     SNIPER_MODE = True  # Only call AI for the BEST setup per scan cycle
     MIN_CONFIDENCE_FOR_AI = 65  # HYDRA institutional standard - analyze quality setups
     MIN_CONFIDENCE_FOR_ALERT = 68  # HYDRA institutional standard (was 85)
-    MIN_SWEEP_PCT_FOR_FLOW = 8  # RAISED - Require stronger order flow agreement
-    REQUIRE_AI_CONFIRMATION = True  # RE-ENABLED - Filter out bad setups
+    MIN_SWEEP_PCT_FOR_FLOW = 3  # Was 8, too strict
+    REQUIRE_AI_CONFIRMATION = False  # Was True, blocking trades
     REQUIRE_PREDATOR_STRIKE = False  # Keep disabled - AI confirmation enough
     HIGH_CONFIDENCE_AUTO_EXECUTE = 90  # Only auto-execute at 90%+ (near perfect setup)
     MAX_AI_CALLS_PER_HOUR = 30  # Limit AI calls to prevent abuse

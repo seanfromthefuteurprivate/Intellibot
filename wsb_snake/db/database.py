@@ -289,7 +289,67 @@ def init_database():
             hash_signature TEXT
         )
     """)
-    
+
+    # ─────────────────────────────────────────────────────────────────
+    # Screenshot Learning Tables
+    # ─────────────────────────────────────────────────────────────────
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS screenshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT UNIQUE NOT NULL,
+            filename TEXT NOT NULL,
+            mime_type TEXT,
+            file_size INTEGER,
+            content_hash TEXT,
+            status TEXT DEFAULT 'pending',
+            extracted_data TEXT,
+            learned_trade_id INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS learned_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            screenshot_id INTEGER,
+            ticker TEXT NOT NULL,
+            trade_type TEXT,
+            strike REAL,
+            entry_price REAL,
+            exit_price REAL,
+            contracts INTEGER,
+            profit_loss REAL,
+            profit_loss_pct REAL,
+            detected_pattern TEXT,
+            setup_description TEXT,
+            confidence_score REAL,
+            replication_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (screenshot_id) REFERENCES screenshots(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            ticker_pattern TEXT,
+            trade_type TEXT,
+            time_window TEXT,
+            min_confidence REAL,
+            entry_conditions TEXT,
+            exit_conditions TEXT,
+            source_trade_count INTEGER DEFAULT 0,
+            total_profit REAL DEFAULT 0,
+            win_rate REAL DEFAULT 0,
+            avg_profit_pct REAL DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            last_used TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
     log.info("Database initialized")

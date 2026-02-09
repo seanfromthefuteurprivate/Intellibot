@@ -985,13 +985,40 @@ No overnight risk. Fresh start tomorrow!
         # Position size: risk governor (confidence + vol) or executor fallback
         buying_power = self.get_buying_power()
         governor = get_risk_governor()
-        qty = governor.compute_position_size(
-            engine=engine,
-            confidence_pct=confidence,
-            option_price=option_price,
-            buying_power=buying_power if buying_power > 0 else None,
-            volatility_factor=self._get_current_volatility_factor(underlying),
-        )
+        volatility_factor = self._get_current_volatility_factor(underlying)
+
+        # Use Kelly sizing when we have win probability data
+        try:
+            historical_win_rate = governor.get_win_rate()
+            if historical_win_rate > 0.4:  # Only use Kelly if we have enough data
+                qty = governor.compute_kelly_position_size(
+                    engine=engine,
+                    win_probability=min(confidence / 100, historical_win_rate),
+                    avg_win_pct=0.06,  # +6% target
+                    avg_loss_pct=0.10,  # -10% stop
+                    option_price=option_price,
+                    buying_power=buying_power if buying_power > 0 else None,
+                    volatility_factor=volatility_factor,
+                )
+                logger.info(f"Kelly sizing: {qty} contracts (win_rate={historical_win_rate:.1%})")
+            else:
+                # Fall back to confidence-based sizing
+                qty = governor.compute_position_size(
+                    engine=engine,
+                    confidence_pct=confidence,
+                    option_price=option_price,
+                    buying_power=buying_power if buying_power > 0 else None,
+                    volatility_factor=volatility_factor,
+                )
+        except Exception as e:
+            logger.warning(f"Kelly sizing failed, using confidence-based: {e}")
+            qty = governor.compute_position_size(
+                engine=engine,
+                confidence_pct=confidence,
+                option_price=option_price,
+                buying_power=buying_power if buying_power > 0 else None,
+                volatility_factor=volatility_factor,
+            )
         if qty <= 0:
             qty = self.calculate_position_size(option_price)
         estimated_cost = qty * option_price * 100  # Total cost in dollars
