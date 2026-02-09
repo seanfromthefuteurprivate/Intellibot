@@ -38,6 +38,7 @@ from wsb_snake.learning.zero_greed_exit import zero_greed_exit
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.learning.deep_study import run_idle_study
 from wsb_snake.collectors.screenshot_system import screenshot_system
+from wsb_snake.execution.regime_detector import regime_detector
 
 
 def send_startup_ping():
@@ -250,6 +251,15 @@ def main():
 
     # Deep study: Run during off-market hours (every 30 min)
     schedule.every(30).minutes.do(run_idle_study)
+
+    # HYDRA: Update regime detector every 5 minutes
+    def update_regime():
+        try:
+            state = regime_detector.fetch_and_update()
+            log.info(f"Regime update: {state.regime.value} (confidence={state.confidence:.0%})")
+        except Exception as e:
+            log.debug(f"Regime update skipped: {e}")
+    schedule.every(5).minutes.do(update_regime)
     
     # Jobs report tracker: refresh NFP Feb 6 playbook every 30 min until Fri 5 PM ET
     schedule.every(30).minutes.do(run_jobs_report_tracker_once)
@@ -257,6 +267,14 @@ def main():
         log.info("Running jobs report tracker (NFP Feb 6)...")
         run_jobs_report_tracker_once()
     
+    # HYDRA: Warm up regime detector with initial data
+    log.info("Warming up HYDRA regime detector...")
+    try:
+        regime_state = regime_detector.fetch_and_update()
+        log.info(f"Regime: {regime_state.regime.value} (confidence={regime_state.confidence:.0%})")
+    except Exception as e:
+        log.warning(f"Regime warmup failed (will retry): {e}")
+
     # Run immediately on startup if market-appropriate
     log.info("Running initial pipeline check...")
     session_info = get_session_info()
