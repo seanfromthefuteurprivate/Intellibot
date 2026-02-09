@@ -13,7 +13,7 @@ interface Position {
   engine: string;
 }
 
-const API_BASE_URL = '' || '/api';
+const API_BASE_URL = '/api';
 
 const formatCurrency = (value: number): string => {
   const absValue = Math.abs(value);
