@@ -16,8 +16,8 @@ Power Hour Mode: Aggressive scanning, faster exits, volume spikes
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from wsb_snake.utils.logger import get_logger
@@ -34,6 +34,24 @@ class ConvictionSignal:
     confidence: float  # 0-100
     reason: str
     weight: float  # 0-1 contribution to final score
+    created_at: datetime = field(default_factory=datetime.now)
+    ttl_seconds: int = 300  # 5 minute default TTL
+    source_reliability: float = 1.0  # 0.5-1.5 based on historical accuracy
+
+    def is_valid(self) -> bool:
+        """Check if signal is still within TTL."""
+        age = (datetime.now() - self.created_at).total_seconds()
+        return age < self.ttl_seconds
+
+    def get_decay_factor(self) -> float:
+        """Linear decay from 1.0 to 0.5 over TTL period."""
+        age = (datetime.now() - self.created_at).total_seconds()
+        decay = 1.0 - (age / self.ttl_seconds) * 0.5
+        return max(0.5, min(1.0, decay))
+
+    def get_effective_score(self) -> float:
+        """Score adjusted for decay and reliability."""
+        return self.score * self.get_decay_factor() * self.source_reliability
 
 
 @dataclass
@@ -65,6 +83,16 @@ class ApexConvictionEngine:
         "probability": 0.20,    # Multi-engine fusion
         "pattern_memory": 0.15, # Historical match
         "ai_verdict": 0.10,     # GPT-4/Gemini
+    }
+
+    # Source reliability multipliers (HYDRA feature)
+    SOURCE_RELIABILITY = {
+        "technical": 1.0,
+        "candlestick": 0.9,
+        "order_flow": 1.1,      # Historically more reliable
+        "probability": 1.0,
+        "pattern_memory": 0.8,  # Learning - starts lower
+        "ai_verdict": 0.7,      # Experimental
     }
 
     # Conviction thresholds - JP MORGAN INSTITUTIONAL GRADE
@@ -142,17 +170,50 @@ class ApexConvictionEngine:
         except Exception:
             return False
 
+    def _get_regime_adjusted_weights(self) -> Dict[str, float]:
+        """Adjust APEX weights based on current market regime (HYDRA feature)."""
+        try:
+            from wsb_snake.execution.regime_detector import regime_detector, MarketRegime
+            regime_state = regime_detector.detect_regime()
+
+            base_weights = dict(self.WEIGHTS)
+
+            if regime_state.regime == MarketRegime.HIGH_VOL:
+                # Increase order flow weight in high vol
+                base_weights["order_flow"] = 0.25
+                base_weights["technical"] = 0.15
+            elif regime_state.regime == MarketRegime.MEAN_REVERTING:
+                # Increase pattern memory for mean reversion
+                base_weights["pattern_memory"] = 0.20
+                base_weights["probability"] = 0.15
+            elif regime_state.regime == MarketRegime.CRASH:
+                # Order flow dominates in crash
+                base_weights["order_flow"] = 0.30
+                base_weights["technical"] = 0.10
+                base_weights["ai_verdict"] = 0.05
+            elif regime_state.regime == MarketRegime.RECOVERY:
+                # Technical matters in recovery
+                base_weights["technical"] = 0.25
+                base_weights["order_flow"] = 0.15
+
+            return base_weights
+        except Exception as e:
+            logger.debug(f"Regime detection unavailable, using base weights: {e}")
+            return dict(self.WEIGHTS)
+
     def _get_technical_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from RSI, MACD, SMA, EMA analysis.
         """
         if not self.polygon:
-            return ConvictionSignal("technical", 50, "NEUTRAL", 50, "no_data", self.WEIGHTS["technical"])
+            return ConvictionSignal("technical", 50, "NEUTRAL", 50, "no_data", self.WEIGHTS["technical"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("technical", 1.0))
 
         try:
             technicals = self.polygon.get_full_technicals(ticker)
             if not technicals:
-                return ConvictionSignal("technical", 50, "NEUTRAL", 50, "no_technicals", self.WEIGHTS["technical"])
+                return ConvictionSignal("technical", 50, "NEUTRAL", 50, "no_technicals", self.WEIGHTS["technical"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("technical", 1.0))
 
             score = 50
             direction = "NEUTRAL"
@@ -217,30 +278,35 @@ class ApexConvictionEngine:
                 direction=direction,
                 confidence=min(100, score),
                 reason="; ".join(reasons) if reasons else "technical_analysis",
-                weight=self.WEIGHTS["technical"]
+                weight=self.WEIGHTS["technical"],
+                source_reliability=self.SOURCE_RELIABILITY.get("technical", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"Technical analysis failed {ticker}: {e}")
-            return ConvictionSignal("technical", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["technical"])
+            return ConvictionSignal("technical", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["technical"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("technical", 1.0))
 
     def _get_candlestick_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from 36 candlestick patterns + confluence.
         """
         if not self.candlestick or not self.polygon:
-            return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "no_analyzer", self.WEIGHTS["candlestick"])
+            return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "no_analyzer", self.WEIGHTS["candlestick"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("candlestick", 1.0))
 
         try:
             # Get 1-minute bars for pattern detection
             bars = self.polygon.get_intraday_bars(ticker, timespan="minute", multiplier=1, limit=30)
             if not bars or len(bars) < 10:
-                return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "insufficient_bars", self.WEIGHTS["candlestick"])
+                return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "insufficient_bars", self.WEIGHTS["candlestick"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("candlestick", 1.0))
 
             # Analyze patterns
             analysis = self.candlestick.analyze(bars)
             if not analysis:
-                return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "no_patterns", self.WEIGHTS["candlestick"])
+                return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, "no_patterns", self.WEIGHTS["candlestick"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("candlestick", 1.0))
 
             patterns = analysis.get("patterns", [])
             confluence = analysis.get("confluence_score", 50)
@@ -288,25 +354,29 @@ class ApexConvictionEngine:
                 direction=direction,
                 confidence=confluence,
                 reason="; ".join(reasons) if reasons else "candlestick_analysis",
-                weight=self.WEIGHTS["candlestick"]
+                weight=self.WEIGHTS["candlestick"],
+                source_reliability=self.SOURCE_RELIABILITY.get("candlestick", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"Candlestick analysis failed {ticker}: {e}")
-            return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["candlestick"])
+            return ConvictionSignal("candlestick", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["candlestick"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("candlestick", 1.0))
 
     def _get_order_flow_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from order flow analysis (sweeps, blocks, institutional).
         """
         if not self.polygon:
-            return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, "no_polygon", self.WEIGHTS["order_flow"])
+            return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, "no_polygon", self.WEIGHTS["order_flow"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("order_flow", 1.0))
 
         try:
             # Get order flow analysis
             flow = self.polygon.analyze_order_flow(ticker)
             if not flow:
-                return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, "no_flow_data", self.WEIGHTS["order_flow"])
+                return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, "no_flow_data", self.WEIGHTS["order_flow"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("order_flow", 1.0))
 
             score = 50
             direction = "NEUTRAL"
@@ -367,24 +437,28 @@ class ApexConvictionEngine:
                 direction=direction,
                 confidence=min(100, score),
                 reason="; ".join(reasons) if reasons else "order_flow_analysis",
-                weight=self.WEIGHTS["order_flow"]
+                weight=self.WEIGHTS["order_flow"],
+                source_reliability=self.SOURCE_RELIABILITY.get("order_flow", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"Order flow analysis failed {ticker}: {e}")
-            return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["order_flow"])
+            return ConvictionSignal("order_flow", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["order_flow"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("order_flow", 1.0))
 
     def _get_probability_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from multi-engine probability generator.
         """
         if not self.probability:
-            return ConvictionSignal("probability", 50, "NEUTRAL", 50, "no_generator", self.WEIGHTS["probability"])
+            return ConvictionSignal("probability", 50, "NEUTRAL", 50, "no_generator", self.WEIGHTS["probability"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("probability", 1.0))
 
         try:
             result = self.probability.generate(ticker)
             if not result:
-                return ConvictionSignal("probability", 50, "NEUTRAL", 50, "no_result", self.WEIGHTS["probability"])
+                return ConvictionSignal("probability", 50, "NEUTRAL", 50, "no_result", self.WEIGHTS["probability"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("probability", 1.0))
 
             score = result.get("combined_score", 50)
             win_prob = result.get("win_probability", 0.5)
@@ -419,29 +493,34 @@ class ApexConvictionEngine:
                 direction=direction,
                 confidence=win_prob * 100,
                 reason="; ".join(reasons) if reasons else "probability_analysis",
-                weight=self.WEIGHTS["probability"]
+                weight=self.WEIGHTS["probability"],
+                source_reliability=self.SOURCE_RELIABILITY.get("probability", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"Probability analysis failed {ticker}: {e}")
-            return ConvictionSignal("probability", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["probability"])
+            return ConvictionSignal("probability", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["probability"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("probability", 1.0))
 
     def _get_pattern_memory_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from historical pattern matching.
         """
         if not self.pattern_memory or not self.polygon:
-            return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "no_memory", self.WEIGHTS["pattern_memory"])
+            return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "no_memory", self.WEIGHTS["pattern_memory"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0))
 
         try:
             # Get recent bars for pattern matching
             bars = self.polygon.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=20)
             if not bars or len(bars) < 5:
-                return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "insufficient_bars", self.WEIGHTS["pattern_memory"])
+                return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "insufficient_bars", self.WEIGHTS["pattern_memory"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0))
 
             matches = self.pattern_memory.find_matching_patterns(ticker, bars)
             if not matches:
-                return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "no_matches", self.WEIGHTS["pattern_memory"])
+                return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, "no_matches", self.WEIGHTS["pattern_memory"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0))
 
             score = 50
             direction = "NEUTRAL"
@@ -488,19 +567,22 @@ class ApexConvictionEngine:
                 direction=direction,
                 confidence=similarity * 100,
                 reason="; ".join(reasons) if reasons else "pattern_memory_analysis",
-                weight=self.WEIGHTS["pattern_memory"]
+                weight=self.WEIGHTS["pattern_memory"],
+                source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"Pattern memory failed {ticker}: {e}")
-            return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["pattern_memory"])
+            return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["pattern_memory"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0))
 
     def _get_ai_verdict_score(self, ticker: str) -> ConvictionSignal:
         """
         Score from AI visual analysis (GPT-4/Gemini).
         """
         if not self.predator:
-            return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "no_ai", self.WEIGHTS["ai_verdict"])
+            return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "no_ai", self.WEIGHTS["ai_verdict"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
 
         try:
             # AI analysis is expensive - only use for high-conviction setups
@@ -513,12 +595,14 @@ class ApexConvictionEngine:
                 direction="NEUTRAL",
                 confidence=50,
                 reason="ai_pending",
-                weight=self.WEIGHTS["ai_verdict"]
+                weight=self.WEIGHTS["ai_verdict"],
+                source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0)
             )
 
         except Exception as e:
             logger.debug(f"AI analysis failed {ticker}: {e}")
-            return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["ai_verdict"])
+            return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["ai_verdict"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
 
     def analyze(self, ticker: str, spot_price: Optional[float] = None) -> ApexVerdict:
         """
@@ -534,9 +618,14 @@ class ApexConvictionEngine:
         signals.append(self._get_pattern_memory_score(ticker))
         signals.append(self._get_ai_verdict_score(ticker))
 
-        # Calculate weighted conviction score
-        weighted_sum = sum(s.score * s.weight for s in signals)
-        total_weight = sum(s.weight for s in signals)
+        # Get regime-adjusted weights (HYDRA feature)
+        adjusted_weights = self._get_regime_adjusted_weights()
+
+        # Filter valid signals and use effective scores (TTL + decay + reliability)
+        valid_signals = [s for s in signals if s.is_valid()]
+        weighted_sum = sum(s.get_effective_score() * adjusted_weights.get(s.source, s.weight)
+                          for s in valid_signals)
+        total_weight = sum(adjusted_weights.get(s.source, s.weight) for s in valid_signals)
         conviction_score = weighted_sum / total_weight if total_weight > 0 else 50
 
         # Determine direction (majority vote weighted by score)

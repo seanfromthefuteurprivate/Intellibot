@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
@@ -82,6 +83,10 @@ class GovernorConfig:
     # Account cap: max % of buying power per trade
     max_pct_buying_power_per_trade: float = 0.05  # 5% (was 10%)
 
+    # Consecutive loss cooldown - HYDRA standard
+    consecutive_loss_threshold: int = 3  # 3 losses triggers cooldown
+    cooldown_hours: float = 4.0  # 4 hour pause after consecutive losses
+
     @classmethod
     def from_env(cls) -> "GovernorConfig":
         c = cls()
@@ -116,6 +121,11 @@ class RiskGovernor:
         self.config = config or GovernorConfig.from_env()
         self._kill_switch_manual = False
         self._lock = threading.Lock()
+        # HYDRA-style consecutive loss tracking
+        self._consecutive_losses = 0
+        self._cooldown_until: Optional[datetime] = None
+        self._win_count = 0
+        self._loss_count = 0
 
     def set_kill_switch(self, on: bool) -> None:
         """Manually halt all new trades."""
@@ -161,6 +171,11 @@ class RiskGovernor:
         with self._lock:
             if self._kill_switch_manual:
                 return False, "Kill switch active (manual)"
+
+        # HYDRA: Check consecutive loss cooldown
+        in_cooldown, cooldown_reason = self.is_in_cooldown()
+        if in_cooldown:
+            return False, cooldown_reason
 
         if daily_pnl <= self.config.max_daily_loss:
             return False, f"Daily PnL ${daily_pnl:.0f} at or below max daily loss ${self.config.max_daily_loss:.0f}"
@@ -243,6 +258,138 @@ class RiskGovernor:
 
         num = int(max_premium / contract_cost)
         return max(0, num)
+
+    def compute_kelly_position_size(
+        self,
+        engine: TradingEngine,
+        win_probability: float,      # From APEX (0-1)
+        avg_win_pct: float,          # Historical avg win % (e.g., 0.06 for 6%)
+        avg_loss_pct: float,         # Historical avg loss % (e.g., 0.10 for 10%)
+        option_price: float,
+        buying_power: Optional[float] = None,
+        volatility_factor: float = 1.0,
+    ) -> int:
+        """
+        Half-Kelly position sizing - institutional standard.
+
+        Kelly f* = (p*b - q) / b where:
+        - p = win probability
+        - q = 1 - p
+        - b = win/loss ratio (avg_win / avg_loss)
+
+        Half-Kelly = f*/2 for conservative sizing (75% growth, 50% drawdown).
+        """
+        if option_price <= 0 or avg_loss_pct <= 0:
+            return 0
+
+        # Clamp win probability to reasonable bounds
+        p = max(0.01, min(0.99, win_probability))
+        q = 1.0 - p
+
+        # Win/loss ratio (b)
+        b = avg_win_pct / avg_loss_pct if avg_loss_pct > 0 else 1.0
+
+        # Kelly fraction: f* = (p*b - q) / b
+        kelly_fraction = (p * b - q) / b if b > 0 else 0
+
+        # Half-Kelly for conservative sizing
+        half_kelly = kelly_fraction / 2.0
+
+        # Clamp to reasonable range (0% to 25% of capital)
+        half_kelly = max(0.0, min(0.25, half_kelly))
+
+        if half_kelly <= 0:
+            log.debug(f"Kelly suggests no position: p={p:.2f}, b={b:.2f}, f*={kelly_fraction:.4f}")
+            return 0
+
+        # Calculate max premium based on Kelly fraction
+        base_cap = self.get_max_premium_for_engine(engine)
+
+        # Apply volatility scaling (reduce size when vol is high)
+        vol_scale = 1.0 / max(0.5, min(2.0, volatility_factor))
+
+        # Kelly-adjusted premium cap
+        kelly_premium = base_cap * half_kelly * vol_scale
+
+        # Also respect buying power limits
+        if buying_power is not None and buying_power > 0:
+            bp_cap = buying_power * half_kelly
+            kelly_premium = min(kelly_premium, bp_cap)
+
+        contract_cost = option_price * 100
+        if contract_cost > kelly_premium:
+            log.debug(
+                f"Kelly position size 0: contract ${contract_cost:.2f} > kelly cap ${kelly_premium:.2f} "
+                f"(engine={engine.value}, half_kelly={half_kelly:.4f})"
+            )
+            return 0
+
+        num = int(kelly_premium / contract_cost)
+        log.info(f"Kelly sizing: p={p:.2f}, b={b:.2f}, half_kelly={half_kelly:.4f} -> {num} contracts")
+        return max(0, num)
+
+    def record_trade_outcome(self, outcome: str) -> None:
+        """
+        Track consecutive losses for cooldown. outcome = 'win' or 'loss'.
+
+        HYDRA standard: 3 consecutive losses triggers a 4-hour cooldown
+        to prevent emotional/revenge trading.
+        """
+        with self._lock:
+            if outcome.lower() == 'win':
+                self._win_count += 1
+                self._consecutive_losses = 0  # Reset streak on win
+                log.info(f"Trade outcome: WIN. Consecutive losses reset. Total: {self._win_count}W / {self._loss_count}L")
+            elif outcome.lower() == 'loss':
+                self._loss_count += 1
+                self._consecutive_losses += 1
+                log.warning(f"Trade outcome: LOSS. Consecutive losses: {self._consecutive_losses}. Total: {self._win_count}W / {self._loss_count}L")
+
+                # Check if cooldown should be triggered
+                if self._consecutive_losses >= self.config.consecutive_loss_threshold:
+                    self._cooldown_until = datetime.now() + timedelta(hours=self.config.cooldown_hours)
+                    log.warning(
+                        f"HYDRA COOLDOWN ACTIVATED: {self._consecutive_losses} consecutive losses. "
+                        f"Trading paused until {self._cooldown_until.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+
+    def is_in_cooldown(self) -> Tuple[bool, str]:
+        """
+        Check if in consecutive loss cooldown.
+
+        Returns (is_in_cooldown, reason_string).
+        """
+        with self._lock:
+            if self._cooldown_until is None:
+                return False, ""
+
+            now = datetime.now()
+            if now < self._cooldown_until:
+                remaining = self._cooldown_until - now
+                hours_remaining = remaining.total_seconds() / 3600
+                reason = (
+                    f"HYDRA cooldown active: {self._consecutive_losses} consecutive losses. "
+                    f"Trading resumes in {hours_remaining:.1f} hours ({self._cooldown_until.strftime('%H:%M:%S')})"
+                )
+                return True, reason
+            else:
+                # Cooldown expired
+                self._cooldown_until = None
+                self._consecutive_losses = 0  # Reset after cooldown
+                log.info("HYDRA cooldown expired. Trading enabled.")
+                return False, ""
+
+    def get_win_rate(self) -> float:
+        """
+        Get historical win rate for Kelly calculation.
+
+        Returns win rate as decimal (0-1). Returns 0.5 if no trades recorded.
+        """
+        with self._lock:
+            total = self._win_count + self._loss_count
+            if total == 0:
+                return 0.5  # Default 50% if no history
+            return self._win_count / total
 
 
 # Singleton used by executor and engines

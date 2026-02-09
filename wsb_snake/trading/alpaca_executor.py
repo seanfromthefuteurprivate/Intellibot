@@ -234,7 +234,37 @@ class AlpacaExecutor:
             logger.warning("⚠️ LIVE TRADING MODE ACTIVE - REAL MONEY AT RISK ⚠️")
         if self.USE_LIMIT_ORDERS:
             logger.info("📍 LIMIT ORDERS ENABLED: Entry/exit prices will match Telegram alerts")
-        
+
+    def _get_current_volatility_factor(self, ticker: str = "SPY") -> float:
+        """
+        Get current volatility factor from VIX for position sizing.
+
+        VIX-based scaling (HYDRA standard):
+        - VIX < 15: factor = 0.8 (low vol, can size up)
+        - VIX 15-20: factor = 1.0 (normal)
+        - VIX 20-25: factor = 1.3 (reduce size)
+        - VIX 25-35: factor = 1.6 (significant reduction)
+        - VIX > 35: factor = 2.0 (max reduction)
+        """
+        try:
+            from wsb_snake.collectors.vix_structure import vix_structure
+            vix_data = vix_structure.get_trading_signal()
+            vix = vix_data.get("vix", 20.0)
+
+            if vix < 15:
+                return 0.8
+            elif vix < 20:
+                return 1.0
+            elif vix < 25:
+                return 1.3
+            elif vix < 35:
+                return 1.6
+            else:
+                return 2.0
+        except Exception as e:
+            logger.debug(f"VIX fetch failed, using default: {e}")
+            return 1.0
+
     @property
     def headers(self) -> Dict[str, str]:
         return {
@@ -960,7 +990,7 @@ No overnight risk. Fresh start tomorrow!
             confidence_pct=confidence,
             option_price=option_price,
             buying_power=buying_power if buying_power > 0 else None,
-            volatility_factor=1.0,
+            volatility_factor=self._get_current_volatility_factor(underlying),
         )
         if qty <= 0:
             qty = self.calculate_position_size(option_price)
@@ -1139,6 +1169,14 @@ Reason: {reason}
         self.daily_pnl += position.pnl  # For risk governor kill switch
         if position.pnl > 0:
             self.winning_trades += 1
+
+        # Record outcome to risk governor for consecutive loss tracking
+        try:
+            from wsb_snake.trading.risk_governor import get_risk_governor
+            governor = get_risk_governor()
+            governor.record_trade_outcome("win" if position.pnl > 0 else "loss")
+        except Exception as e:
+            logger.debug(f"Failed to record outcome to governor: {e}")
 
         # Record outcome to all learning systems
         position.exit_reason = reason
