@@ -546,20 +546,42 @@ _Position picked up from restart - now monitoring_""")
         MANDATORY: Close ALL 0DTE positions before market close.
         Called automatically at 3:55 PM ET.
         Returns number of positions closed.
+
+        HYDRA FIX: Now records outcomes to risk governor for consecutive loss tracking.
         """
         import pytz
         et = pytz.timezone('US/Eastern')
         now_et = datetime.now(et)
-        
+
         positions = self.get_options_positions()
         closed = 0
-        
+
         for p in positions:
             symbol = p.get('symbol', '')
             try:
+                # HYDRA FIX: Get P/L before closing to record outcome
+                pnl = 0.0
+                try:
+                    unrealized_pl = p.get('unrealized_pl')
+                    if unrealized_pl is not None:
+                        pnl = float(unrealized_pl)
+                except:
+                    pass
+
                 self.close_position(symbol)
                 closed += 1
-                logger.info(f"0DTE EOD close: {symbol}")
+                logger.info(f"0DTE EOD close: {symbol} (P/L: ${pnl:.2f})")
+
+                # HYDRA FIX: Record outcome to risk governor for consecutive loss tracking
+                try:
+                    from wsb_snake.trading.risk_governor import get_risk_governor
+                    governor = get_risk_governor()
+                    outcome = "win" if pnl > 0 else "loss"
+                    governor.record_trade_outcome(outcome)
+                    logger.info(f"EOD outcome recorded: {outcome} for {symbol}")
+                except Exception as gov_err:
+                    logger.debug(f"Failed to record EOD outcome: {gov_err}")
+
             except Exception as e:
                 logger.error(f"Failed to close 0DTE position {symbol}: {e}")
         
@@ -1303,6 +1325,14 @@ Total P&L: ${self.total_pnl:+.2f}
                         self.close_position(position.option_symbol)
                         position.status = PositionStatus.CLOSED
                         position.exit_reason = "OVERSIZED_POSITION_CLOSED"
+                        # HYDRA FIX: Record emergency close as loss to risk governor
+                        try:
+                            from wsb_snake.trading.risk_governor import get_risk_governor
+                            governor = get_risk_governor()
+                            governor.record_trade_outcome("loss")  # Emergency close = loss
+                            logger.info(f"Emergency close recorded as loss for {position.option_symbol}")
+                        except Exception as gov_err:
+                            logger.debug(f"Failed to record emergency outcome: {gov_err}")
                         continue
                     elif actual_cost > self.MAX_DAILY_EXPOSURE * 0.5:  # Using more than half daily limit = WARNING
                         logger.warning(f"NOTE: Single trade ${actual_cost:.2f} using >{50}% of daily ${self.MAX_DAILY_EXPOSURE} limit")

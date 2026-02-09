@@ -32,28 +32,34 @@ POLYGON_BASE_URL = "https://api.polygon.io"
 BENZINGA_API_KEY = os.getenv("BENZINGA_API_KEY")
 BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 
-# 0DTE Universe - Tickers to monitor for options activity
+# 0DTE Universe - ETFs ONLY for options scalping (HYDRA requirement)
+# Small caps and individual stocks removed - they bleed theta on multi-day holds
 ZERO_DTE_UNIVERSE = [
     "SPY", "QQQ", "IWM",  # Index ETFs with daily 0DTE
     "SLV", "GLD", "GDX", "GDXJ",  # Metals ETFs - high volatility plays
     "USO", "XLE",  # Energy ETFs
-    "TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT",  # Mega caps
-    "THH",  # Reddit watchlist - potential breakout
-    # WSB core holdings (space/AI/autonomous)
-    "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
-    # WSB YOLO plays
+]
+
+# Mega caps - separate list, use sparingly (higher theta risk than ETFs)
+MEGA_CAP_OPTIONS = ["TSLA", "NVDA", "AAPL", "META", "AMD", "AMZN", "GOOGL", "MSFT"]
+
+# Small caps - EQUITY ONLY, no options (theta death on weeklies)
+SMALL_CAP_EQUITY_ONLY = [
+    "THH", "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
     "POET", "ENPH", "USAR", "PYPL"
 ]
 
 # ETFs with daily 0DTE options (not just Friday weeklies)
 DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM", "SLV", "GLD", "USO", "XLE"]
 
-# WSB Wilder Plan: Momentum (small-cap / thematic) – weeks to months
+# WSB Wilder Plan: Momentum (small-cap / thematic) – EQUITY ONLY
+# Small caps have terrible options liquidity and theta decay
 # Trim on sector weakness; let runners run (see WSB_WIN_STRATEGY_AND_UNCHAINED_PLAN.md)
 MOMENTUM_UNIVERSE = [
     "RKLB", "ASTS", "LUNR", "PL", "ONDS", "POET", "SLS", "NBIS",
     "ENPH", "USAR", "THH", "CLSK", "MU", "INTC",
 ]
+MOMENTUM_USE_OPTIONS = False  # CRITICAL: Trade equity only for momentum plays
 
 # WSB Wilder Plan: LEAPS / Macro – 1–3 year thesis (commodity + index + mega-cap)
 LEAPS_UNIVERSE = [

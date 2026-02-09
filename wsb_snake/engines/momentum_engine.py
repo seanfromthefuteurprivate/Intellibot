@@ -138,8 +138,17 @@ def scan_momentum_universe() -> List[MomentumCandidate]:
 
 
 def execute_momentum_entry(candidate: MomentumCandidate) -> bool:
-    """Execute one momentum entry via executor (weekly expiry, engine=MOMENTUM)."""
+    """Execute one momentum entry via executor (weekly expiry, engine=MOMENTUM).
+
+    CRITICAL: Small-cap options have terrible theta decay on weekly holds.
+    This engine is DISABLED for options by default. Set MOMENTUM_USE_OPTIONS=True to enable.
+    """
     try:
+        # HYDRA FIX: Check if options trading is enabled for momentum
+        from wsb_snake.config import MOMENTUM_USE_OPTIONS
+        if not MOMENTUM_USE_OPTIONS:
+            log.info(f"Momentum engine: Skipping {candidate.ticker} - options disabled for small caps (MOMENTUM_USE_OPTIONS=False)")
+            return False
         # Earnings within 2d – skip buy (IV crush risk)
         earnings_check = finnhub_collector.is_earnings_soon(candidate.ticker, days=2)
         if earnings_check.get("has_earnings"):
