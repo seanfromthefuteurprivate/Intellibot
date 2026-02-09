@@ -129,6 +129,66 @@ These bugs existed. They are now fixed. DO NOT REINTRODUCE THEM.
 
 ---
 
+## HYDRA UPGRADES (Feb 8, 2026)
+
+These systems now control trade execution. Understand them or get rekt.
+
+### 1. Regime Detection (6 States)
+```
+BULL_TRENDING   → Aggressive long bias (1.2x size)
+BULL_VOLATILE   → Calls only, reduced size (0.8x)
+BEAR_TRENDING   → Aggressive short bias (1.2x size)
+BEAR_VOLATILE   → Puts only, reduced size (0.8x)
+CHOPPY          → NO TRADES (instant reject)
+BREAKOUT        → Maximum aggression (1.5x size)
+```
+**How it works:** 20-period SMA slope + ATR expansion/contraction. Updated every 5 min. Choppy = death for scalpers.
+
+### 2. Half-Kelly Position Sizing
+```python
+kelly_fraction = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+half_kelly = kelly_fraction * 0.5
+position_size = min(base_size * half_kelly, MAX_PER_TRADE)
+```
+**When used:** Every trade. Full Kelly is too aggressive. Half-Kelly = optimal growth without ruin.
+
+### 3. Consecutive Loss Cooldown
+```
+3 losses in a row → 4 HOUR MANDATORY PAUSE
+```
+No overrides. No exceptions. After 3 consecutive stops, the system is fighting the tape. Step aside and reset.
+
+### 4. Signal TTL + Decay
+```
+TTL = 5 minutes from generation
+Decay = linear (100% at t=0 → 0% at t=5min)
+Effective_Score = base_score * (1 - (age_seconds / 300))
+```
+Stale signals are worthless. A 90% signal at 4 minutes old = 18% effective. WILL NOT TRADE.
+
+### 5. Dynamic Volatility Scaling
+```
+VIX < 15    → 2.0x position size (calm markets, larger bets)
+VIX 15-20   → 1.2x
+VIX 20-25   → 1.0x (baseline)
+VIX 25-30   → 0.8x
+VIX > 30    → 0.5x position size (chaos mode, small bets)
+```
+High VIX = wider swings = smaller positions. Don't fight the math.
+
+### 6. Source Reliability Weights
+```
+order_flow      → 1.1x (institutional money doesn't lie)
+technical       → 1.0x (baseline)
+candlestick     → 1.0x (baseline)
+probability     → 1.0x (baseline)
+pattern_memory  → 0.9x (historical, not current)
+ai_verdict      → 0.7x (LLMs hallucinate)
+```
+Not all signals are equal. Flow > everything. AI verdict is confirmation only.
+
+---
+
 ## OCC OPTION SYMBOL FORMAT
 
 **THIS WILL BITE YOU.**

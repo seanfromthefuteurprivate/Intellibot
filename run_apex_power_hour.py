@@ -20,7 +20,7 @@ Usage:
 
 Power Hour Settings (3-4 PM ET):
   - 30-second scan intervals
-  - +20% target / -10% stop (quick exits)
+  - +6% target / -10% stop (quick exits)
   - 1.2x position sizing
   - Volume spike detection
 """

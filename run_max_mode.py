@@ -5,10 +5,10 @@
 Settings:
 - Conviction threshold: 55% (find more opportunities)
 - Scan interval: 10 seconds (fast scanning)
-- Target: +10% (quick profits, don't be greedy)
-- Stop: -8% (tight risk control)
-- Trailing: +3% -> reduce stop, +5% -> breakeven, +8% -> lock +5%
-- Max hold: 8 minutes (quick rotations)
+- Target: +6% (quick profits, don't be greedy)
+- Stop: -10% (wider to avoid noise exits)
+- Trailing: +2% -> -5% stop, +3% -> breakeven, +5% -> +3% lock
+- Max hold: 5 minutes (quick rotations)
 
 Philosophy:
 - Strike fast, book profit, hunt again
@@ -134,7 +134,7 @@ def main():
     print(f"Watchlist: {', '.join(MAX_MODE_WATCHLIST)}")
     print(f"Min Conviction: {MIN_CONVICTION}%")
     print(f"Scan Interval: {SCAN_INTERVAL}s")
-    print(f"Target: +10% | Stop: -8% | Max Hold: 8min")
+    print(f"Target: +6% | Stop: -10% | Max Hold: 5min")
     print()
     print("Strategy: Strike fast, book profit, hunt again!")
     print("=" * 70)

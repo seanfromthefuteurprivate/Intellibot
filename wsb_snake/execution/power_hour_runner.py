@@ -44,7 +44,7 @@ POWER_HOUR_WATCHLIST = [
 
 # ========== MAX MODE SETTINGS - AGGRESSIVE LAST HOUR ==========
 # Minimum conviction to trade (lowered for more opportunities)
-MIN_CONVICTION = 55  # MAX MODE: Lower threshold, more trades
+MIN_CONVICTION = 68  # Institutional grade: Higher threshold for consistency
 
 # Power hour timing (ET)
 POWER_HOUR_START = 15  # 3 PM
@@ -140,7 +140,7 @@ def _format_verdict_alert(verdict: ApexVerdict, option: Dict[str, Any]) -> str:
     """Format Telegram alert for APEX verdict."""
     signals_summary = []
     for s in verdict.signals:
-        if s.score > 55:
+        if s.score > 68:
             signals_summary.append(f"  • {s.source}: {s.score:.0f} ({s.direction})")
 
     strike = option.get("strike", 0)

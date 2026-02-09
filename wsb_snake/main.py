@@ -69,7 +69,7 @@ def send_startup_ping():
 • Daily Exposure: ${alpaca_executor.MAX_DAILY_EXPOSURE:,}
 • Per Trade: ${alpaca_executor.MAX_PER_TRADE:,}
 • Max Concurrent: {alpaca_executor.MAX_CONCURRENT_POSITIONS}
-• Target: +20% | Stop: -15%
+• Target: +6% | Stop: -10%
 
 📊 **Session:**
 • {session_info['session'].upper()} | {'OPEN' if session_info['is_open'] else 'CLOSED'}
