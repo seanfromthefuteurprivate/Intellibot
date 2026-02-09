@@ -1,0 +1,26 @@
+[Unit]
+Description=WSB Snake VM Guardian Agent
+Documentation=https://github.com/seanfromthefuteurprivate/Intellibot
+After=network.target wsb-snake.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/wsb-snake
+Environment="PATH=/root/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/root/wsb-snake/.env
+ExecStart=/root/wsb-snake/venv/bin/python run_guardian.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vm-guardian
+
+# Security
+NoNewPrivileges=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target
