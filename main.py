@@ -191,6 +191,6 @@ async def screenshot_learning():
 
 
 if __name__ == "__main__":
-    # Run on port 8080 for Digital Ocean App Platform (or PORT env var)
-    port = int(os.environ.get("PORT", 8080))
+    # Run on port 8081 (dashboard uses 8080)
+    port = int(os.environ.get("PORT", 8081))
     uvicorn.run(app, host="0.0.0.0", port=port)
