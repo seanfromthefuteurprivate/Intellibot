@@ -46,9 +46,9 @@ MAX_MODE_WATCHLIST = [
     "META", "AAPL", "AMZN",   # Mega caps
 ]
 
-# MAX MODE SETTINGS
-MIN_CONVICTION = 55  # Lower threshold
-SCAN_INTERVAL = 10   # Fast scanning
+# JP MORGAN SCALP SETTINGS - Quality over quantity
+MIN_CONVICTION = 68  # Institutional standard (was 55 - too low)
+SCAN_INTERVAL = 15   # Slightly slower to reduce noise
 
 def get_spot(ticker):
     """Get spot price using best available source."""
@@ -225,12 +225,22 @@ Option Ask: ${ask:.2f}
 
                 clean_symbol = symbol.replace("O:", "") if symbol.startswith("O:") else symbol
 
+                # CRITICAL FIX: Direction must match action (was hardcoded to "long")
+                direction = "long" if verdict.action == "BUY_CALLS" else "short"
+
+                # CRITICAL FIX: Target/stop must be appropriate for direction
+                # For CALLS (long): we profit when option price goes UP
+                # For PUTS (long put): we profit when option price goes UP (put premium rises when underlying falls)
+                # Since we're always BUYING options (not shorting), target is always higher than entry
+                target_price = ask * 1.06   # +6% target (achievable in 0DTE timeframe)
+                stop_loss = ask * 0.90      # -10% stop (wider to avoid noise exits)
+
                 alpaca_pos = alpaca_executor.execute_scalp_entry(
                     underlying=ticker,
-                    direction="long",
+                    direction=direction,
                     entry_price=ask,
-                    target_price=ask * 1.10,  # +10% target
-                    stop_loss=ask * 0.92,     # -8% stop
+                    target_price=target_price,
+                    stop_loss=stop_loss,
                     confidence=verdict.conviction_score,
                     pattern=f"MAX_MODE_{verdict.direction}",
                     engine=TradingEngine.SCALPER,

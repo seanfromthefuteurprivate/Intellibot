@@ -153,12 +153,10 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    # ========== AGGRESSIVE MODE - JAN 28 TEST ==========
-    # Testing higher exposure for maximum profit potential
-    # Target: 15%+ daily returns on ETF scalping
-    MAX_DAILY_EXPOSURE = 6000  # $6,000 total (aggressive margin usage)
-    MAX_PER_TRADE = 1500  # $1,500 max per individual trade (bigger positions)
-    MAX_CONCURRENT_POSITIONS = 5  # Allow 5 trades running simultaneously
+    # ========== RISK CONTROLS - JP MORGAN GRADE ==========
+    MAX_DAILY_EXPOSURE = 4000   # $4k max daily (margin-aware)
+    MAX_PER_TRADE = 1000        # $1k max per trade
+    MAX_CONCURRENT_POSITIONS = 3  # Max 3 positions (reduce correlation)
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
     
@@ -181,9 +179,10 @@ class AlpacaExecutor:
     # 4. Predator mode - strike fast, book profit, hunt again
     #
     # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    _SCALP_TARGET_PCT_DEFAULT = 1.10   # +10% target (QUICK PROFIT - don't be greedy!)
-    _SCALP_STOP_PCT_DEFAULT = 0.92     # -8% initial stop (tight risk)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 8  # 8 MIN - quick scalps, fast rotations
+    # OPTIMIZED FOR 0DTE: Wider stops to avoid noise, achievable targets
+    _SCALP_TARGET_PCT_DEFAULT = 1.06   # +6% target (achievable in 0DTE with decay)
+    _SCALP_STOP_PCT_DEFAULT = 0.90     # -10% initial stop (wider to avoid noise)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 5  # 5 MIN - exit before theta acceleration
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -865,15 +864,20 @@ No overnight risk. Fresh start tomorrow!
         quote = {}
 
         if strike_override and option_symbol_override:
-            # CPL provided exact strike and option symbol - use them directly
+            # CPL/MAX MODE provided strike - use it, but generate proper OCC symbol
             strike = strike_override
-            # Strip "O:" prefix if present (Polygon uses "O:SPY...", Alpaca uses "SPY...")
-            option_symbol = option_symbol_override.replace("O:", "") if option_symbol_override.startswith("O:") else option_symbol_override
+            # CRITICAL FIX: Always use format_option_symbol for consistent OCC format
+            # Polygon symbols may differ slightly from OCC standard (e.g., different padding)
+            # This ensures the symbol we store matches what Alpaca actually receives
+            option_symbol = self.format_option_symbol(
+                underlying, expiry, strike,
+                "C" if option_type == "call" else "P"
+            )
             quote = self.get_option_quote(option_symbol)
             if quote:
                 option_price = float(quote.get("ap", 0))
                 bid_price = float(quote.get("bp", 0))
-            logger.info(f"Using CPL-provided strike ${strike:.0f} and symbol {option_symbol}")
+            logger.info(f"Using strike ${strike:.0f} with OCC symbol {option_symbol}")
         else:
             # Original logic: calculate strike from underlying price
             # NOTE: entry_price here should be the UNDERLYING price, not option premium
@@ -1338,25 +1342,25 @@ Reason: Order was {order_status}
                 # Calculate current profit percentage
                 profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
 
-                # MAX MODE TRAILING STOP - aggressive profit protection
-                if profit_pct >= 0.08:  # +8% profit
-                    # Move stop to +5% (lock in 5% minimum - almost at target!)
-                    new_stop = position.entry_price * 1.05
+                # JP MORGAN TRAILING STOP - lock profits progressively
+                if profit_pct >= 0.05:  # +5% profit (near target)
+                    # Lock in +3% minimum profit
+                    new_stop = position.entry_price * 1.03
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to +5% (${new_stop:.2f})")
-                elif profit_pct >= 0.05:  # +5% profit
-                    # Move stop to breakeven (never let winner become loser!)
+                        logger.info(f"TRAIL: {position.option_symbol} stop to +3% (${new_stop:.2f})")
+                elif profit_pct >= 0.03:  # +3% profit
+                    # Move stop to breakeven
                     new_stop = position.entry_price * 1.0
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to BREAKEVEN (${new_stop:.2f})")
-                elif profit_pct >= 0.03:  # +3% profit
-                    # Move stop to -3% (reduce risk early)
-                    new_stop = position.entry_price * 0.97
+                        logger.info(f"TRAIL: {position.option_symbol} stop to BREAKEVEN (${new_stop:.2f})")
+                elif profit_pct >= 0.02:  # +2% profit
+                    # Reduce initial risk to -5%
+                    new_stop = position.entry_price * 0.95
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"🔥 MAX MODE TRAIL: {position.option_symbol} stop to -3% (${new_stop:.2f})")
+                        logger.info(f"TRAIL: {position.option_symbol} stop to -5% (${new_stop:.2f})")
 
                 # Check exits
                 if current_price >= position.target_price:

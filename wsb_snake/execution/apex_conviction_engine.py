@@ -67,11 +67,11 @@ class ApexConvictionEngine:
         "ai_verdict": 0.10,     # GPT-4/Gemini
     }
 
-    # Conviction thresholds
-    # MAX MODE THRESHOLDS - Aggressive trading
-    STRONG_CONVICTION = 65  # Was 80 - now more signals qualify as "strong"
-    TRADE_THRESHOLD = 55    # Was 70 - now find more opportunities
-    AVOID_THRESHOLD = 40
+    # Conviction thresholds - JP MORGAN INSTITUTIONAL GRADE
+    # Higher thresholds = fewer but higher quality trades
+    STRONG_CONVICTION = 75  # Strong directional agreement required
+    TRADE_THRESHOLD = 68    # Minimum 68% to trade (institutional standard)
+    AVOID_THRESHOLD = 50    # Clear wash zone
 
     # Power hour settings (3:00-4:00 PM ET)
     POWER_HOUR_START = 15

@@ -55,32 +55,32 @@ DEFAULT_SECTOR = "other"
 @dataclass
 class GovernorConfig:
     """Configurable limits (can be overridden via env)."""
-    # Kill switch
-    max_daily_loss: float = -500.0  # Stop all new trades if daily PnL below this
+    # Kill switch - JP MORGAN GRADE (tighter controls)
+    max_daily_loss: float = -200.0  # Stop at -$200 (5% of $4k budget)
     kill_switch_manual: bool = False  # Set True to force halt
 
     # Global position limits
-    max_concurrent_positions_global: int = 5
-    max_daily_exposure_global: float = 6000.0
+    max_concurrent_positions_global: int = 3  # Reduce correlation risk
+    max_daily_exposure_global: float = 4000.0  # $4k daily max
 
     # Per-engine position limits
-    max_positions_scalper: int = 4
-    max_positions_momentum: int = 2
-    max_positions_macro: int = 2
-    max_positions_vol_sell: int = 2
+    max_positions_scalper: int = 2  # Focus on quality, not quantity
+    max_positions_momentum: int = 1
+    max_positions_macro: int = 1
+    max_positions_vol_sell: int = 1
 
     # Per-ticker / per-sector exposure (dollars)
-    max_exposure_per_ticker: float = 2000.0
-    max_exposure_per_sector: float = 4000.0
+    max_exposure_per_ticker: float = 1000.0  # Max $1k per ticker
+    max_exposure_per_sector: float = 2000.0  # Max $2k per sector
 
     # Position sizing: max premium per trade by engine (base before confidence/vol scaling)
-    max_premium_scalper: float = 1500.0
-    max_premium_momentum: float = 1200.0
-    max_premium_macro: float = 2000.0
-    max_premium_vol_sell: float = 1500.0
+    max_premium_scalper: float = 1000.0   # $1k max for 0DTE
+    max_premium_momentum: float = 800.0   # $800 for momentum
+    max_premium_macro: float = 1500.0     # $1.5k for LEAPS
+    max_premium_vol_sell: float = 1000.0  # $1k for vol selling
 
     # Account cap: max % of buying power per trade
-    max_pct_buying_power_per_trade: float = 0.10  # 10%
+    max_pct_buying_power_per_trade: float = 0.05  # 5% (was 10%)
 
     @classmethod
     def from_env(cls) -> "GovernorConfig":
