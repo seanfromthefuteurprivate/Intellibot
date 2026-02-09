@@ -104,8 +104,8 @@ class SPYScalper:
     # - Only trade A+ setups (85%+ confidence)
     PREDATOR_MODE = True  # Enable apex predator behavior
     SNIPER_MODE = True  # Only call AI for the BEST setup per scan cycle
-    MIN_CONFIDENCE_FOR_AI = 80  # RAISED TO 80% - Only analyze VERY HIGH quality setups
-    MIN_CONFIDENCE_FOR_ALERT = 85  # RAISED TO 85% - Only trade A+ setups (was 75)
+    MIN_CONFIDENCE_FOR_AI = 65  # HYDRA institutional standard - analyze quality setups
+    MIN_CONFIDENCE_FOR_ALERT = 68  # HYDRA institutional standard (was 85)
     MIN_SWEEP_PCT_FOR_FLOW = 8  # RAISED - Require stronger order flow agreement
     REQUIRE_AI_CONFIRMATION = True  # RE-ENABLED - Filter out bad setups
     REQUIRE_PREDATOR_STRIKE = False  # Keep disabled - AI confirmation enough
@@ -123,7 +123,7 @@ class SPYScalper:
         "THH", "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
         "POET", "ENPH", "USAR", "PYPL"
     ]
-    MIN_CONFIDENCE_SMALL_CAP = 88  # RAISED TO 88% for small caps (was 75)
+    MIN_CONFIDENCE_SMALL_CAP = 72  # HYDRA institutional standard for small caps
     SMALL_CAP_REQUIRE_CANDLESTICK = True  # Must have clear candlestick pattern
     SMALL_CAP_PREFER_EQUITY = True  # NEW: Prefer stock over options for small caps
     
