@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Dashboard API service
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: intellibot-dashboard
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_HOST=0.0.0.0
+      - API_PORT=8080
+    volumes:
+      - static_files:/app/static
+      - ./api:/app/api:ro
+      - ../wsb_snake_data:/app/data:ro
+    networks:
+      - dashboard_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: intellibot-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - static_files:/usr/share/nginx/html/static:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    networks:
+      - dashboard_network
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Named volumes for persistent data
+volumes:
+  static_files:
+    driver: local
+
+# Network configuration
+networks:
+  dashboard_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16

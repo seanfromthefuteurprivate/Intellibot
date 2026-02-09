@@ -1,0 +1,1 @@
+"""WSB Snake Dashboard API"""

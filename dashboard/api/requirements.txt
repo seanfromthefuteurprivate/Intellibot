@@ -1,0 +1,16 @@
+# FastAPI Dashboard Requirements
+
+# Web framework
+fastapi
+
+# ASGI server
+uvicorn
+
+# WebSocket support
+websockets
+
+# Data validation
+pydantic
+
+# Date/time utilities
+python-dateutil
