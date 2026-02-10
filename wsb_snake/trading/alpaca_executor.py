@@ -21,6 +21,7 @@ from wsb_snake.trading.risk_governor import (
     TradingEngine,
 )
 from wsb_snake.trading.outcome_recorder import outcome_recorder
+from wsb_snake.collectors.vix_structure import vix_structure
 
 logger = get_logger(__name__)
 
@@ -237,19 +238,24 @@ class AlpacaExecutor:
 
     def _get_current_volatility_factor(self, ticker: str = "SPY") -> float:
         """
-        Get current volatility factor from VIX for position sizing.
+        Get volatility scaling factor based on current VIX.
 
-        VIX-based scaling (HYDRA standard):
-        - VIX < 15: factor = 0.8 (low vol, can size up)
-        - VIX 15-20: factor = 1.0 (normal)
-        - VIX 20-25: factor = 1.3 (reduce size)
-        - VIX 25-35: factor = 1.6 (significant reduction)
-        - VIX > 35: factor = 2.0 (max reduction)
+        Returns multiplier:
+        - VIX < 15: 0.8 (calm, can size up slightly)
+        - VIX 15-20: 1.0 (normal)
+        - VIX 20-25: 1.3 (elevated, widen stops)
+        - VIX 25-35: 1.6 (high vol, much wider stops)
+        - VIX > 35: 2.0 (crisis, maximum caution)
+
+        This factor is used for:
+        1. Position sizing - higher VIX = smaller positions
+        2. Stop-loss width - higher VIX = wider stops to avoid noise
         """
         try:
-            from wsb_snake.collectors.vix_structure import vix_structure
             vix_data = vix_structure.get_trading_signal()
             vix = vix_data.get("vix", 20.0)
+
+            logger.debug(f"Current VIX: {vix:.2f} for {ticker}")
 
             if vix < 15:
                 return 0.8
@@ -264,6 +270,39 @@ class AlpacaExecutor:
         except Exception as e:
             logger.debug(f"VIX fetch failed, using default: {e}")
             return 1.0
+
+    def _get_volatility_adjusted_stop(self, base_stop_pct: float, volatility_factor: float) -> float:
+        """
+        Adjust stop-loss percentage based on volatility.
+
+        Higher volatility = wider stops to avoid getting stopped out by noise.
+
+        Args:
+            base_stop_pct: Base stop percentage (e.g., 0.90 for -10% stop)
+            volatility_factor: VIX-based factor (0.8 to 2.0)
+
+        Returns:
+            Adjusted stop percentage (e.g., 0.85 for -15% stop in high vol)
+        """
+        # Calculate the loss percentage from base (e.g., 0.90 -> 0.10 = 10% loss)
+        base_loss = 1.0 - base_stop_pct
+
+        # Widen stop proportionally to volatility factor
+        # At VIX 0.8 (calm): 10% * 0.8 = 8% stop (tighter)
+        # At VIX 1.0 (normal): 10% * 1.0 = 10% stop (unchanged)
+        # At VIX 1.3 (elevated): 10% * 1.3 = 13% stop (wider)
+        # At VIX 1.6 (high): 10% * 1.6 = 16% stop (much wider)
+        # At VIX 2.0 (crisis): 10% * 2.0 = 20% stop (maximum width)
+        adjusted_loss = base_loss * volatility_factor
+
+        # Cap at -25% max stop to limit risk even in extreme vol
+        adjusted_loss = min(adjusted_loss, 0.25)
+
+        adjusted_stop_pct = 1.0 - adjusted_loss
+
+        logger.debug(f"Stop adjustment: base={base_stop_pct:.2%} -> adjusted={adjusted_stop_pct:.2%} (vol_factor={volatility_factor})")
+
+        return adjusted_stop_pct
 
     @property
     def headers(self) -> Dict[str, str]:

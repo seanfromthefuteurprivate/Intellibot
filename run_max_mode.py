@@ -37,8 +37,61 @@ from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.notifications.telegram_bot import send_alert
 from wsb_snake.trading.alpaca_executor import alpaca_executor
+from wsb_snake.db.database import get_db
 
 logger = get_logger(__name__)
+
+
+def get_latest_cpl_signal(ticker: str) -> dict:
+    """Get the latest CPL signal for a ticker (within last 30 minutes)."""
+    try:
+        db = get_db()
+        cursor = db.conn.cursor()
+        cursor.execute("""
+            SELECT side, regime, confidence, timestamp_et
+            FROM cpl_calls
+            WHERE ticker = ?
+            AND datetime(timestamp_et) > datetime('now', '-30 minutes')
+            ORDER BY timestamp_et DESC
+            LIMIT 1
+        """, (ticker,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "side": row[0],      # "CALL" or "PUT"
+                "regime": row[1],    # "RISK_ON" or "RISK_OFF"
+                "confidence": row[2],
+                "timestamp": row[3]
+            }
+    except Exception as e:
+        logger.debug(f"CPL lookup failed for {ticker}: {e}")
+    return None
+
+
+def check_cpl_alignment(ticker: str, apex_action: str) -> tuple:
+    """
+    Check if APEX action aligns with CPL intelligence.
+
+    Returns: (is_aligned, reason)
+    """
+    cpl = get_latest_cpl_signal(ticker)
+    if not cpl:
+        # No recent CPL signal - allow trade but log
+        return True, "NO_CPL_SIGNAL"
+
+    apex_is_bullish = apex_action == "BUY_CALLS"
+    cpl_is_bullish = cpl["side"] == "CALL" and cpl["regime"] == "RISK_ON"
+    cpl_is_bearish = cpl["side"] == "PUT" or cpl["regime"] == "RISK_OFF"
+
+    # CRITICAL: Block if APEX says CALLS but CPL says RISK_OFF/PUT
+    if apex_is_bullish and cpl_is_bearish:
+        return False, f"CPL_CONFLICT: CPL says {cpl['side']}/{cpl['regime']} but APEX wants CALLS"
+
+    # Block if APEX says PUTS but CPL says RISK_ON/CALL
+    if not apex_is_bullish and cpl_is_bullish:
+        return False, f"CPL_CONFLICT: CPL says {cpl['side']}/{cpl['regime']} but APEX wants PUTS"
+
+    return True, f"CPL_ALIGNED: {cpl['side']}/{cpl['regime']}"
 
 # MAX MODE WATCHLIST - high volatility, high liquidity
 MAX_MODE_WATCHLIST = [
@@ -211,8 +264,15 @@ Scan Interval: {SCAN_INTERVAL}s
                 if verdict.action == "NO_TRADE":
                     continue
 
+                # CRITICAL: Check CPL alignment before trading
+                cpl_aligned, cpl_reason = check_cpl_alignment(ticker, verdict.action)
+                if not cpl_aligned:
+                    print(f"  🚫 BLOCKED: {ticker} - {cpl_reason}")
+                    logger.warning(f"Trade blocked by CPL: {ticker} {verdict.action} - {cpl_reason}")
+                    continue
+
                 # Found a trade opportunity!
-                print(f"\n  🚀 HIGH CONVICTION SIGNAL: {ticker} {verdict.action}")
+                print(f"\n  🚀 HIGH CONVICTION SIGNAL: {ticker} {verdict.action} ({cpl_reason})")
 
                 # Get option
                 today = now.strftime("%Y-%m-%d")

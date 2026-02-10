@@ -171,11 +171,21 @@ class ApexConvictionEngine:
         except Exception:
             return False
 
-    def _get_regime_adjusted_weights(self) -> Dict[str, float]:
-        """Adjust APEX weights based on current market regime (HYDRA feature)."""
+    def _get_regime_adjusted_weights(self, regime_state=None) -> Dict[str, float]:
+        """Adjust signal weights based on market regime.
+
+        Args:
+            regime_state: Optional pre-fetched regime state. If None, fetches current regime.
+
+        Returns:
+            Dictionary of source -> adjusted weight based on regime conditions.
+        """
         try:
             from wsb_snake.execution.regime_detector import regime_detector, MarketRegime
-            regime_state = regime_detector.detect_regime()
+
+            # Fetch regime if not provided
+            if regime_state is None:
+                regime_state = regime_detector.detect_regime()
 
             base_weights = dict(self.WEIGHTS)
 
