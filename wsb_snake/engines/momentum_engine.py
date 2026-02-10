@@ -21,6 +21,7 @@ from wsb_snake.utils.sector_strength import is_sector_slighted_down
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.trading.risk_governor import TradingEngine, get_risk_governor
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 
 log = get_logger(__name__)
 
@@ -172,6 +173,12 @@ def execute_momentum_entry(candidate: MomentumCandidate) -> bool:
             return False
         stop = entry * 0.92
         target = entry * 1.15
+        # CPL GATE - Check alignment before execution
+        cpl_ok, cpl_reason = cpl_check(candidate.ticker, candidate.direction)
+        if not cpl_ok:
+            cpl_block(candidate.ticker, candidate.direction, cpl_reason)
+            return False
+        log.info(f"✅ CPL GATE PASSED: {candidate.ticker} - {cpl_reason}")
         pos = alpaca_executor.execute_scalp_entry(
             underlying=candidate.ticker,
             direction=candidate.direction,

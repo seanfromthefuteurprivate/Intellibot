@@ -20,6 +20,7 @@ from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.trading.risk_governor import TradingEngine, get_risk_governor
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 
 log = get_logger(__name__)
 
@@ -129,6 +130,12 @@ def execute_leaps_entry(candidate: LEAPSCandidate) -> bool:
         conf = min(95, conf)
         stop = entry * 0.88
         target = entry * 1.50
+        # CPL GATE - Check alignment before execution (allow_no_signal=True for LEAPS since they're long-term)
+        cpl_ok, cpl_reason = cpl_check(candidate.ticker, candidate.direction, allow_no_signal=True)
+        if not cpl_ok:
+            cpl_block(candidate.ticker, candidate.direction, cpl_reason)
+            return False
+        log.info(f"✅ CPL GATE PASSED: {candidate.ticker} - {cpl_reason}")
         pos = alpaca_executor.execute_scalp_entry(
             underlying=candidate.ticker,
             direction=candidate.direction,

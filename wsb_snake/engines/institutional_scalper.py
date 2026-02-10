@@ -26,6 +26,7 @@ import pytz
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.collectors.market_data import get_market_data
 from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 
 log = logging.getLogger(__name__)
 
@@ -188,7 +189,14 @@ class InstitutionalScalper:
         Execute an institutional setup with full validation.
         """
         log.info(f"Executing institutional setup: {setup.ticker} {setup.direction}")
-        
+
+        # CPL GATE - Check alignment before execution
+        cpl_ok, cpl_reason = cpl_check(setup.ticker, setup.direction)
+        if not cpl_ok:
+            cpl_block(setup.ticker, setup.direction, cpl_reason)
+            return False
+        log.info(f"✅ CPL GATE PASSED: {setup.ticker} - {cpl_reason}")
+
         result = alpaca_executor.execute_scalp_entry(
             underlying=setup.ticker,
             direction=setup.direction,

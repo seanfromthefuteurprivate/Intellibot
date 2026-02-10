@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from wsb_snake.utils.logger import get_logger
+from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 from wsb_snake.execution.apex_conviction_engine import apex_engine, ApexVerdict
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
@@ -196,6 +197,13 @@ def _execute_apex_trade(verdict: ApexVerdict, option: Dict[str, Any], expiry_dat
 
         # Strip O: prefix if present
         clean_symbol = symbol.replace("O:", "") if symbol.startswith("O:") else symbol
+
+        # CPL GATE - Check alignment before execution
+        cpl_ok, cpl_reason = cpl_check(ticker, direction)
+        if not cpl_ok:
+            cpl_block(ticker, direction, cpl_reason)
+            return False
+        logger.info(f"✅ CPL GATE PASSED: {ticker} - {cpl_reason}")
 
         # Execute via Alpaca
         alpaca_pos = alpaca_executor.execute_scalp_entry(

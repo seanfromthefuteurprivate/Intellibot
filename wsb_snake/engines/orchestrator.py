@@ -68,6 +68,7 @@ from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
 from wsb_snake.learning.session_learnings import session_learnings, battle_plan
 from wsb_snake.engines.spy_scalper import spy_scalper
 from wsb_snake.trading.alpaca_executor import alpaca_executor
+from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 from wsb_snake.config import ZERO_DTE_UNIVERSE
 
 
@@ -1041,20 +1042,27 @@ _Urgency: {alert.urgency}/5_
                             
                             try:
                                 if entry_price > 0:
-                                    alpaca_position = alpaca_executor.execute_scalp_entry(
-                                        underlying=ticker,
-                                        direction=direction,
-                                        entry_price=entry_price,
-                                        target_price=target,
-                                        stop_loss=stop,
-                                        confidence=confidence,
-                                        pattern=f"orchestrator_{family_name}"
-                                    )
-                                    if alpaca_position:
-                                        log.info(f"🚀 ALPACA EXECUTED: {ticker} {direction} via orchestrator")
-                                        results["paper_trades"] += 1
+                                    # CPL GATE - Check alignment before execution
+                                    cpl_ok, cpl_reason = cpl_check(ticker, direction)
+                                    if not cpl_ok:
+                                        cpl_block(ticker, direction, cpl_reason)
                                     else:
-                                        log.warning(f"Alpaca trade not placed for {ticker}")
+                                        log.info(f"✅ CPL GATE PASSED: {ticker} - {cpl_reason}")
+                                        # Only execute if CPL passed
+                                        alpaca_position = alpaca_executor.execute_scalp_entry(
+                                            underlying=ticker,
+                                            direction=direction,
+                                            entry_price=entry_price,
+                                            target_price=target,
+                                            stop_loss=stop,
+                                            confidence=confidence,
+                                            pattern=f"orchestrator_{family_name}"
+                                        )
+                                        if alpaca_position:
+                                            log.info(f"🚀 ALPACA EXECUTED: {ticker} {direction} via orchestrator")
+                                            results["paper_trades"] += 1
+                                        else:
+                                            log.warning(f"Alpaca trade not placed for {ticker}")
                             except Exception as e:
                                 log.error(f"Alpaca execution error for {ticker}: {e}")
                             
@@ -1187,21 +1195,28 @@ Minutes to close: {mins_to_close:.0f}"""
             # EXECUTE TRADE ON ALPACA - Signal-execution connection!
             if score >= 70 and entry > 0 and stop > 0:
                 try:
-                    position = alpaca_executor.execute_scalp_entry(
-                        underlying=ticker,
-                        direction=direction,
-                        entry_price=entry,
-                        stop_loss=stop,
-                        target_price=t1 if t1 > 0 else entry * 1.15,
-                        confidence=score,
-                        pattern="orchestrator_signal"
-                    )
-                    if position:
-                        symbol = getattr(position, 'option_symbol', ticker) if hasattr(position, 'option_symbol') else ticker
-                        log.info(f"🚀 TRADE EXECUTED for {ticker}: {symbol}")
-                        send_telegram_alert(f"🚀 **TRADE EXECUTED** {ticker} {direction.upper()} @ ${entry:.2f}")
+                    # CPL GATE - Check alignment before execution
+                    cpl_ok, cpl_reason = cpl_check(ticker, direction)
+                    if not cpl_ok:
+                        cpl_block(ticker, direction, cpl_reason)
                     else:
-                        log.warning(f"Trade not executed for {ticker} - check Alpaca logs")
+                        log.info(f"✅ CPL GATE PASSED: {ticker} - {cpl_reason}")
+                        # Only execute if CPL passed
+                        position = alpaca_executor.execute_scalp_entry(
+                            underlying=ticker,
+                            direction=direction,
+                            entry_price=entry,
+                            stop_loss=stop,
+                            target_price=t1 if t1 > 0 else entry * 1.15,
+                            confidence=score,
+                            pattern="orchestrator_signal"
+                        )
+                        if position:
+                            symbol = getattr(position, 'option_symbol', ticker) if hasattr(position, 'option_symbol') else ticker
+                            log.info(f"🚀 TRADE EXECUTED for {ticker}: {symbol}")
+                            send_telegram_alert(f"🚀 **TRADE EXECUTED** {ticker} {direction.upper()} @ ${entry:.2f}")
+                        else:
+                            log.warning(f"Trade not executed for {ticker} - check Alpaca logs")
                 except Exception as trade_err:
                     log.error(f"Failed to execute trade for {ticker}: {trade_err}")
         except Exception as e:
