@@ -136,3 +136,50 @@ Last Updated: 2026-02-10
 All critical and medium severity issues have been fixed and deployed to the VM at `157.245.240.99`.
 
 **NFP Date Update:** All references to Feb 6 have been updated to Feb 11, 2026 (rescheduled due to government shutdown).
+
+---
+
+## INFRASTRUCTURE AUDIT CHECKLIST (MANDATORY)
+
+**This checklist was added after a critical miss: duplicate deployments (App Platform + Droplet) ran simultaneously, causing API connection conflicts.**
+
+### Before ANY Audit, Run These Commands:
+
+```bash
+# 1. List ALL Digital Ocean resources
+doctl compute droplet list --format ID,Name,PublicIPv4,Status
+doctl apps list --format ID,Spec.Name,DefaultIngress
+
+# 2. SSH to verify droplet state
+ssh root@157.245.240.99 "hostname && git -C /root/wsb-snake log --oneline -1 && systemctl status wsb-snake --no-pager | head -5"
+
+# 3. Check for duplicate deployments
+# If BOTH droplet AND app platform exist, DELETE the app platform:
+# doctl apps delete <APP_ID> --force
+
+# 4. Check for connection conflicts
+ssh root@157.245.240.99 "journalctl -u wsb-snake --since '5 minutes ago' | grep -i 'connection limit'"
+```
+
+### Infrastructure State (Current):
+
+| Resource | Status | Details |
+|----------|--------|---------|
+| **Droplet (wsb-snake)** | ✅ ACTIVE | 157.245.240.99, commit e283592 |
+| **App Platform (coral-app)** | ❌ DELETED | Was causing "connection limit exceeded" |
+| **Guardian API** | ✅ RUNNING | http://157.245.240.99:8888 |
+
+### Why App Platform Was Deleted (2026-02-10):
+
+1. **Duplicate trading bot** - Both connected to same Alpaca account
+2. **Connection limit exceeded** - WebSocket conflicts
+3. **Redundant cost** - ~$5-12/month wasted
+4. **No SSH access** - Can't debug or manually intervene
+5. **Droplet has Guardian API** - Full remote control capability
+
+### Red Flags to Watch For:
+
+- `connection limit exceeded` errors in logs
+- Duplicate Telegram alerts
+- `doctl apps list` showing active apps alongside droplet
+- Multiple Python processes on different hosts hitting same APIs
