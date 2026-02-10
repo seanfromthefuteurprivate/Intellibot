@@ -1,8 +1,20 @@
 import logging
+import os
 from openai import OpenAI
 from wsb_snake.config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
+
+# Startup validation - log warning if API key missing
+_SENTIMENT_ENABLED = bool(OPENAI_API_KEY)
+if not _SENTIMENT_ENABLED:
+    logger.warning("⚠️ OPENAI_API_KEY not set - sentiment analysis disabled (will return placeholders)")
+
+
+def is_enabled() -> bool:
+    """Check if sentiment analysis is available."""
+    return _SENTIMENT_ENABLED
+
 
 def summarize_setup(ticker):
     """

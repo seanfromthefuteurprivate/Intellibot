@@ -915,21 +915,71 @@ class PositionSizer:
 
     def _get_volatility_multiplier(self, symbol: str) -> float:
         """
-        Adjust size based on current vs average volatility.
-        Higher volatility = smaller position.
+        Adjust size based on current VIX level.
+        Higher VIX = smaller position (more volatile market).
         """
-        # In production, this would fetch ATR data
-        # For now, return neutral multiplier
-        # TODO: Integrate with data manager for ATR calculation
-        volatility_ratio = 1.0  # ATR / Avg ATR
+        try:
+            from wsb_snake.collectors.vix_structure import vix_structure
+            vix_data = vix_structure.get_trading_signal()
+            vix = vix_data.get("vix", 20.0)
 
-        if volatility_ratio > 1.5:
-            return 0.6  # High volatility - reduce size 40%
-        elif volatility_ratio > 1.2:
-            return 0.8  # Elevated volatility - reduce size 20%
-        elif volatility_ratio < 0.8:
-            return 1.2  # Low volatility - increase size 20%
-        return 1.0
+            # VIX-based volatility scaling (same logic as alpaca_executor)
+            if vix < 15:
+                return 1.2  # Low vol - can size up slightly
+            elif vix < 20:
+                return 1.0  # Normal vol
+            elif vix < 25:
+                return 0.8  # Elevated vol - reduce size 20%
+            elif vix < 35:
+                return 0.6  # High vol - reduce size 40%
+            else:
+                return 0.5  # Crisis vol - reduce size 50%
+        except Exception as e:
+            log.debug(f"VIX fetch failed for volatility multiplier: {e}")
+            return 1.0  # Default to neutral if VIX unavailable
+
+    def _estimate_greeks(self, setup: Any, greek_targets: Any, contract_price: float) -> Dict:
+        """
+        Estimate option Greeks based on VIX and option characteristics.
+
+        More accurate than hardcoded placeholders - scales with market conditions.
+        In production, these would come from the options chain API.
+        """
+        try:
+            from wsb_snake.collectors.vix_structure import vix_structure
+            vix_data = vix_structure.get_trading_signal()
+            vix = vix_data.get("vix", 20.0)
+        except Exception:
+            vix = 20.0  # Default VIX assumption
+
+        # Delta from targets (this is already calculated correctly)
+        delta = (greek_targets.delta_min + greek_targets.delta_max) / 2
+
+        # Gamma scales with volatility - higher VIX = higher gamma (more convexity)
+        # Base gamma ~0.03-0.08 for ATM options, scales with VIX
+        base_gamma = 0.05
+        gamma = base_gamma * (vix / 20.0)  # Scale by VIX ratio to normal
+
+        # Theta (time decay) - always negative for long options
+        # Higher VIX = higher premium = more theta decay
+        # Base theta ~-0.05 to -0.15 per day for short-dated options
+        base_theta = -0.08
+        theta = base_theta * (vix / 20.0) * (1 + (contract_price / 5.0) * 0.1)
+
+        # Vega (sensitivity to IV) - higher for ATM, lower for deep ITM/OTM
+        # Base vega ~0.10-0.20 for ATM options
+        base_vega = 0.12
+        # ATM options have highest vega (delta ~0.5)
+        atm_factor = 1.0 - abs(abs(delta) - 0.5) * 0.5
+        vega = base_vega * atm_factor * (vix / 20.0)
+
+        return {
+            'delta': delta,
+            'gamma': round(gamma, 4),
+            'theta': round(theta, 4),
+            'vega': round(vega, 4),
+            'quantity': 1  # Will be updated after sizing
+        }
 
     def _get_conviction_multiplier(self, signal: Dict) -> float:
         """
@@ -1446,14 +1496,13 @@ class PreciousMetalsScalper:
         # Get Greek targets for the strategy
         greek_targets = self.greek_optimizer.get_greek_targets(setup.strategy)
 
-        # Estimate position Greeks (in production, fetch from options chain)
-        estimated_greeks = {
-            'delta': (greek_targets.delta_min + greek_targets.delta_max) / 2,
-            'gamma': 0.05,  # Placeholder
-            'theta': -0.10,  # Placeholder
-            'vega': 0.15,   # Placeholder
-            'quantity': 1   # Will be updated after sizing
-        }
+        # Estimate position Greeks based on VIX and option characteristics
+        # In production, these would come from the options chain API
+        estimated_greeks = self._estimate_greeks(
+            setup=setup,
+            greek_targets=greek_targets,
+            contract_price=contract_price
+        )
 
         # Check current portfolio Greeks
         greek_check = self.greek_optimizer.check_limits()

@@ -85,7 +85,15 @@ Last Updated: 2026-02-10
 - **File:** `wsb_snake/execution/apex_conviction_engine.py:590-616`
 - **Issue:** `_get_ai_verdict_score()` always returns score=50 (neutral) even when predator is available
 - **Impact:** Signals missing AI visual analysis confirmation, conviction scores potentially lower than they should be
-- **Fix:** Actually call predator.analyze() when predator is available
+- **Required to fix:**
+  1. Import `ChartGenerator` from `wsb_snake.analysis.chart_generator`
+  2. Import `polygon_enhanced` for OHLCV data
+  3. In `_get_ai_verdict_score()`:
+     - Get OHLCV bars: `polygon_enhanced.get_bars(ticker, timeframe='5', limit=50)`
+     - Generate chart: `chart_gen.generate_chart(ticker, bars)`
+     - Call AI: `predator.analyze_sync(chart_base64, ticker, current_price=spot)`
+     - Convert analysis to ConvictionSignal
+  4. Note: Only call when other signals show >60% conviction (expensive API call)
 
 ---
 

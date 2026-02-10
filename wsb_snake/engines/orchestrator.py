@@ -479,10 +479,24 @@ _Urgency: {alert.urgency}/5_
             try:
                 # 0DTE Volatility Engine - check for vol expansion plays
                 vix_data = results.get("expanded_data", {}).get("vix_structure", {})
+
+                # Check economic calendar for today's macro events (NFP, FOMC, CPI)
+                macro_event = None
+                try:
+                    econ_events = fred_collector.get_economic_calendar(weeks=1)
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    for event in econ_events:
+                        if event.get("date") == today and event.get("impact") == "high":
+                            macro_event = event.get("name", event.get("event_type", "MACRO_EVENT"))
+                            log.info(f"🔥 HIGH-IMPACT MACRO EVENT TODAY: {macro_event}")
+                            break
+                except Exception as e:
+                    log.debug(f"Economic calendar check failed: {e}")
+
                 market_data = {
                     "vix": vix_data.get("vix", 15.0),
                     "vix_structure": vix_data.get("structure", "contango"),
-                    "macro_event": None,  # TODO: check economic calendar
+                    "macro_event": macro_event,
                     "SPY_iv": 0.18,
                     "SPY_iv_percentile": 35,
                     "QQQ_iv": 0.22,

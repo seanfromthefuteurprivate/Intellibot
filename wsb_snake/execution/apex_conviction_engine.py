@@ -151,6 +151,22 @@ class ApexConvictionEngine:
             logger.warning(f"PredatorStack not available: {e}")
             self.predator = None
 
+        # Chart Generator for AI visual analysis
+        try:
+            from wsb_snake.analysis.chart_generator import ChartGenerator
+            self.chart_generator = ChartGenerator()
+        except Exception as e:
+            logger.warning(f"ChartGenerator not available: {e}")
+            self.chart_generator = None
+
+        # Polygon data for chart generation
+        try:
+            from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
+            self.polygon = polygon_enhanced
+        except Exception as e:
+            logger.warning(f"polygon_enhanced not available: {e}")
+            self.polygon = None
+
         # Order Flow
         try:
             from wsb_snake.collectors.scalp_data_collector import ScalpDataCollector
@@ -587,25 +603,70 @@ class ApexConvictionEngine:
             return ConvictionSignal("pattern_memory", 50, "NEUTRAL", 50, f"error: {e}", self.WEIGHTS["pattern_memory"],
                                     source_reliability=self.SOURCE_RELIABILITY.get("pattern_memory", 1.0))
 
-    def _get_ai_verdict_score(self, ticker: str) -> ConvictionSignal:
+    def _get_ai_verdict_score(self, ticker: str, spot_price: float = None) -> ConvictionSignal:
         """
         Score from AI visual analysis (GPT-4/Gemini).
+
+        Generates a chart, sends to predator stack for AI analysis.
+        AI analysis is expensive - only runs when chart_generator and predator are available.
         """
         if not self.predator:
             return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "no_ai", self.WEIGHTS["ai_verdict"],
                                     source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
 
+        if not self.chart_generator or not self.polygon:
+            return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "no_chart_gen", self.WEIGHTS["ai_verdict"],
+                                    source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
+
         try:
-            # AI analysis is expensive - only use for high-conviction setups
-            # For now, return neutral and let other signals drive
-            # TODO: Integrate predator_stack for visual chart analysis
+            # Fetch OHLCV data for chart generation (5-minute bars, last 50 candles)
+            bars = self.polygon.get_bars(ticker, timeframe="5", limit=50)
+            if not bars or len(bars) < 20:
+                return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "insufficient_data", self.WEIGHTS["ai_verdict"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
+
+            # Generate chart image as base64
+            chart_base64 = self.chart_generator.generate_chart(ticker, bars, timeframe="5min")
+            if not chart_base64:
+                return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "chart_gen_failed", self.WEIGHTS["ai_verdict"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
+
+            # Get current price for context
+            current_price = spot_price or (bars[-1].get("c", 0) if bars else 0)
+
+            # Call predator stack for AI analysis (synchronous)
+            analysis = self.predator.analyze_sync(
+                chart_base64=chart_base64,
+                ticker=ticker,
+                pattern="",  # Let AI detect patterns
+                current_price=current_price,
+                direction_hint=None  # No bias
+            )
+
+            if not analysis:
+                return ConvictionSignal("ai_verdict", 50, "NEUTRAL", 50, "analysis_failed", self.WEIGHTS["ai_verdict"],
+                                        source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0))
+
+            # Convert AI analysis to conviction signal
+            # AI direction: "BULLISH", "BEARISH", "NEUTRAL"
+            ai_direction = getattr(analysis, 'direction', 'NEUTRAL').upper()
+            ai_confidence = getattr(analysis, 'confidence', 50)
+            ai_reasoning = getattr(analysis, 'reasoning', 'AI analysis')[:100]
+
+            # Convert direction to score (0-100 scale)
+            if ai_direction == "BULLISH":
+                score = 50 + (ai_confidence / 2)  # 50-100
+            elif ai_direction == "BEARISH":
+                score = 50 - (ai_confidence / 2)  # 0-50
+            else:
+                score = 50  # Neutral
 
             return ConvictionSignal(
                 source="ai_verdict",
-                score=50,
-                direction="NEUTRAL",
-                confidence=50,
-                reason="ai_pending",
+                score=score,
+                direction=ai_direction,
+                confidence=ai_confidence,
+                reason=f"AI: {ai_reasoning}",
                 weight=self.WEIGHTS["ai_verdict"],
                 source_reliability=self.SOURCE_RELIABILITY.get("ai_verdict", 1.0)
             )
@@ -627,7 +688,7 @@ class ApexConvictionEngine:
         signals.append(self._get_order_flow_score(ticker))
         signals.append(self._get_probability_score(ticker))
         signals.append(self._get_pattern_memory_score(ticker))
-        signals.append(self._get_ai_verdict_score(ticker))
+        signals.append(self._get_ai_verdict_score(ticker, spot_price))
 
         # Get regime-adjusted weights (HYDRA feature)
         adjusted_weights = self._get_regime_adjusted_weights()

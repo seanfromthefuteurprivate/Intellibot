@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Jobs Report Tracker – Run once or continuously until Friday NFP (Feb 6, 2026).
+Jobs Report Tracker – Run once or continuously until NFP (Wed Feb 11, 2026).
+
+UPDATED: NFP rescheduled from Feb 6 to Feb 11 due to government shutdown.
 
 Usage:
   python run_jobs_report_tracker.py              # one shot
-  python run_jobs_report_tracker.py --loop        # run every 30 min until Fri 5 PM ET
+  python run_jobs_report_tracker.py --loop        # run every 30 min until Wed 5 PM ET
   python run_jobs_report_tracker.py --loop 60    # run every 60 min
 
 Requires: .env with POLYGON_API_KEY.
 Outputs:
   - wsb_snake_data/jobs_report_playbook.json
-  - wsb_snake_data/JOBS_REPORT_FEB6.md
+  - wsb_snake_data/JOBS_REPORT_FEB11.md
   - wsb_snake_data/jobs_report_tracker.log (when running with --loop)
 """
 
@@ -41,8 +43,8 @@ from wsb_snake.event_driven.jobs_report_tracker import (
 )
 from wsb_snake.config import DATA_DIR
 
-# Stop looping after this time on event day (Fri 5 PM ET)
-EVENT_DAY_END_ET = "2026-02-06 17:00:00"
+# Stop looping after this time on event day (Wed Feb 11, 5 PM ET)
+EVENT_DAY_END_ET = "2026-02-11 17:00:00"
 INTERVAL_SECONDS_DEFAULT = 30 * 60  # 30 min
 
 
@@ -51,12 +53,12 @@ def _now_et():
 
 
 def _should_stop_loop() -> bool:
-    """True if we're past Friday 5 PM ET (stop after event day)."""
+    """True if we're past Wed Feb 11, 5 PM ET (stop after event day)."""
     et = pytz.timezone("America/New_York")
     try:
-        end = et.localize(datetime(2026, 2, 6, 17, 0, 0))
+        end = et.localize(datetime(2026, 2, 11, 17, 0, 0))
     except Exception:
-        end = datetime(2026, 2, 6, 17, 0, 0).replace(tzinfo=et)
+        end = datetime(2026, 2, 11, 17, 0, 0).replace(tzinfo=et)
     return _now_et() >= end
 
 
@@ -83,7 +85,7 @@ def run_once(tracker: JobsReportTracker, log_path: Optional[str] = None) -> None
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Jobs Report Tracker – NFP Feb 6, 2026")
+    parser = argparse.ArgumentParser(description="Jobs Report Tracker – NFP Feb 11, 2026")
     parser.add_argument(
         "--loop",
         nargs="?",
@@ -94,7 +96,7 @@ def main() -> None:
     args = parser.parse_args()
     interval = int(args.loop) if args.loop is not None else None
 
-    print("Jobs Report Tracker – NFP Feb 6, 2026")
+    print("Jobs Report Tracker – NFP Feb 11, 2026")
     print("Watchlist:", ", ".join(JOBS_REPORT_WATCHLIST))
     print("Budget (WeBull):", f"${BUDGET_WEBBULL_USD}")
     if interval:

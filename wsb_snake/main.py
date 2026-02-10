@@ -39,6 +39,7 @@ from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.learning.deep_study import run_idle_study
 from wsb_snake.collectors.screenshot_system import screenshot_system
 from wsb_snake.execution.regime_detector import regime_detector
+from wsb_snake.execution.jobs_day_cpl import JobsDayCPL
 
 
 def send_startup_ping():
@@ -139,13 +140,13 @@ def run_daily_report():
 
 
 def _jobs_report_tracker_should_run() -> bool:
-    """True if we should still run the jobs report tracker (until Fri Feb 6, 5 PM ET)."""
+    """True if we should still run the jobs report tracker (until Wed Feb 11, 5 PM ET)."""
     try:
         import pytz
         et = pytz.timezone("America/New_York")
         now_et = datetime.now(et)
         from datetime import date
-        end_date = date(2026, 2, 6)
+        end_date = date(2026, 2, 11)  # NFP rescheduled from Feb 6 to Feb 11
         if now_et.date() > end_date:
             return False
         if now_et.date() == end_date and now_et.hour >= 17:
@@ -156,7 +157,7 @@ def _jobs_report_tracker_should_run() -> bool:
 
 
 def run_jobs_report_tracker_once():
-    """Refresh NFP Feb 6 playbook (watchlist + option plays). Runs every 30 min until Fri 5 PM ET."""
+    """Refresh NFP Feb 11 playbook (watchlist + option plays). Runs every 30 min until Wed 5 PM ET."""
     if not _jobs_report_tracker_should_run():
         return
     try:
@@ -175,7 +176,7 @@ def run_jobs_report_tracker_once():
         )
         out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), DATA_DIR)
         tracker.run(output_dir=out_dir)
-        log.info("Jobs report playbook updated (NFP Feb 6)")
+        log.info("Jobs report playbook updated (NFP Feb 11)")
     except Exception as e:
         log.warning(f"Jobs report tracker skip: {e}")
 
@@ -260,11 +261,25 @@ def main():
         except Exception as e:
             log.debug(f"Regime update skipped: {e}")
     schedule.every(5).minutes.do(update_regime)
-    
-    # Jobs report tracker: refresh NFP Feb 6 playbook every 30 min until Fri 5 PM ET
+
+    # CPL Scanner: Run every 60 seconds during market hours for regime intelligence
+    cpl_scanner = JobsDayCPL()
+    def run_cpl_scanner():
+        if not should_scan_for_signals():
+            return
+        try:
+            calls = cpl_scanner.run(broadcast=True, dry_run=False)
+            if calls:
+                log.info(f"CPL Scanner: {len(calls)} signals generated")
+        except Exception as e:
+            log.debug(f"CPL scan skipped: {e}")
+    schedule.every(60).seconds.do(run_cpl_scanner)
+    log.info("CPL Scanner scheduled (every 60s during market hours)")
+
+    # Jobs report tracker: refresh NFP Feb 11 playbook every 30 min until Wed 5 PM ET
     schedule.every(30).minutes.do(run_jobs_report_tracker_once)
     if _jobs_report_tracker_should_run():
-        log.info("Running jobs report tracker (NFP Feb 6)...")
+        log.info("Running jobs report tracker (NFP Feb 11)...")
         run_jobs_report_tracker_once()
     
     # HYDRA: Warm up regime detector with initial data
