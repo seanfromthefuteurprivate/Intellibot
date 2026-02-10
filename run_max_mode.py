@@ -37,7 +37,7 @@ from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.collectors.polygon_options import polygon_options
 from wsb_snake.notifications.telegram_bot import send_alert
 from wsb_snake.trading.alpaca_executor import alpaca_executor
-from wsb_snake.db.database import get_db
+from wsb_snake.db.database import get_connection
 
 logger = get_logger(__name__)
 
@@ -45,8 +45,8 @@ logger = get_logger(__name__)
 def get_latest_cpl_signal(ticker: str) -> dict:
     """Get the latest CPL signal for a ticker (within last 30 minutes)."""
     try:
-        db = get_db()
-        cursor = db.conn.cursor()
+        conn = get_connection()
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT side, regime, confidence, timestamp_et
             FROM cpl_calls
