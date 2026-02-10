@@ -608,6 +608,26 @@ class RegimeDetector:
         logger.info("UNKNOWN regime: insufficient signals")
         return (RegimeState.UNKNOWN, 0.3)
 
+    def fetch_and_update(self) -> RegimeResult:
+        """
+        Fetch latest market data, update state, and return full regime result.
+
+        This is the main entry point for external callers who need the full
+        RegimeResult with confidence and metrics.
+
+        Returns:
+            RegimeResult with regime, confidence, and supporting metrics
+        """
+        self.detect_regime()
+        return self._current_result or RegimeResult(
+            regime=RegimeState.UNKNOWN,
+            confidence=0.0,
+            vix_level=20.0,
+            vix_structure="unknown",
+            trend_strength=0.0,
+            mean_reversion_score=0.5,
+        )
+
     def detect_regime(self) -> RegimeState:
         """
         Main detection method - classify current market regime.

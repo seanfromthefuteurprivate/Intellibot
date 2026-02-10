@@ -84,6 +84,7 @@ class ScreenshotCollector:
         self._processed_file_ids: set = set()
         self._running = False
         self._watch_thread: Optional[threading.Thread] = None
+        self._credentials_available = False  # Track if ADC is configured
 
         # Initialize database tables
         self._init_tables()
@@ -91,7 +92,10 @@ class ScreenshotCollector:
         # Load already processed file IDs from database
         self._load_processed_ids()
 
-        logger.info(f"ScreenshotCollector initialized (folder: {self.folder_id})")
+        # Check if Google Drive credentials are available (once at startup)
+        self._check_credentials()
+
+        logger.info(f"ScreenshotCollector initialized (folder: {self.folder_id}, credentials: {'available' if self._credentials_available else 'NOT CONFIGURED'})")
 
     def _init_tables(self):
         """Create database tables for screenshot tracking."""
@@ -219,11 +223,29 @@ class ScreenshotCollector:
         self._processed_file_ids = {row["file_id"] for row in rows}
         logger.info(f"Loaded {len(self._processed_file_ids)} previously processed screenshots")
 
+    def _check_credentials(self):
+        """Check if Google Drive credentials are available at startup."""
+        try:
+            import google.auth
+            source_credentials, project = google.auth.default()
+            self._credentials_available = True
+            logger.info("Google Drive ADC credentials available")
+        except Exception as e:
+            self._credentials_available = False
+            logger.warning(f"Google Drive ADC not configured - screenshot learning disabled. To enable, run: gcloud auth application-default login")
+
+    def is_enabled(self) -> bool:
+        """Check if screenshot collector is enabled (credentials available)."""
+        return self._credentials_available and bool(self.folder_id)
+
     def _get_drive_service(self):
         """
         Get Google Drive service using ADC with service account impersonation.
         No JSON key files - uses Application Default Credentials.
         """
+        if not self._credentials_available:
+            return None
+
         if self._drive_service is not None:
             return self._drive_service
 
@@ -255,7 +277,8 @@ class ScreenshotCollector:
 
         except Exception as e:
             logger.error(f"Failed to initialize Google Drive service: {e}")
-            raise
+            self._credentials_available = False
+            return None
 
     def list_folder_files(self, max_results: int = 100) -> List[ScreenshotFile]:
         """
@@ -264,12 +287,16 @@ class ScreenshotCollector:
         Returns:
             List of ScreenshotFile objects
         """
+        if not self.is_enabled():
+            return []  # Silently return empty if not configured
+
         if not self.folder_id:
-            logger.error("No folder_id configured")
             return []
 
         try:
             service = self._get_drive_service()
+            if service is None:
+                return []
 
             # Query for image files in the folder
             mime_query = " or ".join([f"mimeType='{mt}'" for mt in self.SUPPORTED_MIME_TYPES])
