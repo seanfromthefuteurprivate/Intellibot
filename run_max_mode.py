@@ -106,6 +106,8 @@ SCAN_INTERVAL = 15   # Slightly slower to reduce noise
 
 def get_spot(ticker):
     """Get spot price using best available source with Alpaca fallback."""
+    import requests
+
     # Try Polygon first
     try:
         snap = polygon_enhanced.get_snapshot(ticker)
@@ -114,29 +116,47 @@ def get_spot(ticker):
     except Exception as e:
         logger.debug(f"Polygon snapshot failed for {ticker}: {e}")
 
-    # Fallback to Alpaca stock quote
+    # Fallback to Alpaca stock quote (using REST API directly)
     try:
-        quote = alpaca_executor.api.get_latest_quote(ticker)
-        if quote and hasattr(quote, 'ask_price') and quote.ask_price > 0:
-            mid = (quote.bid_price + quote.ask_price) / 2
-            logger.info(f"Using Alpaca quote for {ticker}: ${mid:.2f}")
-            return float(mid)
+        headers = {
+            "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET_KEY", ""),
+        }
+        resp = requests.get(
+            f"https://data.alpaca.markets/v2/stocks/{ticker}/quotes/latest",
+            headers=headers,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            quote = data.get("quote", {})
+            bid = float(quote.get("bp", 0))
+            ask = float(quote.get("ap", 0))
+            if bid > 0 and ask > 0:
+                mid = (bid + ask) / 2
+                logger.info(f"Using Alpaca quote for {ticker}: ${mid:.2f}")
+                return mid
     except Exception as e:
         logger.debug(f"Alpaca quote failed for {ticker}: {e}")
 
-    # Last resort: try Alpaca bar data
+    # Last resort: try Alpaca bars
     try:
-        from datetime import datetime, timedelta
-        bars = alpaca_executor.api.get_bars(
-            ticker,
-            "1Min",
-            start=(datetime.now() - timedelta(minutes=5)).isoformat(),
-            limit=1
+        headers = {
+            "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET_KEY", ""),
+        }
+        resp = requests.get(
+            f"https://data.alpaca.markets/v2/stocks/{ticker}/bars/latest",
+            headers=headers,
+            timeout=5
         )
-        if bars and len(bars) > 0:
-            price = float(bars[0].c)  # Close price
-            logger.info(f"Using Alpaca bar for {ticker}: ${price:.2f}")
-            return price
+        if resp.status_code == 200:
+            data = resp.json()
+            bar = data.get("bar", {})
+            price = float(bar.get("c", 0))  # Close price
+            if price > 0:
+                logger.info(f"Using Alpaca bar for {ticker}: ${price:.2f}")
+                return price
     except Exception as e:
         logger.debug(f"Alpaca bars failed for {ticker}: {e}")
 
