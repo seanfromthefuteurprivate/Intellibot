@@ -258,7 +258,9 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
             "df",
             "uptime",
             "ps aux",
-            "pm2"
+            "pm2",
+            "cp /root/wsb-snake/*.service /etc/systemd/system/",
+            "/root/wsb-snake/venv/bin/python"
         ]
 
         is_allowed = any(command.startswith(prefix) for prefix in allowed_prefixes)
