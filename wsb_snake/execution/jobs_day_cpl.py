@@ -510,6 +510,18 @@ def _check_exits_and_emit_sells(broadcast: bool, dry_run: bool, untruncated_tail
                 send_alert(msg)
                 logger.info(f"CPL SELL broadcast: {call.underlying} {call.side} - {exit_reason} ({pnl_pct:+.1f}%)")
 
+                # ========== ALPACA AUTO-EXIT EXECUTION ==========
+                if CPL_AUTO_EXECUTE:
+                    try:
+                        close_result = alpaca_executor.close_position(call.option_symbol, exit_price)
+                        if close_result:
+                            logger.info(f"ALPACA EXIT EXECUTED: {call.underlying} {call.side} @ ${exit_price:.2f}")
+                            send_alert(f"✅ **ALPACA EXIT** CPL #{buy_call_number}\n{call.underlying} {call.side} ${call.strike}\nExit: ${exit_price:.2f} ({pnl_pct:+.1f}%)")
+                        else:
+                            logger.warning(f"ALPACA EXIT SKIPPED: {call.underlying} - no position found or close failed")
+                    except Exception as e:
+                        logger.error(f"ALPACA EXIT ERROR: {e}")
+
                 # GOVERNANCE: Emit exit telemetry
                 if _telemetry_bus and GOVERNANCE_ENABLED:
                     final_state = "RELEASE" if exit_reason == "STRUCTURE_BREAK" else (_governance.get_state(dedupe_key).name if _governance and _governance.get_state(dedupe_key) else "OBSERVE")
