@@ -105,13 +105,41 @@ MIN_CONVICTION = 68  # Institutional standard (was 55 - too low)
 SCAN_INTERVAL = 15   # Slightly slower to reduce noise
 
 def get_spot(ticker):
-    """Get spot price using best available source."""
+    """Get spot price using best available source with Alpaca fallback."""
+    # Try Polygon first
     try:
         snap = polygon_enhanced.get_snapshot(ticker)
         if snap and snap.get("price"):
             return float(snap["price"])
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Polygon snapshot failed for {ticker}: {e}")
+
+    # Fallback to Alpaca stock quote
+    try:
+        quote = alpaca_executor.api.get_latest_quote(ticker)
+        if quote and hasattr(quote, 'ask_price') and quote.ask_price > 0:
+            mid = (quote.bid_price + quote.ask_price) / 2
+            logger.info(f"Using Alpaca quote for {ticker}: ${mid:.2f}")
+            return float(mid)
+    except Exception as e:
+        logger.debug(f"Alpaca quote failed for {ticker}: {e}")
+
+    # Last resort: try Alpaca bar data
+    try:
+        from datetime import datetime, timedelta
+        bars = alpaca_executor.api.get_bars(
+            ticker,
+            "1Min",
+            start=(datetime.now() - timedelta(minutes=5)).isoformat(),
+            limit=1
+        )
+        if bars and len(bars) > 0:
+            price = float(bars[0].c)  # Close price
+            logger.info(f"Using Alpaca bar for {ticker}: ${price:.2f}")
+            return price
+    except Exception as e:
+        logger.debug(f"Alpaca bars failed for {ticker}: {e}")
+
     return 0
 
 def get_atm_option(ticker, spot, side, expiry_date):
