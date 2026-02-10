@@ -32,11 +32,15 @@ class EnhancedPolygonAdapter:
         self._cache: Dict[str, Tuple[datetime, Any]] = {}
         self._cache_ttl = 120  # Increased to 2 minutes to reduce API calls
         self._request_times: List[datetime] = []
-        
+
         # Per-scan cache for batch efficiency
         self._scan_cache: Dict[str, Any] = {}
         self._scan_cache_time: Optional[datetime] = None
         self._scan_cache_ttl = 60  # Per-scan cache valid for 60s
+
+        # Track if v3 endpoints are available (require paid plan)
+        self._v3_available: Optional[bool] = None
+        self._v3_checked = False
         
     def _request(self, endpoint: str, params: Dict = None, cache_ttl_override: int = None) -> Optional[Dict]:
         """Make authenticated request to Polygon API with caching and rate limiting."""
@@ -220,25 +224,40 @@ class EnhancedPolygonAdapter:
         return []
     
     def get_recent_trades(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         limit: int = 100
     ) -> List[Dict]:
         """
         Get recent trades for order flow analysis.
         Shows actual executed trades with size, price, and exchange.
-        
+        NOTE: Requires Polygon paid plan (v3 endpoint).
+
         Args:
             ticker: Stock symbol
             limit: Number of recent trades
-            
+
         Returns:
-            List of recent trades
+            List of recent trades (empty if v3 not available)
         """
+        # Skip if we already know v3 is not available
+        if self._v3_checked and not self._v3_available:
+            return []
+
         endpoint = f"/v3/trades/{ticker}"
         data = self._request(endpoint, {"limit": limit, "order": "desc"})
-        
+
+        # Check for 403 (plan doesn't support v3)
+        if data is None and not self._v3_checked:
+            self._v3_checked = True
+            self._v3_available = False
+            log.info("Polygon v3 endpoints not available (requires paid plan) - using v2 only")
+            return []
+
         if data and "results" in data:
+            if not self._v3_checked:
+                self._v3_checked = True
+                self._v3_available = True
             trades = []
             for t in data["results"]:
                 trades.append({
@@ -254,21 +273,26 @@ class EnhancedPolygonAdapter:
         return []
     
     def get_nbbo_quotes(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         limit: int = 50
     ) -> List[Dict]:
         """
         Get recent NBBO quotes for bid-ask spread analysis.
         Shows best bid/ask across all exchanges.
-        
+        NOTE: Requires Polygon paid plan (v3 endpoint).
+
         Args:
             ticker: Stock symbol
             limit: Number of recent quotes
-            
+
         Returns:
-            List of NBBO quotes with bid/ask
+            List of NBBO quotes with bid/ask (empty if v3 not available)
         """
+        # Skip if we already know v3 is not available
+        if self._v3_checked and not self._v3_available:
+            return []
+
         endpoint = f"/v3/quotes/{ticker}"
         data = self._request(endpoint, {"limit": limit, "order": "desc"})
         
