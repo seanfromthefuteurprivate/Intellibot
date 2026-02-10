@@ -285,6 +285,15 @@ class RegimeDetector:
                         logger.debug("Fetched SPY price via get_quote: %.2f", price)
                         return price
 
+            # Try get_snapshot (polygon_enhanced method)
+            if hasattr(polygon, "get_snapshot"):
+                snapshot = polygon.get_snapshot("SPY")
+                if snapshot:
+                    price = snapshot.get("price", 0)
+                    if price and price > 0:
+                        logger.debug("Fetched SPY price via get_snapshot: %.2f", price)
+                        return price
+
         except Exception as e:
             logger.warning("Error fetching SPY price: %s", e)
 
