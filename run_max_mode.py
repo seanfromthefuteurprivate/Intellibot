@@ -44,6 +44,7 @@ logger = get_logger(__name__)
 
 def get_latest_cpl_signal(ticker: str) -> dict:
     """Get the latest CPL signal for a ticker (within last 30 minutes)."""
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -65,6 +66,9 @@ def get_latest_cpl_signal(ticker: str) -> dict:
             }
     except Exception as e:
         logger.debug(f"CPL lookup failed for {ticker}: {e}")
+    finally:
+        if conn:
+            conn.close()
     return None
 
 

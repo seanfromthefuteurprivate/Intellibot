@@ -20,6 +20,7 @@ def get_latest_cpl_signal(ticker: str) -> dict:
     Returns dict with keys: side, regime, confidence, timestamp
     Returns None if no recent signal exists.
     """
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -32,7 +33,6 @@ def get_latest_cpl_signal(ticker: str) -> dict:
             LIMIT 1
         """, (ticker,))
         row = cursor.fetchone()
-        conn.close()
         if row:
             return {
                 "side": row[0],      # "CALL" or "PUT"
@@ -42,6 +42,9 @@ def get_latest_cpl_signal(ticker: str) -> dict:
             }
     except Exception as e:
         logger.debug(f"CPL lookup failed for {ticker}: {e}")
+    finally:
+        if conn:
+            conn.close()
     return None
 
 

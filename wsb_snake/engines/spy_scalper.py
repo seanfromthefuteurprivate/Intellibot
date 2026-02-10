@@ -50,6 +50,7 @@ log = get_logger(__name__)
 # ========== CPL INTEGRATION - CRITICAL FILTER ==========
 def get_latest_cpl_signal(ticker: str) -> dict:
     """Get the latest CPL signal for a ticker (within last 30 minutes)."""
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -62,7 +63,6 @@ def get_latest_cpl_signal(ticker: str) -> dict:
             LIMIT 1
         """, (ticker,))
         row = cursor.fetchone()
-        conn.close()
         if row:
             return {
                 "side": row[0],      # "CALL" or "PUT"
@@ -72,6 +72,9 @@ def get_latest_cpl_signal(ticker: str) -> dict:
             }
     except Exception as e:
         log.debug(f"CPL lookup failed for {ticker}: {e}")
+    finally:
+        if conn:
+            conn.close()
     return None
 
 
