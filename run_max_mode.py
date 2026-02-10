@@ -76,8 +76,8 @@ def check_cpl_alignment(ticker: str, apex_action: str) -> tuple:
     """
     cpl = get_latest_cpl_signal(ticker)
     if not cpl:
-        # No recent CPL signal - allow trade but log
-        return True, "NO_CPL_SIGNAL"
+        # No recent CPL signal - BLOCK trade (be conservative)
+        return False, "NO_CPL_SIGNAL - CPL intelligence required"
 
     apex_is_bullish = apex_action == "BUY_CALLS"
     cpl_is_bullish = cpl["side"] == "CALL" and cpl["regime"] == "RISK_ON"

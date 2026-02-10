@@ -47,6 +47,60 @@ from wsb_snake.utils.session_regime import (
 log = get_logger(__name__)
 
 
+# ========== CPL INTEGRATION - CRITICAL FILTER ==========
+def get_latest_cpl_signal(ticker: str) -> dict:
+    """Get the latest CPL signal for a ticker (within last 30 minutes)."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT side, regime, confidence, timestamp_et
+            FROM cpl_calls
+            WHERE ticker = ?
+            AND datetime(timestamp_et) > datetime('now', '-30 minutes')
+            ORDER BY timestamp_et DESC
+            LIMIT 1
+        """, (ticker,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {
+                "side": row[0],      # "CALL" or "PUT"
+                "regime": row[1],    # "RISK_ON" or "RISK_OFF"
+                "confidence": row[2],
+                "timestamp": row[3]
+            }
+    except Exception as e:
+        log.debug(f"CPL lookup failed for {ticker}: {e}")
+    return None
+
+
+def check_cpl_alignment(ticker: str, direction: str) -> tuple:
+    """
+    Check if trade direction aligns with CPL intelligence.
+
+    Returns: (is_aligned, reason)
+    """
+    cpl = get_latest_cpl_signal(ticker)
+    if not cpl:
+        # No recent CPL signal - BLOCK trade (be conservative)
+        return False, "NO_CPL_SIGNAL - CPL intelligence required"
+
+    is_long = direction == "long"
+    cpl_is_bullish = cpl["side"] == "CALL" and cpl["regime"] == "RISK_ON"
+    cpl_is_bearish = cpl["side"] == "PUT" or cpl["regime"] == "RISK_OFF"
+
+    # CRITICAL: Block if direction conflicts with CPL
+    if is_long and cpl_is_bearish:
+        return False, f"CPL_CONFLICT: CPL says {cpl['side']}/{cpl['regime']} but setup is LONG"
+
+    if not is_long and cpl_is_bullish:
+        return False, f"CPL_CONFLICT: CPL says {cpl['side']}/{cpl['regime']} but setup is SHORT"
+
+    return True, f"CPL_ALIGNED: {cpl['side']}/{cpl['regime']}"
+# ========== END CPL INTEGRATION ==========
+
+
 class ScalpPattern(Enum):
     """Types of scalping patterns we detect"""
     VWAP_BOUNCE = "vwap_bounce"           # Price bounces off VWAP
@@ -1270,6 +1324,17 @@ class SPYScalper:
     
     def _send_entry_alert(self, setup: ScalpSetup, ticker: str = "SPY"):
         """Send entry alert to Telegram and add to stalking mode."""
+        # ========== CRITICAL: CPL ALIGNMENT CHECK ==========
+        # MUST verify CPL intelligence agrees with trade direction
+        # This prevents executing trades that conflict with market regime
+        cpl_aligned, cpl_reason = check_cpl_alignment(ticker, setup.direction)
+        if not cpl_aligned:
+            log.warning(f"🚫 TRADE BLOCKED by CPL: {ticker} {setup.direction} - {cpl_reason}")
+            send_telegram_alert(f"🚫 **TRADE BLOCKED BY CPL**\n\n{ticker} {setup.direction.upper()}\nReason: {cpl_reason}\n\nCPL intelligence must align with trade direction.")
+            return  # DO NOT EXECUTE TRADE
+        log.info(f"✅ CPL CHECK PASSED: {ticker} {setup.direction} - {cpl_reason}")
+        # ========== END CPL CHECK ==========
+
         trade_type = "CALLS" if setup.direction == "long" else "PUTS"
         
         # Calculate R:R
