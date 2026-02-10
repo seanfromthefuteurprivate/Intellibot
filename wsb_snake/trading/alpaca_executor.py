@@ -1336,7 +1336,7 @@ Total P&L: ${self.total_pnl:+.2f}
             except Exception as e:
                 logger.error(f"Monitor error: {e}")
             
-            time.sleep(5)
+            time.sleep(2)  # Check every 2 seconds for faster stop loss reaction on 0DTE
     
     def _check_order_fills(self):
         """Check if pending orders have filled."""
