@@ -259,7 +259,9 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
             "uptime",
             "ps aux",
             "pm2",
-            "cp /root/wsb-snake/*.service /etc/systemd/system/",
+            "cp /root/wsb-snake/max-mode.service",
+            "cp /root/wsb-snake/vm-guardian.service",
+            "cp /root/wsb-snake/wsb-",
             "/root/wsb-snake/venv/bin/python"
         ]
 
