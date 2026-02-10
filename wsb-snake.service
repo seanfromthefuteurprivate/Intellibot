@@ -1,0 +1,22 @@
+[Unit]
+Description=WSB Snake Trading Engine
+Documentation=https://github.com/seanfromthefuteurprivate/Intellibot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/wsb-snake
+Environment="PATH=/root/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/root/wsb-snake/.env
+ExecStart=/root/wsb-snake/venv/bin/python -m wsb_snake.main
+Restart=on-failure
+RestartSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wsb-snake
+
+[Install]
+WantedBy=multi-user.target

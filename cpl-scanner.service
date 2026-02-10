@@ -1,0 +1,23 @@
+[Unit]
+Description=WSB Snake CPL Scanner - Market Regime Intelligence
+Documentation=https://github.com/seanfromthefuteurprivate/Intellibot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/wsb-snake
+Environment="PATH=/root/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/root/wsb-snake/.env
+# Run CPL scanner in loop mode (every 60 seconds) with auto-execution enabled
+ExecStart=/root/wsb-snake/venv/bin/python run_snake_cpl.py --broadcast --loop 60 --execute
+Restart=on-failure
+RestartSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cpl-scanner
+
+[Install]
+WantedBy=multi-user.target
