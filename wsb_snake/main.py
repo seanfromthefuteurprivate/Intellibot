@@ -220,7 +220,17 @@ def main():
     # This prevents orphaned positions that don't get exit-monitored
     synced = alpaca_executor.sync_existing_positions()
     log.info(f"Position sync complete: {synced} existing position(s) now tracked")
-    
+
+    # CRITICAL: Sync daily stats from Alpaca to preserve win rate across restarts
+    # This ensures the win rate preservation system has accurate data
+    from wsb_snake.trading.risk_governor import get_risk_governor
+    governor = get_risk_governor()
+    daily_stats = governor.sync_daily_stats_from_alpaca()
+    if daily_stats.get("synced"):
+        log.info(f"Daily stats synced: {daily_stats['wins']}W/{daily_stats['losses']}L ({daily_stats['win_rate']:.0%}) P/L: ${daily_stats['daily_pnl']:.2f}")
+    else:
+        log.warning(f"Daily stats sync failed: {daily_stats.get('error', 'unknown')}")
+
     account = alpaca_executor.get_account()
     buying_power = float(account.get("buying_power", 0))
     log.info(f"Alpaca Paper Trading active - Buying Power: ${buying_power:,.2f}")

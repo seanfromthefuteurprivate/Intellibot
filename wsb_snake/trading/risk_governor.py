@@ -545,6 +545,126 @@ class RiskGovernor:
             self._win_rate_pause_active = False
             log.warning("WIN RATE PAUSE manually disabled - trading resumed")
 
+    def sync_daily_stats_from_alpaca(self) -> dict:
+        """
+        Sync daily stats from Alpaca trade history on startup.
+
+        This ensures daily win rate and P/L are accurate even after restarts.
+        Fetches today's closed orders and reconstructs the stats.
+        """
+        from datetime import date
+        import os
+
+        try:
+            import alpaca_trade_api as tradeapi
+
+            api = tradeapi.REST(
+                os.environ.get("ALPACA_API_KEY"),
+                os.environ.get("ALPACA_SECRET_KEY"),
+                os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+            )
+
+            # Get today's date
+            today = date.today()
+            today_str = today.isoformat()
+
+            # Fetch all orders from today
+            orders = api.list_orders(status="all", limit=100, after=today_str)
+
+            # Group orders by symbol to calculate P/L
+            trades = {}  # symbol -> {buys: [], sells: []}
+
+            for order in orders:
+                if order.status != "filled":
+                    continue
+
+                symbol = order.symbol
+                if symbol not in trades:
+                    trades[symbol] = {"buys": [], "sells": []}
+
+                price = float(order.filled_avg_price) if order.filled_avg_price else 0
+                qty = int(order.filled_qty) if order.filled_qty else 0
+
+                if order.side == "buy":
+                    trades[symbol]["buys"].append((qty, price))
+                else:
+                    trades[symbol]["sells"].append((qty, price))
+
+            # Calculate P/L for each completed round trip
+            wins = 0
+            losses = 0
+            total_pnl = 0.0
+
+            for symbol, data in trades.items():
+                buys = data["buys"]
+                sells = data["sells"]
+
+                # Simple FIFO matching
+                buy_idx = 0
+                sell_idx = 0
+
+                while buy_idx < len(buys) and sell_idx < len(sells):
+                    buy_qty, buy_price = buys[buy_idx]
+                    sell_qty, sell_price = sells[sell_idx]
+
+                    matched_qty = min(buy_qty, sell_qty)
+
+                    # Options are 100 shares per contract
+                    pnl = (sell_price - buy_price) * matched_qty * 100
+                    total_pnl += pnl
+
+                    if pnl > 0:
+                        wins += 1
+                    else:
+                        losses += 1
+
+                    # Update remaining quantities
+                    buys[buy_idx] = (buy_qty - matched_qty, buy_price)
+                    sells[sell_idx] = (sell_qty - matched_qty, sell_price)
+
+                    if buys[buy_idx][0] == 0:
+                        buy_idx += 1
+                    if sells[sell_idx][0] == 0:
+                        sell_idx += 1
+
+            # Update governor state
+            with self._lock:
+                self._daily_win_count = wins
+                self._daily_loss_count = losses
+                self._daily_pnl_realized = total_pnl
+                self._last_trade_date = today_str
+
+                total = wins + losses
+                win_rate = wins / total if total > 0 else 1.0
+
+                log.info(
+                    f"SYNCED DAILY STATS FROM ALPACA: {wins}W/{losses}L ({win_rate:.0%}) | "
+                    f"P/L: ${total_pnl:.2f}"
+                )
+
+                # Check if win rate pause should be active
+                if total >= self.config.min_trades_for_win_rate_check:
+                    if win_rate < self.config.min_daily_win_rate:
+                        if total_pnl >= self.config.preserve_profit_threshold:
+                            self._win_rate_pause_active = True
+                            log.warning(
+                                f"WIN RATE PAUSE ACTIVATED on sync: {win_rate:.0%} below "
+                                f"{self.config.min_daily_win_rate:.0%} with ${total_pnl:.2f} profit"
+                            )
+
+            return {
+                "wins": wins,
+                "losses": losses,
+                "total_trades": wins + losses,
+                "win_rate": win_rate,
+                "daily_pnl": total_pnl,
+                "synced": True
+            }
+
+        except Exception as e:
+            log.error(f"Failed to sync daily stats from Alpaca: {e}")
+            return {"synced": False, "error": str(e)}
+
 
 # Singleton used by executor and engines
 _governor: Optional[RiskGovernor] = None
