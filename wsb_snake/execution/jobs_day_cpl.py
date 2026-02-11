@@ -823,8 +823,10 @@ class JobsDayCPL:
                     logger.info(f"CPL_AUTO_EXECUTE check: {CPL_AUTO_EXECUTE}")
                     if CPL_AUTO_EXECUTE:
                         logger.info(f"ALPACA: Attempting execution for {call.underlying} {call.side} ${call.strike}")
+                        logger.info(f"ALPACA: option_symbol={call.option_symbol}, entry_trigger={call.entry_trigger}")
                         try:
                             option_premium = call.entry_trigger.get("price", 0)
+                            logger.info(f"ALPACA: option_premium=${option_premium:.2f}")
                             # Direction: Always "long" since we're BUYING options (calls or puts)
                             # "short" would mean shorting, but we're buying to open
                             # The option_type (call/put) determines bullish vs bearish bet
