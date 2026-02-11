@@ -79,6 +79,7 @@ MAX_CALLS_PER_UNDERLYING = 2
 # Set via env: CPL_AUTO_EXECUTE=true
 import os
 CPL_AUTO_EXECUTE = os.environ.get("CPL_AUTO_EXECUTE", "false").lower() == "true"
+logger.info(f"CPL_AUTO_EXECUTE = {CPL_AUTO_EXECUTE} (env: {os.environ.get('CPL_AUTO_EXECUTE', 'NOT SET')})")
 
 # In-memory dedupe (session)
 _sent_calls: Set[str] = set()
@@ -819,7 +820,9 @@ class JobsDayCPL:
                     }
 
                     # ========== ALPACA AUTO-EXECUTION ==========
+                    logger.info(f"CPL_AUTO_EXECUTE check: {CPL_AUTO_EXECUTE}")
                     if CPL_AUTO_EXECUTE:
+                        logger.info(f"ALPACA: Attempting execution for {call.underlying} {call.side} ${call.strike}")
                         try:
                             option_premium = call.entry_trigger.get("price", 0)
                             # Direction: Always "long" since we're BUYING options (calls or puts)
