@@ -611,13 +611,13 @@ _Position picked up from restart - now monitoring_""")
                 closed += 1
                 logger.info(f"0DTE EOD close: {symbol} (P/L: ${pnl:.2f})")
 
-                # HYDRA FIX: Record outcome to risk governor for consecutive loss tracking
+                # HYDRA FIX: Record outcome to risk governor for consecutive loss tracking + win rate preservation
                 try:
                     from wsb_snake.trading.risk_governor import get_risk_governor
                     governor = get_risk_governor()
                     outcome = "win" if pnl > 0 else "loss"
-                    governor.record_trade_outcome(outcome)
-                    logger.info(f"EOD outcome recorded: {outcome} for {symbol}")
+                    governor.record_trade_outcome(outcome, pnl=pnl)
+                    logger.info(f"EOD outcome recorded: {outcome} (${pnl:.2f}) for {symbol}")
                 except Exception as gov_err:
                     logger.debug(f"Failed to record EOD outcome: {gov_err}")
 
@@ -1259,11 +1259,11 @@ Reason: {reason}
         if position.pnl > 0:
             self.winning_trades += 1
 
-        # Record outcome to risk governor for consecutive loss tracking
+        # Record outcome to risk governor for consecutive loss tracking + win rate preservation
         try:
             from wsb_snake.trading.risk_governor import get_risk_governor
             governor = get_risk_governor()
-            governor.record_trade_outcome("win" if position.pnl > 0 else "loss")
+            governor.record_trade_outcome("win" if position.pnl > 0 else "loss", pnl=position.pnl)
         except Exception as e:
             logger.debug(f"Failed to record outcome to governor: {e}")
 

@@ -87,6 +87,12 @@ class GovernorConfig:
     consecutive_loss_threshold: int = 3  # 3 losses triggers cooldown
     cooldown_hours: float = 4.0  # 4 hour pause after consecutive losses
 
+    # WIN RATE PRESERVATION - Preserve daily profits
+    min_daily_win_rate: float = 0.75  # 75% - stop trading if win rate drops below
+    min_trades_for_win_rate_check: int = 2  # Need at least 2 trades before enforcing
+    high_vol_exception_vix: float = 25.0  # VIX > 25 allows trading even with low win rate
+    preserve_profit_threshold: float = 50.0  # If daily P/L > $50, protect it more aggressively
+
     @classmethod
     def from_env(cls) -> "GovernorConfig":
         c = cls()
@@ -126,6 +132,12 @@ class RiskGovernor:
         self._cooldown_until: Optional[datetime] = None
         self._win_count = 0
         self._loss_count = 0
+        # WIN RATE PRESERVATION - Daily tracking
+        self._daily_win_count = 0
+        self._daily_loss_count = 0
+        self._daily_pnl_realized = 0.0
+        self._last_trade_date: Optional[str] = None
+        self._win_rate_pause_active = False
 
     def set_kill_switch(self, on: bool) -> None:
         """Manually halt all new trades."""
@@ -176,6 +188,11 @@ class RiskGovernor:
         in_cooldown, cooldown_reason = self.is_in_cooldown()
         if in_cooldown:
             return False, cooldown_reason
+
+        # WIN RATE PRESERVATION: Check if win rate pause is active
+        win_rate_paused, win_rate_reason = self.is_win_rate_pause_active()
+        if win_rate_paused:
+            return False, win_rate_reason
 
         if daily_pnl <= self.config.max_daily_loss:
             return False, f"Daily PnL ${daily_pnl:.0f} at or below max daily loss ${self.config.max_daily_loss:.0f}"
@@ -328,22 +345,34 @@ class RiskGovernor:
         log.info(f"Kelly sizing: p={p:.2f}, b={b:.2f}, half_kelly={half_kelly:.4f} -> {num} contracts")
         return max(0, num)
 
-    def record_trade_outcome(self, outcome: str) -> None:
+    def record_trade_outcome(self, outcome: str, pnl: float = 0.0) -> None:
         """
-        Track consecutive losses for cooldown. outcome = 'win' or 'loss'.
+        Track consecutive losses for cooldown AND daily win rate.
+
+        Args:
+            outcome: 'win' or 'loss'
+            pnl: Realized P/L in dollars (optional, for daily tracking)
 
         HYDRA standard: 3 consecutive losses triggers a 4-hour cooldown
         to prevent emotional/revenge trading.
+
+        WIN RATE PRESERVATION: Also tracks daily win rate and P/L.
         """
         with self._lock:
+            # Track daily stats for win rate preservation
+            self._reset_daily_stats_if_new_day()
+            self._daily_pnl_realized += pnl
+
             if outcome.lower() == 'win':
                 self._win_count += 1
+                self._daily_win_count += 1
                 self._consecutive_losses = 0  # Reset streak on win
-                log.info(f"Trade outcome: WIN. Consecutive losses reset. Total: {self._win_count}W / {self._loss_count}L")
+                log.info(f"Trade outcome: WIN (+${pnl:.2f}). Consecutive losses reset. Total: {self._win_count}W / {self._loss_count}L")
             elif outcome.lower() == 'loss':
                 self._loss_count += 1
+                self._daily_loss_count += 1
                 self._consecutive_losses += 1
-                log.warning(f"Trade outcome: LOSS. Consecutive losses: {self._consecutive_losses}. Total: {self._win_count}W / {self._loss_count}L")
+                log.warning(f"Trade outcome: LOSS (${pnl:.2f}). Consecutive losses: {self._consecutive_losses}. Total: {self._win_count}W / {self._loss_count}L")
 
                 # Check if cooldown should be triggered
                 if self._consecutive_losses >= self.config.consecutive_loss_threshold:
@@ -352,6 +381,14 @@ class RiskGovernor:
                         f"HYDRA COOLDOWN ACTIVATED: {self._consecutive_losses} consecutive losses. "
                         f"Trading paused until {self._cooldown_until.strftime('%Y-%m-%d %H:%M:%S')}"
                     )
+
+            # Log daily stats
+            total_daily = self._daily_win_count + self._daily_loss_count
+            daily_wr = self._daily_win_count / total_daily if total_daily > 0 else 0
+            log.info(
+                f"DAILY: {self._daily_win_count}W/{self._daily_loss_count}L ({daily_wr:.0%}) | "
+                f"P/L: ${self._daily_pnl_realized:.2f}"
+            )
 
     def is_in_cooldown(self) -> Tuple[bool, str]:
         """
@@ -390,6 +427,123 @@ class RiskGovernor:
             if total == 0:
                 return 0.5  # Default 50% if no history
             return self._win_count / total
+
+    def _reset_daily_stats_if_new_day(self) -> None:
+        """Reset daily stats if it's a new trading day."""
+        from datetime import date
+        today = date.today().isoformat()
+        if self._last_trade_date != today:
+            self._daily_win_count = 0
+            self._daily_loss_count = 0
+            self._daily_pnl_realized = 0.0
+            self._win_rate_pause_active = False
+            self._last_trade_date = today
+            log.info(f"New trading day {today} - daily stats reset")
+
+    def get_daily_win_rate(self) -> float:
+        """Get today's win rate."""
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+            total = self._daily_win_count + self._daily_loss_count
+            if total == 0:
+                return 1.0  # No trades yet = 100% (allow trading)
+            return self._daily_win_count / total
+
+    def get_daily_stats(self) -> dict:
+        """Get today's trading statistics."""
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+            total = self._daily_win_count + self._daily_loss_count
+            return {
+                "wins": self._daily_win_count,
+                "losses": self._daily_loss_count,
+                "total_trades": total,
+                "win_rate": self.get_daily_win_rate(),
+                "daily_pnl": self._daily_pnl_realized,
+                "pause_active": self._win_rate_pause_active,
+            }
+
+    def _get_current_vix(self) -> float:
+        """Get current VIX level for high-volatility exception."""
+        try:
+            from wsb_snake.collectors.vix_structure import vix_structure
+            signal = vix_structure.get_trading_signal()
+            return signal.get("vix_level", 20.0)
+        except Exception:
+            return 20.0  # Default if VIX unavailable
+
+    def is_win_rate_pause_active(self) -> Tuple[bool, str]:
+        """
+        Check if win rate preservation pause is active.
+
+        Returns (is_paused, reason).
+        Allows trading if VIX > threshold (high volatility exception).
+        """
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+
+            total_trades = self._daily_win_count + self._daily_loss_count
+
+            # Need minimum trades before enforcing win rate
+            if total_trades < self.config.min_trades_for_win_rate_check:
+                return False, ""
+
+            daily_win_rate = self.get_daily_win_rate()
+
+            # Check if below minimum win rate
+            if daily_win_rate < self.config.min_daily_win_rate:
+                # Check for high volatility exception
+                vix = self._get_current_vix()
+                if vix >= self.config.high_vol_exception_vix:
+                    log.info(
+                        f"Win rate {daily_win_rate:.0%} below {self.config.min_daily_win_rate:.0%} but "
+                        f"VIX {vix:.1f} >= {self.config.high_vol_exception_vix} - HIGH VOL EXCEPTION ACTIVE"
+                    )
+                    return False, ""
+
+                # Check if we have profits to protect
+                if self._daily_pnl_realized >= self.config.preserve_profit_threshold:
+                    self._win_rate_pause_active = True
+                    reason = (
+                        f"WIN RATE PAUSE: {daily_win_rate:.0%} (below {self.config.min_daily_win_rate:.0%}). "
+                        f"Daily P/L: ${self._daily_pnl_realized:.2f} - PRESERVING PROFITS. "
+                        f"Trades: {self._daily_win_count}W/{self._daily_loss_count}L"
+                    )
+                    log.warning(reason)
+                    return True, reason
+
+        return False, ""
+
+    def record_daily_outcome(self, outcome: str, pnl: float) -> None:
+        """
+        Record a trade outcome for daily tracking.
+
+        Args:
+            outcome: "win", "loss", or "scratch"
+            pnl: Realized P/L in dollars
+        """
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+            self._daily_pnl_realized += pnl
+
+            if outcome.lower() == "win":
+                self._daily_win_count += 1
+            elif outcome.lower() == "loss":
+                self._daily_loss_count += 1
+
+            total = self._daily_win_count + self._daily_loss_count
+            win_rate = self._daily_win_count / total if total > 0 else 0
+
+            log.info(
+                f"Daily stats: {self._daily_win_count}W/{self._daily_loss_count}L "
+                f"({win_rate:.0%}) | P/L: ${self._daily_pnl_realized:.2f}"
+            )
+
+    def force_resume_trading(self) -> None:
+        """Manually resume trading (admin override)."""
+        with self._lock:
+            self._win_rate_pause_active = False
+            log.warning("WIN RATE PAUSE manually disabled - trading resumed")
 
 
 # Singleton used by executor and engines
