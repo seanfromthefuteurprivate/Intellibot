@@ -34,12 +34,13 @@ POLYGON_BASE_URL = "https://api.polygon.io"
 BENZINGA_API_KEY = os.getenv("BENZINGA_API_KEY")
 BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 
-# 0DTE Universe - ETFs ONLY for options scalping (HYDRA requirement)
-# Small caps and individual stocks removed - they bleed theta on multi-day holds
+# 0DTE Universe - LIQUID ETFs ONLY for options scalping (HYDRA requirement)
+# 2026-02-11 LESSON: SLV/GLD/commodities have wide spreads and caused -$255 loss
+# Only trade the MOST LIQUID: SPY, QQQ, IWM - tight spreads, fast fills
 ZERO_DTE_UNIVERSE = [
-    "SPY", "QQQ", "IWM",  # Index ETFs with daily 0DTE
-    "SLV", "GLD", "GDX", "GDXJ",  # Metals ETFs - high volatility plays
-    "USO", "XLE",  # Energy ETFs
+    "SPY", "QQQ", "IWM",  # Index ETFs with daily 0DTE - PROVEN WINNERS
+    # "SLV", "GLD", "GDX", "GDXJ",  # DISABLED: Metals ETFs - wide spreads, big losses
+    # "USO", "XLE",  # DISABLED: Energy ETFs - less liquid
 ]
 
 # Mega caps - separate list, use sparingly (higher theta risk than ETFs)
@@ -52,7 +53,8 @@ SMALL_CAP_EQUITY_ONLY = [
 ]
 
 # ETFs with daily 0DTE options (not just Friday weeklies)
-DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM", "SLV", "GLD", "USO", "XLE"]
+# 2026-02-11: Only SPY/QQQ/IWM - commodities removed due to wide spreads
+DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM"]
 
 # WSB Wilder Plan: Momentum (small-cap / thematic) – EQUITY ONLY
 # Small caps have terrible options liquidity and theta decay
