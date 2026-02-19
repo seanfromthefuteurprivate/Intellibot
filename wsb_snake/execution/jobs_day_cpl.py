@@ -1,8 +1,10 @@
 """
-Convexity Proof Layer (CPL) — Jobs Day execution engine.
+Convexity Proof Layer (CPL) — 0DTE Signal Generation Engine.
 
-Generates 10+ unique atomic option calls (BUY/SELL) for NFP event,
+Generates atomic option calls (BUY/SELL) for 0DTE trading,
 with deduplication (memory + DB) and Telegram broadcast.
+
+Originally built for NFP Jobs Day events, now extended for daily 0DTE trading.
 """
 
 from __future__ import annotations
@@ -39,8 +41,23 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-# Event config — NFP rescheduled per BLS/Reuters: Jan 2026 Employment Situation = Wed Feb 11, 2026 @ 8:30am ET
-CPL_EVENT_DATE = "2026-02-11"
+
+def get_todays_expiry_date() -> str:
+    """
+    Get today's date in YYYY-MM-DD format for 0DTE options.
+    Uses Eastern Time since options expire based on ET market hours.
+    """
+    try:
+        import zoneinfo
+        et = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    except Exception:
+        import pytz
+        et = datetime.now(pytz.timezone("US/Eastern"))
+    return et.strftime("%Y-%m-%d")
+
+
+# Dynamic 0DTE expiry: always use today's date for SPY/QQQ/IWM daily expirations
+CPL_EVENT_DATE = get_todays_expiry_date()
 # Strike mode: full event-vol watchlist to capture all macro/WSB events (NFP day + risk-off/earnings/crypto days)
 # Index: SPY, QQQ, IWM, DIA | Vol: VXX, UVXY | Rates: TLT, IEF | Dollar: UUP | Metals: GLD, SLV
 # Crypto beta: MSTR, COIN, MARA, RIOT | AI/mega: NVDA, TSLA, AAPL, AMZN, META, GOOGL, MSFT, AMD
@@ -516,7 +533,7 @@ def _check_exits_and_emit_sells(broadcast: bool, dry_run: bool, untruncated_tail
                     try:
                         close_result = alpaca_executor.close_position(call.option_symbol, exit_price)
                         if close_result:
-                            logger.info(f"ALPACA EXIT EXECUTED: {call.underlying} {call.side} @ ${exit_price:.2f}")
+                            logger.info(f"ALPACA EXIT: {call.underlying} {exit_reason} pnl={pnl_pct:+.1f}%")
                             send_alert(f"✅ **ALPACA EXIT** CPL #{buy_call_number}\n{call.underlying} {call.side} ${call.strike}\nExit: ${exit_price:.2f} ({pnl_pct:+.1f}%)")
                         else:
                             logger.warning(f"ALPACA EXIT SKIPPED: {call.underlying} - no position found or close failed")
@@ -552,14 +569,17 @@ class JobsDayCPL:
     """
     Convexity Proof Layer: rank instruments, scan chains, build atomic calls,
     dedupe, and broadcast to Telegram.
+
+    For 0DTE trading, uses today's date by default to scan current-day expirations.
     """
 
     def __init__(
         self,
-        event_date: str = CPL_EVENT_DATE,
+        event_date: Optional[str] = None,
         watchlist: Optional[List[str]] = None,
     ):
-        self.event_date = event_date
+        # Always use fresh today's date if not specified (handles overnight runs)
+        self.event_date = event_date or get_todays_expiry_date()
         self.watchlist = watchlist or CPL_WATCHLIST
 
     def run(
@@ -575,6 +595,10 @@ class JobsDayCPL:
         When high_hitters_batch=N: emit top N 20X/4X BUYs to Telegram only (no position tracking).
         """
         global _call_number_counter
+
+        # Always refresh to today's date on each run (handles overnight/multi-day runs)
+        self.event_date = get_todays_expiry_date()
+        logger.debug(f"CPL scanning for expiry: {self.event_date}")
 
         untruncated_tails = untruncated_tails or UNTRUNCATED_TAILS
         generated: List[JobsDayCall] = []
@@ -692,6 +716,36 @@ class JobsDayCPL:
                     )
                     send_alert(f"🔥 HIGH HITTER {i}/{min(len(high_only), high_hitters_batch)} (20X/4X only)\n\n{msg}")
                     logger.info(f"HIGH HITTER {i}: {call.underlying} {call.side} @ {call.strike} ({call.event_tier})")
+
+                    # ========== ALPACA AUTO-EXECUTION FOR HIGH HITTERS ==========
+                    if CPL_AUTO_EXECUTE:
+                        try:
+                            option_premium = call.entry_trigger.get("price", 0)
+                            direction = "long"
+                            target_price = option_premium * 1.25
+                            stop_loss = option_premium * 0.88
+                            real_confidence = getattr(call, 'momentum_confidence', 50)
+
+                            alpaca_pos = alpaca_executor.execute_scalp_entry(
+                                underlying=call.underlying,
+                                direction=direction,
+                                entry_price=option_premium,
+                                target_price=target_price,
+                                stop_loss=stop_loss,
+                                confidence=real_confidence,
+                                pattern=f"HIGH_HITTER_{call.side}",
+                                engine=TradingEngine.SCALPER,
+                                strike_override=call.strike,
+                                option_symbol_override=call.option_symbol,
+                                option_type_override=call.side.lower(),
+                            )
+                            if alpaca_pos:
+                                logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
+                                send_alert(f"✅ **ALPACA EXECUTED** HIGH HITTER #{_call_number_counter}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
+                            else:
+                                logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
+                        except Exception as e:
+                            logger.error(f"ALPACA EXECUTION ERROR: {e}")
             return generated
 
         # Sequential (untruncated): emit at most 1 BUY and only when flat
@@ -855,7 +909,7 @@ class JobsDayCPL:
                                 option_type_override=call.side.lower(),  # "call" or "put" from CPL
                             )
                             if alpaca_pos:
-                                logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} @ ${option_premium:.2f} -> {alpaca_pos.option_symbol}")
+                                logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
