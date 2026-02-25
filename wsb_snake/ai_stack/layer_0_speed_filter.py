@@ -82,10 +82,13 @@ class SpeedFilter:
         hydra = get_hydra_intel()
 
         if not hydra.connected:
-            # No HYDRA = pass (can't filter without intelligence)
+            # CRITICAL FIX: No HYDRA = ABORT (trading blind is dangerous)
+            # Without HYDRA intelligence, we lose 60% of our filtering capability
+            # Better to miss trades than take blind ones
+            logger.warning("SPEED_FILTER: HYDRA disconnected - BLOCKING trade for safety")
             return FilterResult(
-                passed=True,
-                reason="HYDRA disconnected - passing through",
+                passed=False,
+                reason="HYDRA disconnected - trading without intelligence blocked",
                 latency_ms=(time.time() - start) * 1000,
                 hydra_connected=False
             )

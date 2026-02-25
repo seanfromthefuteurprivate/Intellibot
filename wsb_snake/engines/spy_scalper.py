@@ -28,6 +28,7 @@ from wsb_snake.analysis.scalp_langgraph import get_scalp_analyzer
 from wsb_snake.analysis.chart_generator import ChartGenerator
 from wsb_snake.analysis.scalp_chart_generator import scalp_chart_generator
 from wsb_snake.analysis.predator_stack import predator_stack, PredatorVerdict
+from wsb_snake.execution.predator_prime import get_predator_prime, PredatorPrimeVerdict
 from wsb_snake.learning.pattern_memory import pattern_memory
 from wsb_snake.learning.time_learning import time_learning
 from wsb_snake.learning.stalking_mode import stalking_mode, StalkState
@@ -54,11 +55,13 @@ def get_latest_cpl_signal(ticker: str) -> dict:
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        # FIX: timestamp_et is Eastern Time, but datetime('now') is UTC
+        # Convert UTC to ET by subtracting 5 hours before comparing
         cursor.execute("""
             SELECT side, regime, confidence, timestamp_et
             FROM cpl_calls
             WHERE ticker = ?
-            AND datetime(timestamp_et) > datetime('now', '-30 minutes')
+            AND datetime(timestamp_et) > datetime('now', '-5 hours', '-30 minutes')
             ORDER BY timestamp_et DESC
             LIMIT 1
         """, (ticker,))
@@ -136,6 +139,11 @@ class ScalpSetup:
     volume_ratio: float = 1.0
     momentum: float = 0.0
     notes: str = ""
+    # Predator Prime dynamic parameters
+    stop_pct: float = 0.07  # Dynamic stop percentage (default 7%)
+    target_pct: float = 0.12  # Dynamic target percentage (default 12%)
+    max_hold_minutes: int = 15  # Dynamic max hold time
+    contracts: int = 1  # Position size from Predator Prime
 
 
 class SPYScalper:
@@ -1266,8 +1274,91 @@ class SPYScalper:
             except:
                 pass
             
-            # Use Predator Stack for multi-model AI confirmation
-            # Gemini (primary) -> DeepSeek (fallback) -> GPT (confirmation for high confidence)
+            # ========== PREDATOR PRIME - FULL AI STACK ==========
+            # Uses ALL 8 AI layers: Speed Filter, Vision, Semantic, HYDRA,
+            # Adversarial, Contrarian, DNA, Synthesis
+            # Also integrates dynamic ATR stops, entry timing, VIX regime
+            predator_prime = get_predator_prime()
+
+            # Get ATR for dynamic stops if available
+            atr = None
+            if hasattr(self, 'last_data_packet') and self.last_data_packet:
+                try:
+                    bars = self.last_data_packet.bars_1min
+                    if len(bars) >= 14:
+                        # Calculate ATR from last 14 bars
+                        import statistics
+                        true_ranges = []
+                        for i in range(1, min(14, len(bars))):
+                            high = bars[i].get('high', bars[i].get('h', 0))
+                            low = bars[i].get('low', bars[i].get('l', 0))
+                            prev_close = bars[i-1].get('close', bars[i-1].get('c', 0))
+                            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                            true_ranges.append(tr)
+                        if true_ranges:
+                            atr = statistics.mean(true_ranges)
+                except Exception as e:
+                    log.debug(f"ATR calculation failed: {e}")
+
+            # Calculate hours to expiry (0DTE = same day expiry)
+            now = datetime.now()
+            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            hours_to_expiry = max(0.1, (market_close - now).total_seconds() / 3600)
+
+            prime_verdict = predator_prime.analyze(
+                ticker=ticker,
+                direction=setup.direction,
+                current_price=self.last_price,
+                chart_image=chart_base64,
+                news_headlines=None,  # Could add news if available
+                candles=self.price_cache if self.price_cache else None,
+                atr=atr,
+                hours_to_expiry=hours_to_expiry
+            )
+
+            if prime_verdict:
+                # Map Predator Prime verdict to setup
+                if prime_verdict.action == "STRIKE":
+                    expected_dir = "long" if prime_verdict.direction == "CALL" else "short"
+                    if setup.direction == expected_dir:
+                        setup.ai_confirmed = True
+                        setup.confidence = prime_verdict.conviction  # Use full conviction
+                    else:
+                        # AI disagrees with direction
+                        setup.ai_confirmed = False
+                        setup.confidence -= 20
+
+                elif prime_verdict.action == "ABORT":
+                    setup.ai_confirmed = False
+                    setup.confidence = max(0, prime_verdict.conviction - 30)
+                    setup.notes += f" | ABORT: {prime_verdict.kill_reason}"
+
+                else:  # WAIT
+                    setup.ai_confirmed = False
+                    setup.confidence -= 15
+
+                setup.ai_confidence = prime_verdict.conviction / 100
+
+                # Store dynamic stop/target info from Predator Prime
+                if prime_verdict.action == "STRIKE":
+                    setup.notes += f" | PREDATOR_PRIME: {prime_verdict.conviction:.0f}% conviction"
+                    setup.notes += f" | HYDRA: GEX={prime_verdict.hydra_gex_regime} Flow={prime_verdict.hydra_flow_bias}"
+                    setup.notes += f" | Stop: {prime_verdict.stop_type} {prime_verdict.stop_pct*100:.1f}%"
+                    setup.notes += f" | Layers: {len(prime_verdict.predator_layers_run)}"
+                    if prime_verdict.trap_detected != "NONE":
+                        setup.notes += f" | ⚠️ TRAP: {prime_verdict.trap_detected}"
+
+                    # Store stop/target for executor to use
+                    setup.stop_pct = prime_verdict.stop_pct
+                    setup.target_pct = prime_verdict.target_pct
+                    setup.max_hold_minutes = prime_verdict.max_hold_minutes
+                    setup.contracts = prime_verdict.contracts
+                else:
+                    setup.notes += f" | PREDATOR_PRIME: {prime_verdict.action} ({prime_verdict.conviction:.0f}%)"
+                    if prime_verdict.kill_reason:
+                        setup.notes += f" | {prime_verdict.kill_reason}"
+
+            # Also run old predator stack for comparison (fallback)
             analysis = self.predator_stack.analyze_sync(
                 chart_base64=chart_base64,
                 ticker=self.symbol,
@@ -1275,50 +1366,12 @@ class SPYScalper:
                 current_price=self.last_price,
                 vwap=setup.vwap,
                 extra_context=extra_context,
-                require_confirmation=(setup.confidence >= 70)  # Get GPT confirmation for high-confidence setups
+                require_confirmation=(setup.confidence >= 70)
             )
-            
-            if analysis:
-                # Map predator verdict to setup
-                if analysis.verdict == PredatorVerdict.STRIKE_CALLS:
-                    if setup.direction == "long":
-                        setup.ai_confirmed = True
-                        setup.confidence += 10
-                    else:
-                        # AI disagrees with direction
-                        setup.ai_confirmed = False
-                        setup.confidence -= 20
-                        
-                elif analysis.verdict == PredatorVerdict.STRIKE_PUTS:
-                    if setup.direction == "short":
-                        setup.ai_confirmed = True
-                        setup.confidence += 10
-                    else:
-                        setup.ai_confirmed = False
-                        setup.confidence -= 20
-                        
-                elif analysis.verdict == PredatorVerdict.ABORT:
-                    setup.ai_confirmed = False
-                    setup.confidence -= 25
-                    
-                else:  # NO_TRADE
-                    setup.ai_confirmed = False
-                    setup.confidence -= 15
-                
-                setup.ai_confidence = analysis.confidence / 100
-                
-                # Extra boost if GPT confirmed
-                if analysis.confirmed_by:
-                    setup.confidence += 5
-                    setup.notes += f" | GPT CONFIRMED"
-                
-                if setup.ai_confirmed:
-                    setup.notes += f" | {analysis.model_used.upper()} CONFIRMS ({analysis.confidence:.0f}%)"
-                    setup.notes += f" | Entry: {analysis.entry_quality} | Timing: {analysis.timing_score}/100"
-                else:
-                    setup.notes += f" | AI: {analysis.verdict.value} ({analysis.confidence:.0f}%)"
-                    if analysis.trap_risk:
-                        setup.notes += f" | Trap risk: {analysis.trap_risk}"
+
+            if analysis and analysis.confirmed_by:
+                setup.confidence += 5
+                setup.notes += f" | OLD_STACK GPT CONFIRMED"
         
         except Exception as e:
             log.error(f"Predator Stack AI confirmation error: {e}")
@@ -1337,6 +1390,21 @@ class SPYScalper:
             return  # DO NOT EXECUTE TRADE
         log.info(f"✅ CPL CHECK PASSED: {ticker} {setup.direction} - {cpl_reason}")
         # ========== END CPL CHECK ==========
+
+        # ========== HYDRA EVENT BLOCKING ==========
+        # Block new entries when major economic events are upcoming
+        try:
+            from wsb_snake.collectors.hydra_bridge import get_hydra_bridge
+            hydra = get_hydra_bridge()
+            if hydra.should_block_for_event():
+                block_reason = hydra.get_event_block_reason()
+                log.warning(f"🚫 TRADE BLOCKED by HYDRA: {ticker} {setup.direction} - {block_reason}")
+                send_telegram_alert(f"🚫 **TRADE BLOCKED BY HYDRA**\n\n{ticker} {setup.direction.upper()}\nReason: {block_reason}\n\nNo new entries 30 min before economic events.")
+                return  # DO NOT EXECUTE TRADE
+            log.debug(f"✅ HYDRA EVENT CHECK PASSED: No blocking events")
+        except Exception as e:
+            log.debug(f"HYDRA event check skipped: {e}")
+        # ========== END HYDRA EVENT BLOCKING ==========
 
         trade_type = "CALLS" if setup.direction == "long" else "PUTS"
         
