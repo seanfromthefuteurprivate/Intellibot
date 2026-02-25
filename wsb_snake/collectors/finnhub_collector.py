@@ -6,20 +6,92 @@ Data:
 - Company news with sentiment
 - Social media sentiment (Twitter, Reddit, StockTwits aggregated)
 - Insider sentiment (MSPR - Monthly Share Purchase Ratio)
+
+=== FIX 3: Added timeout handling and retry logic ===
+- Configurable request timeout via FINNHUB_TIMEOUT env var
+- Retry with exponential backoff on transient failures
+- Graceful degradation on persistent failures
 """
 
 import os
 import time
-from typing import Dict, List, Optional, Any
+import socket
+from functools import wraps
+from typing import Dict, List, Optional, Any, Callable, TypeVar
 from datetime import datetime, timedelta
 from wsb_snake.utils.logger import log
 
 try:
     import finnhub
+    import requests.exceptions
     FINNHUB_AVAILABLE = True
 except ImportError:
     FINNHUB_AVAILABLE = False
     log.warning("finnhub-python not installed")
+
+# Configurable timeout (default 15s, can override via env)
+FINNHUB_TIMEOUT = int(os.environ.get("FINNHUB_TIMEOUT", "15"))
+FINNHUB_MAX_RETRIES = int(os.environ.get("FINNHUB_MAX_RETRIES", "2"))
+
+T = TypeVar('T')
+
+
+def with_retry(default_return: T) -> Callable:
+    """
+    Decorator that adds retry logic with exponential backoff for Finnhub API calls.
+
+    Handles:
+    - Socket timeouts
+    - Connection errors
+    - HTTP 5xx errors
+
+    Returns default_return on persistent failure.
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_error = None
+            for attempt in range(FINNHUB_MAX_RETRIES + 1):
+                try:
+                    # Set socket timeout for this call
+                    old_timeout = socket.getdefaulttimeout()
+                    socket.setdefaulttimeout(FINNHUB_TIMEOUT)
+                    try:
+                        return func(*args, **kwargs)
+                    finally:
+                        socket.setdefaulttimeout(old_timeout)
+
+                except (socket.timeout, TimeoutError) as e:
+                    last_error = f"timeout after {FINNHUB_TIMEOUT}s"
+                    log.warning(f"Finnhub {func.__name__} attempt {attempt+1}: {last_error}")
+                except requests.exceptions.Timeout as e:
+                    last_error = f"request timeout: {e}"
+                    log.warning(f"Finnhub {func.__name__} attempt {attempt+1}: {last_error}")
+                except requests.exceptions.ConnectionError as e:
+                    last_error = f"connection error: {e}"
+                    log.warning(f"Finnhub {func.__name__} attempt {attempt+1}: {last_error}")
+                except Exception as e:
+                    # Non-retryable error, fail immediately
+                    error_str = str(e).lower()
+                    if "rate limit" in error_str or "429" in error_str:
+                        log.warning(f"Finnhub rate limit hit in {func.__name__}")
+                        return default_return
+                    if "401" in error_str or "403" in error_str:
+                        log.error(f"Finnhub auth error in {func.__name__}: {e}")
+                        return default_return
+                    # Unknown error, log and retry
+                    last_error = str(e)
+                    log.warning(f"Finnhub {func.__name__} attempt {attempt+1}: {last_error}")
+
+                # Exponential backoff: 1s, 2s, 4s
+                if attempt < FINNHUB_MAX_RETRIES:
+                    backoff = 2 ** attempt
+                    time.sleep(backoff)
+
+            log.error(f"Finnhub {func.__name__} failed after {FINNHUB_MAX_RETRIES+1} attempts: {last_error}")
+            return default_return
+        return wrapper
+    return decorator
 
 
 class FinnhubCollector:
@@ -49,6 +121,53 @@ class FinnhubCollector:
         if elapsed < self.min_interval:
             time.sleep(self.min_interval - elapsed)
         self.last_call = time.time()
+
+    def _safe_api_call(self, func: Callable, *args, **kwargs) -> Optional[Any]:
+        """
+        Execute a Finnhub API call with timeout and retry logic.
+
+        Args:
+            func: The finnhub client method to call
+            *args, **kwargs: Arguments to pass to the method
+
+        Returns:
+            API response or None on failure
+        """
+        last_error = None
+        for attempt in range(FINNHUB_MAX_RETRIES + 1):
+            try:
+                self._rate_limit()
+                # Set socket timeout for this call
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(FINNHUB_TIMEOUT)
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
+
+            except (socket.timeout, TimeoutError) as e:
+                last_error = f"timeout after {FINNHUB_TIMEOUT}s"
+                log.warning(f"Finnhub API attempt {attempt+1}: {last_error}")
+            except Exception as e:
+                error_str = str(e).lower()
+                # Non-retryable errors
+                if "rate limit" in error_str or "429" in error_str:
+                    log.warning("Finnhub rate limit hit, backing off 60s")
+                    time.sleep(60)
+                    return None
+                if "401" in error_str or "403" in error_str:
+                    log.error(f"Finnhub auth error: {e}")
+                    return None
+                last_error = str(e)
+                log.warning(f"Finnhub API attempt {attempt+1}: {last_error}")
+
+            # Exponential backoff: 1s, 2s
+            if attempt < FINNHUB_MAX_RETRIES:
+                backoff = 2 ** attempt
+                time.sleep(backoff)
+
+        log.error(f"Finnhub API failed after {FINNHUB_MAX_RETRIES+1} attempts: {last_error}")
+        return None
     
     def _get_cached(self, key: str) -> Optional[Any]:
         """Get cached data if still valid"""
@@ -69,19 +188,19 @@ class FinnhubCollector:
         """
         if not self.client:
             return {"sentiment": 0, "buzz": 0, "articles": 0, "source": "finnhub_unavailable"}
-        
+
         cache_key = f"news_sentiment_{ticker}"
         cached = self._get_cached(cache_key)
         if cached:
             return cached
-        
+
         try:
-            self._rate_limit()
-            
             end_date = datetime.now()
             start_date = end_date - timedelta(days=1)
-            
-            news = self.client.company_news(
+
+            # Use safe API call with retry and timeout
+            news = self._safe_api_call(
+                self.client.company_news,
                 ticker,
                 _from=start_date.strftime("%Y-%m-%d"),
                 to=end_date.strftime("%Y-%m-%d")
@@ -171,9 +290,8 @@ class FinnhubCollector:
             return cached
         
         try:
-            self._rate_limit()
-            
-            social = self.client.stock_social_sentiment(ticker)
+            # Use safe API call with retry and timeout
+            social = self._safe_api_call(self.client.stock_social_sentiment, ticker)
             
             if not social:
                 result = {"score": 0, "mentions": 0, "positive_ratio": 0.5, "source": "finnhub"}
@@ -235,9 +353,13 @@ class FinnhubCollector:
             return cached
         
         try:
-            self._rate_limit()
-            
-            sentiment = self.client.stock_insider_sentiment(ticker, "2024-01-01", datetime.now().strftime("%Y-%m-%d"))
+            # Use safe API call with retry and timeout
+            sentiment = self._safe_api_call(
+                self.client.stock_insider_sentiment,
+                ticker,
+                "2024-01-01",
+                datetime.now().strftime("%Y-%m-%d")
+            )
             
             if not sentiment or not sentiment.get("data"):
                 result = {"mspr": 0, "change": 0, "buying": False, "source": "finnhub"}
