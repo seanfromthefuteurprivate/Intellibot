@@ -30,8 +30,9 @@ from wsb_snake.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # HYDRA API Configuration
-HYDRA_BASE_URL = os.environ.get('HYDRA_URL', 'http://64.23.144.49:8000')
-HYDRA_INTELLIGENCE_ENDPOINT = f"{HYDRA_BASE_URL}/api/intelligence"
+HYDRA_BASE_URL = os.environ.get('HYDRA_URL', 'http://54.172.22.157:8000')
+HYDRA_INTELLIGENCE_ENDPOINT = f"{HYDRA_BASE_URL}/api/predator"  # Full predator intel
+HYDRA_INTELLIGENCE_FALLBACK = f"{HYDRA_BASE_URL}/api/intelligence"  # Fallback
 HYDRA_TRADE_RESULT_ENDPOINT = f"{HYDRA_BASE_URL}/api/trade-result"
 
 # Polling configuration
@@ -241,56 +242,101 @@ class HydraBridge:
             self._error_count += 1
 
     def _parse_intelligence(self, data: Dict):
-        """Parse API response into HydraIntelligence."""
-        # Extract nested data structures
-        gex_data = data.get('gex', {}) or {}
-        flow_data = data.get('flow', {}) or {}
-        dp_data = data.get('dark_pool', {}) or {}
-        seq_data = data.get('sequence_match', {}) or {}
+        """Parse API response into HydraIntelligence.
 
-        self.intel = HydraIntelligence(
-            # Core blowup detection
-            blowup_probability=int(data.get('blowup_probability', 0)),
-            direction=str(data.get('direction', 'NEUTRAL')).upper(),
-            regime=str(data.get('regime', 'UNKNOWN')).upper(),
-            confidence=float(data.get('confidence', 0)),
-            triggers=data.get('triggers', []) or [],
-            recommendation=str(data.get('recommendation', 'SCALP_ONLY')).upper(),
-            events_next_30min=data.get('events_next_30min', []) or [],
-            vix_level=float(data.get('vix_level', 0)),
-            vix_trend=str(data.get('vix_trend', 'STABLE')).upper(),
-            connected=True,
-            last_update=time.time(),
-            raw_data=data,
+        Handles both:
+        - /api/predator (flat fields: gex_regime, flow_institutional_bias, etc.)
+        - /api/intelligence (nested: gex.regime, flow.institutional_bias, etc.)
+        """
+        # Check if using flat structure (predator endpoint) or nested (intelligence)
+        is_flat = 'gex_regime' in data or 'flow_institutional_bias' in data
 
-            # GEX Intelligence (Layer 8)
-            gex_regime=str(gex_data.get('regime', 'UNKNOWN')).upper(),
-            gex_total=float(gex_data.get('total_gex', 0)),
-            gex_flip_point=float(gex_data.get('flip_point', 0)),
-            gex_flip_distance_pct=float(gex_data.get('flip_distance_pct', 999)),
-            gex_key_support=gex_data.get('key_support', []) or [],
-            gex_key_resistance=gex_data.get('key_resistance', []) or [],
-            charm_flow_per_hour=float(gex_data.get('charm_flow_per_hour', 0)),
+        if is_flat:
+            # Flat structure from /api/predator
+            self.intel = HydraIntelligence(
+                # Core blowup detection
+                blowup_probability=int(data.get('blowup_probability', 0)),
+                direction=str(data.get('blowup_direction', data.get('direction', 'NEUTRAL'))).upper(),
+                regime=str(data.get('blowup_regime', data.get('regime', 'UNKNOWN'))).upper(),
+                confidence=float(data.get('confidence', 50)),
+                triggers=data.get('blowup_triggers', data.get('triggers', [])) or [],
+                recommendation=str(data.get('blowup_recommendation', data.get('recommendation', 'SCALP_ONLY'))).upper(),
+                events_next_30min=data.get('events_next_30min', []) or [],
+                vix_level=float(data.get('vix_level', 0)),
+                vix_trend=str(data.get('vix_trend', 'STABLE')).upper(),
+                connected=True,
+                last_update=time.time(),
+                raw_data=data,
 
-            # Flow Intelligence (Layer 9)
-            flow_bias=str(flow_data.get('institutional_bias', 'NEUTRAL')).upper(),
-            flow_net_premium_calls=float(flow_data.get('net_premium_calls', 0)),
-            flow_net_premium_puts=float(flow_data.get('net_premium_puts', 0)),
-            flow_sweep_direction=str(flow_data.get('sweep_direction', 'NEUTRAL')).upper(),
-            flow_confidence=float(flow_data.get('confidence', 0)),
+                # GEX Intelligence (Layer 8) - flat fields
+                gex_regime=str(data.get('gex_regime', 'UNKNOWN')).upper(),
+                gex_total=float(data.get('gex_total', 0)),
+                gex_flip_point=float(data.get('gex_flip_point') or 0),
+                gex_flip_distance_pct=float(data.get('gex_flip_distance_pct', 999)),
+                gex_key_support=data.get('gex_key_support', []) or [],
+                gex_key_resistance=data.get('gex_key_resistance', []) or [],
+                charm_flow_per_hour=float(data.get('gex_charm_per_hour', 0)),
 
-            # Dark Pool Levels (Layer 10)
-            dp_nearest_support=float(dp_data.get('nearest_support', 0)),
-            dp_nearest_resistance=float(dp_data.get('nearest_resistance', 0)),
-            dp_support_strength=str(dp_data.get('support_strength', 'UNKNOWN')).upper(),
-            dp_resistance_strength=str(dp_data.get('resistance_strength', 'UNKNOWN')).upper(),
+                # Flow Intelligence (Layer 9) - flat fields
+                flow_bias=str(data.get('flow_institutional_bias', 'NEUTRAL')).upper(),
+                flow_net_premium_calls=float(data.get('flow_premium_calls', 0)),
+                flow_net_premium_puts=float(data.get('flow_premium_puts', 0)),
+                flow_sweep_direction=str(data.get('flow_sweep_direction', 'NEUTRAL')).upper(),
+                flow_confidence=float(data.get('flow_confidence', 0)),
 
-            # Sequence Match (Layer 11)
-            seq_similar_patterns=int(seq_data.get('similar_patterns', 0)),
-            seq_historical_win_rate=float(seq_data.get('win_rate', 0)),
-            seq_historical_avg_return=float(seq_data.get('historical_outcome', '0').replace('%', '').replace('+', '') or 0) if isinstance(seq_data.get('historical_outcome'), str) else float(seq_data.get('historical_outcome', 0)),
-            seq_nova_analysis=str(seq_data.get('nova_analysis', '')),
-        )
+                # Dark Pool Levels (Layer 10) - flat fields
+                dp_nearest_support=float(data.get('dp_nearest_support') or 0),
+                dp_nearest_resistance=float(data.get('dp_nearest_resistance') or 0),
+                dp_support_strength=str(data.get('dp_support_strength', 'UNKNOWN')).upper(),
+                dp_resistance_strength=str(data.get('dp_resistance_strength', 'UNKNOWN')).upper(),
+
+                # Sequence Match (Layer 11) - flat fields
+                seq_similar_patterns=int(data.get('sequence_similar_count', 0)),
+                seq_historical_win_rate=float(data.get('sequence_historical_win_rate', 0)),
+                seq_historical_avg_return=float(data.get('sequence_avg_outcome', 0)),
+                seq_nova_analysis=str(data.get('sequence_predicted_direction', '')),
+            )
+        else:
+            # Nested structure from /api/intelligence (legacy)
+            gex_data = data.get('gex', {}) or {}
+            flow_data = data.get('flow', {}) or {}
+            dp_data = data.get('dark_pool', {}) or {}
+            seq_data = data.get('sequence_match', {}) or {}
+
+            self.intel = HydraIntelligence(
+                blowup_probability=int(data.get('blowup_probability', 0)),
+                direction=str(data.get('direction', 'NEUTRAL')).upper(),
+                regime=str(data.get('regime', 'UNKNOWN')).upper(),
+                confidence=float(data.get('confidence', 0)),
+                triggers=data.get('triggers', []) or [],
+                recommendation=str(data.get('recommendation', 'SCALP_ONLY')).upper(),
+                events_next_30min=data.get('events_next_30min', []) or [],
+                vix_level=float(data.get('vix_level', 0)),
+                vix_trend=str(data.get('vix_trend', 'STABLE')).upper(),
+                connected=True,
+                last_update=time.time(),
+                raw_data=data,
+                gex_regime=str(gex_data.get('regime', 'UNKNOWN')).upper(),
+                gex_total=float(gex_data.get('total_gex', 0)),
+                gex_flip_point=float(gex_data.get('flip_point') or 0),
+                gex_flip_distance_pct=float(gex_data.get('flip_distance_pct', 999)),
+                gex_key_support=gex_data.get('key_support', []) or [],
+                gex_key_resistance=gex_data.get('key_resistance', []) or [],
+                charm_flow_per_hour=float(gex_data.get('charm_flow_per_hour', 0)),
+                flow_bias=str(flow_data.get('institutional_bias', 'NEUTRAL')).upper(),
+                flow_net_premium_calls=float(flow_data.get('net_premium_calls', 0)),
+                flow_net_premium_puts=float(flow_data.get('net_premium_puts', 0)),
+                flow_sweep_direction=str(flow_data.get('sweep_direction', 'NEUTRAL')).upper(),
+                flow_confidence=float(flow_data.get('confidence', 0)),
+                dp_nearest_support=float(dp_data.get('nearest_support') or 0),
+                dp_nearest_resistance=float(dp_data.get('nearest_resistance') or 0),
+                dp_support_strength=str(dp_data.get('support_strength', 'UNKNOWN')).upper(),
+                dp_resistance_strength=str(dp_data.get('resistance_strength', 'UNKNOWN')).upper(),
+                seq_similar_patterns=int(seq_data.get('similar_patterns', 0)),
+                seq_historical_win_rate=float(seq_data.get('win_rate', 0)),
+                seq_historical_avg_return=float(seq_data.get('historical_outcome', 0) if not isinstance(seq_data.get('historical_outcome'), str) else 0),
+                seq_nova_analysis=str(seq_data.get('nova_analysis', '')),
+            )
 
     def get_intel(self) -> HydraIntelligence:
         """
