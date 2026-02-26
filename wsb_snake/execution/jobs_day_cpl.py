@@ -93,10 +93,10 @@ MAX_CALLS_PER_UNDERLYING = 2
 
 # ========== ALPACA AUTO-EXECUTION ==========
 # When True, CPL BUY calls are automatically executed on Alpaca paper trading
-# Set via env: CPL_AUTO_EXECUTE=true
+# DEFAULT: True (execute trades automatically) - set CPL_AUTO_EXECUTE=false to disable
 import os
-CPL_AUTO_EXECUTE = os.environ.get("CPL_AUTO_EXECUTE", "false").lower() == "true"
-logger.info(f"CPL_AUTO_EXECUTE = {CPL_AUTO_EXECUTE} (env: {os.environ.get('CPL_AUTO_EXECUTE', 'NOT SET')})")
+CPL_AUTO_EXECUTE = os.environ.get("CPL_AUTO_EXECUTE", "true").lower() == "true"
+logger.info(f"CPL_AUTO_EXECUTE = {CPL_AUTO_EXECUTE} (env: {os.environ.get('CPL_AUTO_EXECUTE', 'NOT SET - defaulting to TRUE')})")
 
 # In-memory dedupe (session)
 _sent_calls: Set[str] = set()

@@ -226,7 +226,7 @@ class PredatorPrime:
 
         if hydra:
             try:
-                intel = hydra.get_latest()
+                intel = hydra.get_intel()
                 if intel and hasattr(intel, 'vix'):
                     vix = intel.vix or 20.0
             except:
@@ -391,7 +391,7 @@ class PredatorPrime:
         hydra = self._get_hydra_bridge()
         if hydra:
             try:
-                intel = hydra.get_latest()
+                intel = hydra.get_intel()
                 if intel:
                     hydra_gex_regime = getattr(intel, 'gex_regime', 'UNKNOWN')
                     hydra_flow_bias = getattr(intel, 'flow_bias', 'NEUTRAL')
@@ -479,7 +479,7 @@ class PredatorPrime:
 
         # Adjust for blowup probability (if high, boost conviction for aligned trades)
         if hydra_blowup_prob > 60:
-            blowup_dir = hydra.get_latest().direction if hydra else "NEUTRAL"
+            blowup_dir = hydra.get_intel().direction if hydra else "NEUTRAL"
             if (norm_direction == "CALL" and blowup_dir == "BULLISH") or \
                (norm_direction == "PUT" and blowup_dir == "BEARISH"):
                 base_conviction += 10  # Aligned with blowup direction
