@@ -440,9 +440,10 @@ class SPYScalper:
 
             final_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
 
-            # Sector slighted down? – skip new scalp (UNHINGED: pause when SPY weak)
-            if is_sector_slighted_down():
-                log.info(f"⏸️ Sector slighted down – skipping scalp on {ticker}")
+            # Sector slighted down? – skip LONG scalps only (bearish scalps are OK when sector weak)
+            # FIX: Was blocking ALL scalps - now only blocks longs in weak market
+            if is_sector_slighted_down() and setup.direction == "long":
+                log.info(f"⏸️ Sector slighted down – skipping LONG scalp on {ticker} (PUT scalps still allowed)")
                 return
             # Earnings within 2d – skip buy (IV crush risk)
             earnings_check = finnhub_collector.is_earnings_soon(ticker, days=2)
@@ -617,8 +618,9 @@ class SPYScalper:
         # =============================================
         
         if should_alert:
-            if is_sector_slighted_down():
-                log.info(f"⏸️ Sector slighted down – skipping scalp on {ticker}")
+            # FIX: Only block LONG scalps in weak sector - PUT scalps benefit from weakness
+            if is_sector_slighted_down() and best_setup.direction == "long":
+                log.info(f"⏸️ Sector slighted down – skipping LONG scalp on {ticker}")
                 return
             earnings_check = finnhub_collector.is_earnings_soon(ticker, days=2)
             if earnings_check.get("has_earnings"):

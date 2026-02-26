@@ -319,26 +319,32 @@ class PredatorStackV2:
         layers_run.append('L5_contrarian')
         layer_results['contrarian'] = contrarian_result.to_dict()
 
-        # Check for trap
+        # Check for trap - now ADVISORY (reduces conviction) instead of HARD BLOCK
+        # FIX: Contrarian was blocking ALL trades - now just reduces conviction
+        trap_penalty = 0
         if contrarian_result.trap_detected.value != 'NONE':
-            self._abort_count += 1
-            logger.info(f"PREDATOR_STACK: TRAP DETECTED - {contrarian_result.trap_detected.value}")
-            return PredatorVerdict(
-                action="ABORT",
-                conviction=0,
-                position_size=0,
-                reasoning=f"Trap: {contrarian_result.reason}",
-                kill_reason=f"{contrarian_result.trap_detected.value}: {contrarian_result.reason}",
-                layer_results=layer_results,
-                total_latency_ms=(time.time() - start) * 1000,
-                layers_run=layers_run,
-                trap_detected=True
-            )
+            trap_penalty = abs(contrarian_result.adjustment) * 100  # e.g., -0.15 → -15%
+            logger.warning(f"PREDATOR_STACK: TRAP WARNING - {contrarian_result.trap_detected.value} (conviction -{trap_penalty:.0f}%)")
+            # Only hard block on BULL_TRAP or BEAR_TRAP (high confidence traps)
+            if contrarian_result.trap_detected.value in ['BULL_TRAP', 'BEAR_TRAP'] and contrarian_result.trap_confidence > 0.8:
+                self._abort_count += 1
+                logger.info(f"PREDATOR_STACK: HIGH CONFIDENCE TRAP - blocking trade")
+                return PredatorVerdict(
+                    action="ABORT",
+                    conviction=0,
+                    position_size=0,
+                    reasoning=f"High confidence trap: {contrarian_result.reason}",
+                    kill_reason=f"{contrarian_result.trap_detected.value}: {contrarian_result.reason}",
+                    layer_results=layer_results,
+                    total_latency_ms=(time.time() - start) * 1000,
+                    layers_run=layers_run,
+                    trap_detected=True
+                )
 
         # ============================================
         # Calculate Base Conviction
         # ============================================
-        base_conviction = self.BASE_CONVICTION
+        base_conviction = self.BASE_CONVICTION - trap_penalty  # Apply trap penalty
 
         # Apply vision confidence
         if vision_result and vision_result.get('confidence', 0) > 0:
