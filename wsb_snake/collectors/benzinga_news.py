@@ -97,21 +97,90 @@ class BenzingaNewsAdapter:
     def _parse_article(self, article: Dict) -> Optional[Dict]:
         """Parse a Benzinga article into standardized format."""
         try:
+            created_at = article.get("created", "")
+
+            # === DATA PLUMBER: Calculate news age and decay factor ===
+            age_minutes = self._calculate_news_age_minutes(created_at)
+            decay_factor = self._calculate_news_decay(age_minutes)
+
             return {
                 "id": article.get("id", ""),
                 "headline": article.get("title", ""),
                 "summary": article.get("teaser", ""),
                 "tickers": article.get("stocks", []),
-                "created_at": article.get("created", ""),
+                "created_at": created_at,
                 "updated_at": article.get("updated", ""),
                 "url": article.get("url", ""),
                 "source": "benzinga",
                 "channels": article.get("channels", []),
                 "importance": self._score_importance(article),
+                # === DATA PLUMBER: News freshness metadata ===
+                "age_minutes": age_minutes,
+                "decay_factor": decay_factor,
+                "is_stale": age_minutes > 30,  # News > 30 min is stale
             }
         except Exception as e:
             log.warning(f"Failed to parse article: {e}")
             return None
+
+    def _calculate_news_age_minutes(self, created_at: str) -> float:
+        """Calculate how many minutes old the news is."""
+        if not created_at:
+            return 999  # Treat missing timestamp as very old
+
+        try:
+            # Benzinga format: "2024-01-15T14:30:00-05:00" or similar
+            # Try multiple formats
+            formats = [
+                "%Y-%m-%dT%H:%M:%S%z",
+                "%Y-%m-%dT%H:%M:%S.%f%z",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+            ]
+
+            created_dt = None
+            for fmt in formats:
+                try:
+                    created_dt = datetime.strptime(created_at[:26], fmt[:len(created_at)])
+                    break
+                except ValueError:
+                    continue
+
+            if created_dt is None:
+                return 999
+
+            # Make timezone-naive for comparison
+            if created_dt.tzinfo is not None:
+                created_dt = created_dt.replace(tzinfo=None)
+
+            age = datetime.utcnow() - created_dt
+            return age.total_seconds() / 60.0
+
+        except Exception:
+            return 999
+
+    def _calculate_news_decay(self, age_minutes: float) -> float:
+        """
+        Calculate impact decay factor for stale news.
+
+        === DATA PLUMBER: Stale news filter ===
+        - News < 15 min: 100% impact (no decay)
+        - News 15-30 min: Linear decay from 100% to 50%
+        - News > 30 min: 50% impact (heavily discounted)
+        - News > 60 min: 25% impact
+        - News > 120 min: 10% impact (effectively ignored)
+        """
+        if age_minutes <= 15:
+            return 1.0  # Fresh news - full impact
+        elif age_minutes <= 30:
+            # Linear decay from 1.0 to 0.5 over 15 minutes
+            return 1.0 - (age_minutes - 15) / 30.0
+        elif age_minutes <= 60:
+            return 0.5  # Stale - half impact
+        elif age_minutes <= 120:
+            return 0.25  # Very stale - quarter impact
+        else:
+            return 0.10  # Old news - minimal impact
     
     def _score_importance(self, article: Dict) -> str:
         """

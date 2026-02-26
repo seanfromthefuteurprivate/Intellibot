@@ -35,6 +35,12 @@ class RegimeState(Enum):
     CRASH = "crash"
     RECOVERY = "recovery"
     UNKNOWN = "unknown"
+    # Enhanced regime states for dynamic conviction thresholds
+    RISK_ON = "risk_on"       # VIX < 15, bullish sentiment
+    RISK_OFF = "risk_off"     # VIX > 25, defensive posture
+    CHOPPY = "choppy"         # High whipsaw, no clear direction
+    TRENDING = "trending"     # Strong directional momentum (either way)
+    EVENT_DRIVEN = "event_driven"  # Earnings, FOMC, major catalysts
 
 
 @dataclass
@@ -137,6 +143,32 @@ class RegimeDetector:
         RegimeState.UNKNOWN: {
             "position_size": 0.7,
             "conviction_threshold": 70.0,
+            "stop_loss": 0.10,
+        },
+        # Enhanced regime states with dynamic conviction thresholds
+        RegimeState.RISK_ON: {
+            "position_size": 1.3,
+            "conviction_threshold": 65.0,  # Aggressive - lower bar in calm markets
+            "stop_loss": 0.12,
+        },
+        RegimeState.RISK_OFF: {
+            "position_size": 0.5,
+            "conviction_threshold": 78.0,  # Defensive - higher bar required
+            "stop_loss": 0.06,
+        },
+        RegimeState.CHOPPY: {
+            "position_size": 0.6,
+            "conviction_threshold": 75.0,  # Cautious in whipsaw markets
+            "stop_loss": 0.08,
+        },
+        RegimeState.TRENDING: {
+            "position_size": 1.2,
+            "conviction_threshold": 68.0,  # Moderate - follow momentum
+            "stop_loss": 0.10,
+        },
+        RegimeState.EVENT_DRIVEN: {
+            "position_size": 0.7,
+            "conviction_threshold": 72.0,  # Neutral but elevated threshold
             "stop_loss": 0.10,
         },
     }
@@ -608,6 +640,91 @@ class RegimeDetector:
         logger.info("UNKNOWN regime: insufficient signals")
         return (RegimeState.UNKNOWN, 0.3)
 
+    def get_enhanced_regime(self) -> Tuple[RegimeState, float]:
+        """
+        Get enhanced regime classification including RISK_ON, RISK_OFF, CHOPPY,
+        TRENDING, and EVENT_DRIVEN states.
+
+        This method provides higher-level regime classification suitable for
+        dynamic conviction threshold adjustment.
+
+        Returns:
+            Tuple of (RegimeState, confidence)
+        """
+        # Ensure we have current data
+        if self._current_result is None:
+            self.detect_regime()
+
+        if self._current_result is None:
+            return (RegimeState.UNKNOWN, 0.3)
+
+        result = self._current_result
+        vix = result.vix_level
+        trend = result.trend_strength
+
+        # RISK_ON: VIX < 15 (calm markets, bullish sentiment)
+        if vix < self.VIX_CALM:
+            confidence = 0.7 + (self.VIX_CALM - vix) / 30
+            logger.info(
+                "RISK_ON detected: VIX=%.1f (< %.1f), confidence=%.2f",
+                vix,
+                self.VIX_CALM,
+                confidence,
+            )
+            return (RegimeState.RISK_ON, min(confidence, 0.95))
+
+        # RISK_OFF: VIX > 25 (elevated fear, defensive posture)
+        if vix > 25.0:
+            confidence = 0.6 + (vix - 25.0) / 20
+            logger.info(
+                "RISK_OFF detected: VIX=%.1f (> 25), confidence=%.2f",
+                vix,
+                confidence,
+            )
+            return (RegimeState.RISK_OFF, min(confidence, 0.95))
+
+        # CHOPPY: High whipsaw, no clear direction
+        # Detect via low trend strength + high MR score + normal volatility
+        if (
+            abs(trend) < self.TREND_MODERATE
+            and result.mean_reversion_score > 0.55
+            and 18 <= vix <= 25
+        ):
+            confidence = 0.5 + result.mean_reversion_score * 0.3
+            logger.info(
+                "CHOPPY detected: trend=%.2f, MR=%.2f, VIX=%.1f, confidence=%.2f",
+                trend,
+                result.mean_reversion_score,
+                vix,
+                confidence,
+            )
+            return (RegimeState.CHOPPY, confidence)
+
+        # TRENDING: Strong directional momentum either way
+        if abs(trend) >= self.TREND_STRONG:
+            confidence = 0.6 + abs(trend) * 0.3
+            logger.info(
+                "TRENDING detected: trend=%.2f, confidence=%.2f",
+                trend,
+                confidence,
+            )
+            return (RegimeState.TRENDING, min(confidence, 0.90))
+
+        # EVENT_DRIVEN: Check for major catalysts (FOMC, earnings dates)
+        # This is detected via unusual VIX term structure or specific patterns
+        if result.vix_structure == "backwardation" and vix < 25:
+            # Backwardation without crisis often signals upcoming event
+            confidence = 0.55
+            logger.info(
+                "EVENT_DRIVEN detected: backwardation with VIX=%.1f, confidence=%.2f",
+                vix,
+                confidence,
+            )
+            return (RegimeState.EVENT_DRIVEN, confidence)
+
+        # Fall back to base regime
+        return (result.regime, result.confidence)
+
     def fetch_and_update(self) -> RegimeResult:
         """
         Fetch latest market data, update state, and return full regime result.
@@ -809,6 +926,57 @@ class RegimeDetector:
             "data_points": len(self._spy_prices),
             "detected_at": result.detected_at.isoformat(),
         }
+
+    def get_dynamic_conviction_threshold(self) -> float:
+        """
+        Get VIX-based dynamic conviction threshold.
+
+        Thresholds:
+        - RISK_ON (VIX < 20): 65% - Lower bar in calm markets
+        - NEUTRAL (VIX 20-25): 72% - Standard threshold
+        - RISK_OFF (VIX > 25): 78% - Higher bar required in volatile markets
+
+        Returns:
+            Dynamic conviction threshold (0-100 scale)
+        """
+        # Ensure we have current data
+        if self._current_result is None:
+            self.detect_regime()
+
+        vix = self._current_result.vix_level if self._current_result else 20.0
+
+        if vix < 20.0:
+            # RISK_ON: More aggressive, lower threshold
+            # Linear interpolation: VIX 10 -> 60%, VIX 20 -> 65%
+            threshold = 60.0 + (vix / 20.0) * 5.0
+            threshold = max(60.0, min(65.0, threshold))
+            logger.debug(
+                "Dynamic threshold RISK_ON: VIX=%.1f -> threshold=%.1f%%",
+                vix,
+                threshold,
+            )
+        elif vix <= 25.0:
+            # NEUTRAL: Standard threshold with slight adjustment
+            # Linear interpolation: VIX 20 -> 68%, VIX 25 -> 72%
+            threshold = 68.0 + ((vix - 20.0) / 5.0) * 4.0
+            threshold = max(68.0, min(72.0, threshold))
+            logger.debug(
+                "Dynamic threshold NEUTRAL: VIX=%.1f -> threshold=%.1f%%",
+                vix,
+                threshold,
+            )
+        else:
+            # RISK_OFF: Defensive, higher threshold
+            # Linear interpolation: VIX 25 -> 72%, VIX 35+ -> 78%
+            threshold = 72.0 + ((vix - 25.0) / 10.0) * 6.0
+            threshold = max(72.0, min(78.0, threshold))
+            logger.debug(
+                "Dynamic threshold RISK_OFF: VIX=%.1f -> threshold=%.1f%%",
+                vix,
+                threshold,
+            )
+
+        return threshold
 
     def reset(self) -> None:
         """Reset all state and history."""

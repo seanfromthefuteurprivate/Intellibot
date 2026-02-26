@@ -40,6 +40,9 @@ from wsb_snake.learning.deep_study import run_idle_study
 from wsb_snake.collectors.screenshot_system import screenshot_system
 from wsb_snake.execution.regime_detector import regime_detector
 from wsb_snake.execution.jobs_day_cpl import JobsDayCPL
+from wsb_snake.collectors.hydra_bridge import start_hydra_bridge, get_hydra_bridge
+from wsb_snake.engines.dual_mode_engine import get_dual_mode_engine
+from wsb_snake.engines.power_hour_protocol import start_power_hour_protocol
 
 
 def send_startup_ping():
@@ -299,6 +302,61 @@ def main():
         log.info(f"Regime: {regime_state.regime.value} (confidence={regime_state.confidence:.0%})")
     except Exception as e:
         log.warning(f"Regime warmup failed (will retry): {e}")
+
+    # HYDRA BRIDGE: Start polling HYDRA intelligence engine
+    log.info("Starting HYDRA Bridge...")
+    try:
+        hydra_bridge = start_hydra_bridge()
+        log.info("HYDRA Bridge active - polling every 60s")
+    except Exception as e:
+        log.warning(f"HYDRA Bridge startup failed: {e}")
+        hydra_bridge = None
+
+    # DUAL-MODE ENGINE: Initialize for SCALP/BLOWUP mode switching
+    log.info("Starting Dual-Mode Engine...")
+    try:
+        dual_mode = get_dual_mode_engine()
+        dual_mode.reset_daily_stats()  # Reset blowup trade counter
+        log.info(f"Dual-Mode Engine active - current mode: {dual_mode.get_current_mode().value}")
+    except Exception as e:
+        log.warning(f"Dual-Mode Engine startup failed: {e}")
+        dual_mode = None
+
+    # HYDRA → Dual-Mode sync: Update mode based on HYDRA intelligence every 30s
+    def sync_hydra_dual_mode():
+        if not hydra_bridge or not dual_mode:
+            return
+        try:
+            from wsb_snake.engines.dual_mode_engine import HydraSignal, BlowupDirection
+            intel = hydra_bridge.get_intel()
+            if not intel.connected:
+                return
+            # Convert HYDRA direction to BlowupDirection
+            direction = BlowupDirection.NEUTRAL
+            if intel.direction == "BULLISH":
+                direction = BlowupDirection.BULLISH
+            elif intel.direction == "BEARISH":
+                direction = BlowupDirection.BEARISH
+            # Create signal and update dual-mode engine
+            signal = HydraSignal(
+                blowup_probability=intel.blowup_probability,
+                direction=direction,
+                confidence=intel.confidence,
+                raw_data=intel.raw_data
+            )
+            dual_mode.update_hydra_signal(signal)
+        except Exception as e:
+            log.debug(f"HYDRA→DualMode sync: {e}")
+    schedule.every(30).seconds.do(sync_hydra_dual_mode)
+
+    # POWER HOUR PROTOCOL: Start the assault protocol (arms at 14:55 ET)
+    log.info("Starting Power Hour Protocol...")
+    try:
+        power_hour = start_power_hour_protocol()
+        log.info("Power Hour Protocol active - arming at 14:55 ET")
+    except Exception as e:
+        log.warning(f"Power Hour Protocol startup failed: {e}")
+        power_hour = None
 
     # Run immediately on startup if market-appropriate
     log.info("Running initial pipeline check...")

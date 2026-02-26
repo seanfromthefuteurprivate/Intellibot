@@ -24,11 +24,13 @@ def get_latest_cpl_signal(ticker: str) -> dict:
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        # FIX: timestamp_et is Eastern Time, but datetime('now') is UTC
+        # Convert UTC to ET by subtracting 5 hours before comparing
         cursor.execute("""
             SELECT side, regime, confidence, timestamp_et
             FROM cpl_calls
             WHERE ticker = ?
-            AND datetime(timestamp_et) > datetime('now', '-30 minutes')
+            AND datetime(timestamp_et) > datetime('now', '-5 hours', '-30 minutes')
             ORDER BY timestamp_et DESC
             LIMIT 1
         """, (ticker,))

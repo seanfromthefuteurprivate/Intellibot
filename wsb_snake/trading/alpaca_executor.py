@@ -180,10 +180,17 @@ class AlpacaExecutor:
     # 4. Predator mode - strike fast, book profit, hunt again
     #
     # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    # OPTIMIZED FOR 0DTE: Wider stops to avoid noise, achievable targets
+    # RISK WARDEN: Tighter 0DTE stops for better risk control
     _SCALP_TARGET_PCT_DEFAULT = 1.06   # +6% target (achievable in 0DTE with decay)
-    _SCALP_STOP_PCT_DEFAULT = 0.90     # -10% initial stop (wider to avoid noise)
+    _SCALP_STOP_PCT_DEFAULT = 0.93     # -7% initial stop (RISK WARDEN: tighter than -10%)
     _SCALP_MAX_HOLD_MINUTES_DEFAULT = 5  # 5 MIN - exit before theta acceleration
+
+    # RISK WARDEN: Trailing stop tiers for locking profits
+    TRAIL_BREAKEVEN_TRIGGER = 0.03   # Move to breakeven at +3% profit
+    TRAIL_LOCK_PROFIT_TRIGGER = 0.08  # At +8% profit, lock in +5%
+    TRAIL_LOCK_PROFIT_LEVEL = 0.05   # Lock +5% when at +8%+
+    TRAIL_TIME_TIGHTEN_MINUTES = 30  # After 30 min, trail to -3% from peak
+    TRAIL_TIME_TIGHTEN_PCT = 0.03    # -3% trailing stop after 30 min
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -1287,6 +1294,27 @@ Reason: {reason}
         except Exception as e:
             logger.error(f"Failed to record outcome: {e}")
 
+        # HYDRA FEEDBACK: Send trade result to HYDRA for learning
+        try:
+            from wsb_snake.collectors.hydra_bridge import get_hydra_bridge
+            hydra = get_hydra_bridge()
+            intel = hydra.get_intel()
+            hold_seconds = int((position.exit_time - position.entry_time).total_seconds()) if position.entry_time else None
+            hydra.send_trade_result(
+                ticker=position.symbol,
+                direction="LONG" if position.trade_type == "CALLS" else "SHORT",
+                pnl=position.pnl,
+                pnl_pct=position.pnl_pct,
+                conviction=position.conviction if hasattr(position, 'conviction') else 70.0,
+                regime=intel.regime,
+                mode="SCALP",  # Could be BLOWUP if in blowup mode
+                exit_reason=reason,
+                hold_seconds=hold_seconds
+            )
+            logger.debug(f"HYDRA_FEEDBACK: Sent result for {position.symbol}")
+        except Exception as e:
+            logger.debug(f"HYDRA feedback skipped: {e}")
+
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
         emoji = "💰" if position.pnl > 0 else "🛑"
@@ -1474,25 +1502,46 @@ Reason: Order was {order_status}
                         self.execute_exit(position, "STOP LOSS", current_price)
                     continue
                 
-                # Scalper: TRAILING STOP + target + max hold
-                # Lock in profits as they grow - don't let winners become losers!
+                # Scalper: RISK WARDEN TRAILING STOP - tighter 0DTE risk control
+                # Initial: -7% stop (tighter than old -10%)
+                # Breakeven at +3% (trigger)
+                # Lock +5% at +8% profit
+                # After 30 min, trail to -3% from peak
 
                 # Calculate current profit percentage
                 profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
 
-                # JP MORGAN TRAILING STOP - lock profits progressively
-                if profit_pct >= 0.05:  # +5% profit (near target)
-                    # Lock in +3% minimum profit
-                    new_stop = position.entry_price * 1.03
+                # Track peak price for time-based trailing (store as attribute)
+                if not hasattr(position, '_peak_price') or current_price > getattr(position, '_peak_price', 0):
+                    position._peak_price = current_price
+
+                # Calculate hold time
+                hold_minutes = 0
+                if position.entry_time:
+                    hold_minutes = (datetime.now() - position.entry_time).total_seconds() / 60
+
+                # RISK WARDEN: Time-based stop tightening after 30 minutes
+                if hold_minutes >= self.TRAIL_TIME_TIGHTEN_MINUTES:
+                    # Trail to -3% from peak price (not entry)
+                    peak_price = getattr(position, '_peak_price', current_price)
+                    time_trail_stop = peak_price * (1 - self.TRAIL_TIME_TIGHTEN_PCT)
+                    if position.stop_loss < time_trail_stop:
+                        position.stop_loss = time_trail_stop
+                        logger.info(f"TIME TRAIL: {position.option_symbol} stop to ${time_trail_stop:.2f} (-3% from peak ${peak_price:.2f}) after {hold_minutes:.0f}min")
+
+                # RISK WARDEN: Profit-based trailing stops (tighter than before)
+                if profit_pct >= self.TRAIL_LOCK_PROFIT_TRIGGER:  # +8% profit
+                    # Lock in +5% profit (RISK WARDEN: was +3% at +5%)
+                    new_stop = position.entry_price * (1 + self.TRAIL_LOCK_PROFIT_LEVEL)
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL: {position.option_symbol} stop to +3% (${new_stop:.2f})")
-                elif profit_pct >= 0.03:  # +3% profit
-                    # Move stop to breakeven
+                        logger.info(f"TRAIL: {position.option_symbol} LOCK +5% profit at ${new_stop:.2f} (profit: +{profit_pct*100:.1f}%)")
+                elif profit_pct >= self.TRAIL_BREAKEVEN_TRIGGER:  # +3% profit
+                    # Move stop to breakeven (RISK WARDEN: was +5% trigger)
                     new_stop = position.entry_price * 1.0
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL: {position.option_symbol} stop to BREAKEVEN (${new_stop:.2f})")
+                        logger.info(f"TRAIL: {position.option_symbol} to BREAKEVEN (${new_stop:.2f})")
                 elif profit_pct >= 0.02:  # +2% profit
                     # Reduce initial risk to -5%
                     new_stop = position.entry_price * 0.95

@@ -22,16 +22,52 @@ from wsb_snake.utils.logger import log
 
 class EnhancedPolygonAdapter:
     """Enhanced adapter maximizing Polygon basic plan capabilities."""
-    
+
     # Rate limiting: Polygon basic plan allows 5 requests/min
     REQUESTS_PER_MINUTE = 5
-    
+
+    # === DATA PLUMBER ENHANCEMENT: Priority-based request queue ===
+    # Priority 1 = highest (price data), Priority 4 = lowest (reference)
+    REQUEST_PRIORITIES = {
+        "snapshot": 1,      # Price snapshots - most critical
+        "bars": 1,          # Price bars - critical for trading
+        "trades": 2,        # Recent trades - order flow
+        "quotes": 2,        # NBBO quotes - order flow
+        "options": 2,       # Options chain - critical for 0DTE
+        "technicals": 3,    # RSI/MACD/SMA - can use stale
+        "indicators": 3,    # Technical indicators
+        "gainers": 3,       # Market movers
+        "losers": 3,        # Market movers
+        "reference": 4,     # Contract reference data
+        "previous": 4,      # Previous day data
+    }
+
+    # === DATA PLUMBER ENHANCEMENT: Optimized Cache TTLs ===
+    # Different data types have different staleness tolerances
+    CACHE_TTLS = {
+        "snapshot": 30,     # 30 seconds - price data needs freshness
+        "bars": 30,         # 30 seconds - intraday bars
+        "trades": 60,       # 1 minute - trade flow
+        "quotes": 60,       # 1 minute - NBBO
+        "options": 120,     # 2 minutes - options chain (per spec)
+        "technicals": 300,  # 5 minutes - technicals (per spec)
+        "indicators": 300,  # 5 minutes - RSI/MACD/SMA
+        "gainers": 180,     # 3 minutes - market movers
+        "losers": 180,      # 3 minutes - market movers
+        "reference": 600,   # 10 minutes - static reference data
+        "previous": 3600,   # 1 hour - yesterday's data doesn't change
+    }
+    DEFAULT_CACHE_TTL = 120  # Fallback for unclassified requests
+
     def __init__(self):
         self.api_key = POLYGON_API_KEY
         self.base_url = POLYGON_BASE_URL
         self._cache: Dict[str, Tuple[datetime, Any]] = {}
-        self._cache_ttl = 120  # Increased to 2 minutes to reduce API calls
+        self._cache_ttl = 120  # Default - overridden by CACHE_TTLS
         self._request_times: List[datetime] = []
+
+        # === DATA PLUMBER: Request queue with priorities ===
+        self._pending_requests: List[Tuple[int, str, Dict]] = []  # (priority, endpoint, params)
 
         # Per-scan cache for batch efficiency
         self._scan_cache: Dict[str, Any] = {}
@@ -41,50 +77,106 @@ class EnhancedPolygonAdapter:
         # Track if v3 endpoints are available (require paid plan)
         self._v3_available: Optional[bool] = None
         self._v3_checked = False
+
+    def _classify_request_type(self, endpoint: str) -> str:
+        """Classify an endpoint to determine priority and cache TTL."""
+        endpoint_lower = endpoint.lower()
+
+        if "snapshot" in endpoint_lower:
+            return "snapshot"
+        elif "/aggs/" in endpoint_lower and ("second" in endpoint_lower or "minute" in endpoint_lower):
+            return "bars"
+        elif "/trades" in endpoint_lower:
+            return "trades"
+        elif "/quotes" in endpoint_lower:
+            return "quotes"
+        elif "options" in endpoint_lower:
+            return "options"
+        elif "/indicators/" in endpoint_lower:
+            return "indicators"
+        elif any(ind in endpoint_lower for ind in ["/rsi/", "/sma/", "/ema/", "/macd/"]):
+            return "technicals"
+        elif "gainers" in endpoint_lower:
+            return "gainers"
+        elif "losers" in endpoint_lower:
+            return "losers"
+        elif "/reference/" in endpoint_lower:
+            return "reference"
+        elif "/prev" in endpoint_lower:
+            return "previous"
+        else:
+            return "bars"  # Default to price data priority
+
+    def _get_cache_ttl(self, request_type: str) -> int:
+        """Get appropriate cache TTL for request type."""
+        return self.CACHE_TTLS.get(request_type, self.DEFAULT_CACHE_TTL)
+
+    def _get_request_priority(self, request_type: str) -> int:
+        """Get request priority (1=highest, 4=lowest)."""
+        return self.REQUEST_PRIORITIES.get(request_type, 3)
         
     def _request(self, endpoint: str, params: Dict = None, cache_ttl_override: int = None) -> Optional[Dict]:
-        """Make authenticated request to Polygon API with caching and rate limiting."""
+        """Make authenticated request to Polygon API with caching, rate limiting, and prioritization."""
         if not self.api_key:
             log.error("POLYGON_API_KEY not set")
             return None
-            
+
         if params is None:
             params = {}
         params["apiKey"] = self.api_key
-        
-        # Check cache first (use override TTL if provided)
-        cache_ttl = cache_ttl_override if cache_ttl_override is not None else self._cache_ttl
+
+        # === DATA PLUMBER: Classify request type for smart caching ===
+        request_type = self._classify_request_type(endpoint)
+        priority = self._get_request_priority(request_type)
+
+        # Check cache first (use type-specific TTL or override)
+        cache_ttl = cache_ttl_override if cache_ttl_override is not None else self._get_cache_ttl(request_type)
         cache_key = f"{endpoint}:{str(sorted(params.items()))}"
         if cache_key in self._cache:
             cached_time, cached_data = self._cache[cache_key]
             if (datetime.now() - cached_time).seconds < cache_ttl:
                 return cached_data
-        
+
         # Rate limiting - track requests and throttle if needed
         now = datetime.now()
         self._request_times = [t for t in self._request_times if (now - t).seconds < 60]
-        
+
         if len(self._request_times) >= self.REQUESTS_PER_MINUTE:
-            # Too many requests - use cache even if expired, or wait
-            if cache_key in self._cache:
-                log.debug(f"Rate limited - using stale cache for {endpoint}")
-                return self._cache[cache_key][1]
+            # === DATA PLUMBER: Priority-based rate limit handling ===
+            # Priority 1-2 (price/order flow) - wait for rate limit
+            # Priority 3-4 (technicals/reference) - use stale cache
+            if priority <= 2:
+                # High priority - wait for rate limit to clear (short wait)
+                if cache_key in self._cache:
+                    # Use stale cache while we'd wait anyway
+                    log.debug(f"Rate limited (P{priority}) - using stale cache for {endpoint}")
+                    return self._cache[cache_key][1]
+                else:
+                    # No cache - must wait for critical data
+                    oldest = min(self._request_times)
+                    wait_time = 61 - (now - oldest).seconds
+                    if wait_time > 0 and wait_time < 15:  # Reduced from 30s
+                        log.debug(f"Rate limit (P{priority}) - waiting {wait_time}s for {request_type}")
+                        import time
+                        time.sleep(wait_time)
+                        self._request_times = []
+                    else:
+                        return None  # Don't wait too long
             else:
-                # Wait for rate limit to clear
-                oldest = min(self._request_times)
-                wait_time = 61 - (now - oldest).seconds
-                if wait_time > 0 and wait_time < 30:
-                    log.debug(f"Rate limit - waiting {wait_time}s")
-                    import time
-                    time.sleep(wait_time)
-                    self._request_times = []
-        
+                # Low priority - always prefer stale cache
+                if cache_key in self._cache:
+                    log.debug(f"Rate limited (P{priority}) - using stale cache for {request_type}")
+                    return self._cache[cache_key][1]
+                else:
+                    log.debug(f"Rate limited (P{priority}) - skipping {request_type}")
+                    return None  # Skip low-priority uncached requests
+
         url = f"{self.base_url}{endpoint}"
-        
+
         try:
             resp = requests.get(url, params=params, timeout=10)
             self._request_times.append(datetime.now())
-            
+
             if resp.status_code == 200:
                 data = resp.json()
                 self._cache[cache_key] = (datetime.now(), data)

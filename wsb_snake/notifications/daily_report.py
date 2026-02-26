@@ -1,6 +1,13 @@
 """
 Daily 4:15 PM ET report — win rate, avg R, top/worst setups, regime, 2X/4X/20X event counts.
 Sent to Telegram for full 10/10 target alignment.
+
+ENHANCED by Agent 5 (COMMS OFFICER) to include:
+- Total P&L, win/loss count, win rate
+- Each trade detail with entry/exit prices
+- Regime summary
+- Signals generated vs executed count
+- Portfolio value
 """
 
 from datetime import datetime
@@ -70,8 +77,24 @@ def send_daily_report(date_str: Optional[str] = None) -> bool:
     """
     Build and send the daily report to Telegram.
     Call at 4:15 PM ET (e.g. from main scheduler or cron).
+
+    NOTE: This is the BASIC report. For ENHANCED report with trade details,
+    regime summary, and portfolio value, use:
+        from wsb_snake.notifications.enhanced_comms import send_enhanced_eod_report
+        send_enhanced_eod_report()
     """
     try:
+        # Try enhanced report first
+        try:
+            from wsb_snake.notifications.enhanced_comms import send_enhanced_eod_report
+            ok = send_enhanced_eod_report(date_str)
+            if ok:
+                logger.info("Enhanced daily report sent to Telegram")
+                return ok
+        except Exception as e:
+            logger.warning(f"Enhanced report failed, falling back to basic: {e}")
+
+        # Fallback to basic report
         stats = get_daily_stats_for_report(date_str)
         msg = format_daily_report(stats)
         ok = send_alert(msg)

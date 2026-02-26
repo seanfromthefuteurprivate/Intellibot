@@ -122,6 +122,8 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
                 self._handle_diagnose(body)
             elif path == "/command":
                 self._handle_command(body)
+            elif path == "/exec":
+                self._handle_exec(body)
             else:
                 self._send_json({"error": "Not found"}, 404)
         except Exception as e:
@@ -139,15 +141,97 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
     # ========== ENDPOINT HANDLERS ==========
 
     def _handle_health(self):
-        """GET /health - Quick health check."""
+        """GET /health - Comprehensive health check with all service statuses."""
         guardian = get_guardian()
+        monitor = get_health_monitor()
         status = guardian.get_status()
 
+        # Get all service statuses
+        services_status = {}
+        for service_name in monitor.MONITORED_SERVICES:
+            svc = monitor.check_service(service_name)
+            services_status[service_name] = {
+                "status": svc.status,
+                "running": svc.running,
+                "uptime_seconds": svc.uptime_seconds,
+                "memory_mb": round(svc.memory_mb, 2) if svc.memory_mb else None
+            }
+
+        # Get system metrics
+        system = monitor.check_system()
+
+        # Get git commit hash
+        git_status = monitor.check_git_status()
+
+        # Calculate error count today from logs (last 24h)
+        error_count = 0
+        try:
+            stdout, _, rc = monitor._run_command([
+                "journalctl", "--since", "today", "-p", "err", "--no-pager", "-q"
+            ])
+            if rc == 0:
+                error_count = len([l for l in stdout.strip().split('\n') if l.strip()])
+        except:
+            pass
+
+        # Get last trade and last signal from wsb-snake logs
+        last_trade = None
+        last_signal = None
+        try:
+            logs = monitor.get_service_logs("wsb-snake", lines=500)
+            for line in reversed(logs.split('\n')):
+                if not last_trade and ('TRADE EXECUTED' in line or 'ORDER FILLED' in line or 'Executed' in line):
+                    last_trade = line.strip()[:100]
+                if not last_signal and ('SIGNAL:' in line or 'signal generated' in line.lower()):
+                    last_signal = line.strip()[:100]
+                if last_trade and last_signal:
+                    break
+        except:
+            pass
+
+        # Guardian uptime
+        guardian_uptime = None
+        last_restart = None
+        try:
+            svc = monitor.check_service("vm-guardian")
+            guardian_uptime = svc.uptime_seconds
+            if svc.uptime_seconds:
+                from datetime import timedelta
+                last_restart = (datetime.now() - timedelta(seconds=svc.uptime_seconds)).isoformat()
+        except:
+            pass
+
         self._send_json({
-            "status": "ok",
+            "status": "ok" if status["overall_health"] != "critical" else "critical",
             "guardian_running": status["running"],
             "overall_health": status["overall_health"],
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "services": services_status,
+            "system": {
+                "uptime_hours": round(system.uptime_hours, 2),
+                "cpu_percent": round(system.cpu_percent, 2),
+                "memory_percent": round(system.memory_percent, 2),
+                "memory_used_mb": round(system.memory_used_mb, 2),
+                "disk_percent": round(system.disk_percent, 2),
+                "load_average": system.load_average
+            },
+            "guardian": {
+                "uptime_seconds": guardian_uptime,
+                "last_restart": last_restart,
+                "auto_restart_enabled": status["ai_advisor_available"]
+            },
+            "trading": {
+                "last_trade": last_trade,
+                "last_signal": last_signal
+            },
+            "errors": {
+                "count_today": error_count
+            },
+            "git": {
+                "commit": git_status.get("commit", "unknown"),
+                "branch": git_status.get("branch", "unknown"),
+                "behind_remote": git_status.get("behind_remote", 0)
+            }
         })
 
     def _handle_status(self):
@@ -241,35 +325,89 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_command(self, body: Dict):
-        """POST /command - Execute shell command (dangerous!)."""
+        """POST /command - Execute shell command (legacy, redirects to /exec)."""
+        return self._handle_exec(body)
+
+    def _handle_exec(self, body: Dict):
+        """POST /exec - Execute whitelisted shell commands safely."""
         command = body.get("command", "")
 
         if not command:
             self._send_json({"error": "Missing 'command' in request body"}, 400)
             return
 
-        # Safety: Only allow certain commands
-        allowed_prefixes = [
-            "systemctl",
-            "git -C /root/wsb-snake",
-            "journalctl",
-            "cat /proc",
-            "free",
-            "df",
-            "uptime",
-            "ps aux",
-            "pm2",
-            "cp /root/wsb-snake/max-mode.service",
-            "cp /root/wsb-snake/vm-guardian.service",
-            "cp /root/wsb-snake/wsb-",
-            "/root/wsb-snake/venv/bin/python"
+        # DANGEROUS COMMANDS - Block these patterns explicitly
+        dangerous_patterns = [
+            "rm ", "rm\t", "rmdir",
+            "dd ", "dd\t",
+            "mkfs", "fdisk", "parted",
+            "chmod 777", "chmod -R",
+            "> /dev/", ">/dev/",
+            "wget ", "curl ", "nc ",  # Prevent downloads/connections
+            "eval ", "exec ",
+            "$(", "`",  # Command substitution
+            "&&", "||", ";",  # Command chaining (except in safe contexts)
+            "|",  # Piping (can be abused)
+            "sudo ", "su ",
+            "passwd", "useradd", "userdel",
+            "reboot", "shutdown", "poweroff", "halt",
+            "iptables", "ufw",
+            "kill -9", "killall", "pkill",
         ]
 
-        is_allowed = any(command.startswith(prefix) for prefix in allowed_prefixes)
+        command_lower = command.lower()
+        for pattern in dangerous_patterns:
+            if pattern in command_lower:
+                self._send_json({
+                    "error": f"Blocked: Command contains dangerous pattern '{pattern}'",
+                    "blocked": True
+                }, 403)
+                return
+
+        # SAFE COMMANDS - Whitelist with specific patterns
+        safe_commands = [
+            # Systemctl - status only, no start/stop/restart (use /restart endpoint)
+            ("systemctl status", "systemctl status "),
+            ("systemctl is-active", "systemctl is-active "),
+            ("systemctl show", "systemctl show "),
+            ("systemctl list-units", "systemctl list-units"),
+            # Journalctl - logs only
+            ("journalctl -u", "journalctl -u "),
+            ("journalctl --since", "journalctl --since"),
+            ("journalctl -n", "journalctl -n "),
+            # File reading (safe paths only)
+            ("cat /proc/", "cat /proc/"),
+            ("cat /root/wsb-snake/", "cat /root/wsb-snake/"),
+            # Git commands (read-only)
+            ("git log", "git -C /root/wsb-snake log"),
+            ("git status", "git -C /root/wsb-snake status"),
+            ("git branch", "git -C /root/wsb-snake branch"),
+            ("git rev-parse", "git -C /root/wsb-snake rev-parse"),
+            ("git diff", "git -C /root/wsb-snake diff"),
+            # System info
+            ("free", "free"),
+            ("df", "df"),
+            ("uptime", "uptime"),
+            ("ps aux", "ps aux"),
+            ("top -bn1", "top -bn1"),
+            ("cat /etc/os-release", "cat /etc/os-release"),
+            # Python in venv (safe)
+            ("python --version", "/root/wsb-snake/venv/bin/python --version"),
+        ]
+
+        is_allowed = False
+        matched_pattern = None
+        for name, prefix in safe_commands:
+            if command.startswith(prefix) or command == prefix.strip():
+                is_allowed = True
+                matched_pattern = name
+                break
+
         if not is_allowed:
             self._send_json({
                 "error": "Command not in allowlist",
-                "allowed_prefixes": allowed_prefixes
+                "hint": "Use /restart endpoint for service restarts",
+                "allowed_commands": [name for name, _ in safe_commands]
             }, 403)
             return
 
@@ -285,12 +423,13 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
 
             self._send_json({
                 "command": command,
+                "matched_pattern": matched_pattern,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "returncode": result.returncode
             })
         except subprocess.TimeoutExpired:
-            self._send_json({"error": "Command timed out"}, 504)
+            self._send_json({"error": "Command timed out", "timeout_seconds": 30}, 504)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 

@@ -56,13 +56,25 @@ DEFAULT_SECTOR = "other"
 @dataclass
 class GovernorConfig:
     """Configurable limits (can be overridden via env)."""
+    # ═══════════════════════════════════════════════════════════════
+    # DAILY P&L TARGETS AND RISK LIMITS (WEAPONIZED)
+    # ═══════════════════════════════════════════════════════════════
+
     # Kill switch - JP MORGAN GRADE (tighter controls)
-    max_daily_loss: float = -200.0  # Stop at -$200 (5% of $4k budget)
+    max_daily_loss: float = -300.0  # Stop at -$300 (kill switch)
     kill_switch_manual: bool = False  # Set True to force halt
 
+    # Daily profit targets (paper trading - adjust for live)
+    daily_profit_target: float = 500.0  # Stop trading after hitting $500
+    power_hour_target: float = 300.0    # Power hour contributes $300 of $500
+    max_drawdown_from_peak: float = 200.0  # If we drop $200 from daily high, half size
+
     # Global position limits
-    max_concurrent_positions_global: int = 3  # Reduce correlation risk
+    max_concurrent_positions_global: int = 3  # Reduce correlation risk (scalp mode)
+    max_concurrent_positions_blowup: int = 2  # In blowup mode (size is 2x)
     max_daily_exposure_global: float = 4000.0  # $4k daily max
+    max_total_exposure_pct: float = 0.25  # Max 25% of buying power
+    max_single_position: float = 2000.0  # Max $2k even in blowup mode
 
     # Per-engine position limits
     max_positions_scalper: int = 2  # Focus on quality, not quantity
@@ -92,6 +104,23 @@ class GovernorConfig:
     min_trades_for_win_rate_check: int = 2  # Need at least 2 trades before enforcing
     high_vol_exception_vix: float = 25.0  # VIX > 25 allows trading even with low win rate
     preserve_profit_threshold: float = 50.0  # If daily P/L > $50, protect it more aggressively
+
+    # ========== RISK WARDEN ENHANCEMENTS ==========
+    # Conviction-based position sizing tiers
+    conviction_tier_low: float = 68.0      # 68-75% conviction: half size ($500)
+    conviction_tier_mid: float = 75.0      # 75-85% conviction: full size ($1,000)
+    conviction_tier_high: float = 85.0     # 85%+ conviction: 1.5x size ($1,500)
+    position_size_half: float = 500.0      # Half position size
+    position_size_full: float = 1000.0     # Full position size
+    position_size_max: float = 1500.0      # Max position size (1.5x)
+
+    # Drawdown circuit breaker thresholds
+    drawdown_half_size_threshold: float = -150.0   # -$150 daily -> half position size
+    drawdown_halt_threshold: float = -200.0        # -$200 daily -> halt all new entries
+    consecutive_loss_days_threshold: int = 3       # 3 consecutive losing days -> half size
+
+    # Correlation guard
+    max_correlation_threshold: float = 0.80  # Block trades > 0.8 correlated with existing
 
     @classmethod
     def from_env(cls) -> "GovernorConfig":
@@ -138,6 +167,17 @@ class RiskGovernor:
         self._daily_pnl_realized = 0.0
         self._last_trade_date: Optional[str] = None
         self._win_rate_pause_active = False
+        # RISK WARDEN: Drawdown circuit breaker state
+        self._drawdown_half_size_active = False
+        self._drawdown_halt_active = False
+        self._consecutive_losing_days = 0
+        self._last_day_pnl: Optional[float] = None
+        self._last_day_date: Optional[str] = None
+        # WEAPONIZED: Daily profit target tracking
+        self._daily_pnl_peak = 0.0
+        self._profit_target_hit = False
+        self._power_hour_pnl = 0.0
+        self._power_hour_trades = 0
 
     def set_kill_switch(self, on: bool) -> None:
         """Manually halt all new trades."""
@@ -194,6 +234,11 @@ class RiskGovernor:
         if win_rate_paused:
             return False, win_rate_reason
 
+        # RISK WARDEN: Drawdown circuit breaker - halt check
+        self._update_drawdown_state(daily_pnl)
+        if self._drawdown_halt_active:
+            return False, f"CIRCUIT BREAKER: Daily loss ${daily_pnl:.0f} triggered halt (threshold: ${self.config.drawdown_halt_threshold})"
+
         if daily_pnl <= self.config.max_daily_loss:
             return False, f"Daily PnL ${daily_pnl:.0f} at or below max daily loss ${self.config.max_daily_loss:.0f}"
 
@@ -222,6 +267,12 @@ class RiskGovernor:
         if current_sector >= self.config.max_exposure_per_sector:
             return False, f"Max exposure per sector ({sector}) reached (${current_sector:.0f})"
 
+        # RISK WARDEN: Correlation guard - check if new trade too correlated with existing
+        existing_tickers = [t for t, _, _ in positions_with_cost]
+        corr_allowed, corr_reason = self.check_correlation_guard(ticker, existing_tickers)
+        if not corr_allowed:
+            return False, corr_reason
+
         # Per-engine position count: we don't track engine per position here; we only have global count.
         # So we only enforce global and exposure. Per-engine count would require executor to tag each position with engine.
         return True, "ok"
@@ -234,6 +285,167 @@ class RiskGovernor:
             TradingEngine.MACRO: self.config.max_premium_macro,
             TradingEngine.VOL_SELL: self.config.max_premium_vol_sell,
         }.get(engine, self.config.max_premium_scalper)
+
+    def compute_conviction_position_size(
+        self,
+        conviction_pct: float,
+        daily_pnl: float = 0.0,
+    ) -> float:
+        """
+        RISK WARDEN: Conviction-based position sizing with drawdown circuit breaker.
+
+        Position size tiers:
+        - 68-75% conviction: $500 (half size)
+        - 75-85% conviction: $1,000 (full size)
+        - 85%+ conviction: $1,500 (1.5x size)
+
+        Drawdown adjustments:
+        - Daily PnL < -$150: half all sizes
+        - Daily PnL < -$200: halt new entries
+        - 3 consecutive losing days: half all sizes
+
+        Args:
+            conviction_pct: Conviction score (0-100)
+            daily_pnl: Current daily realized P/L
+
+        Returns:
+            Maximum position size in dollars
+        """
+        # Check drawdown circuit breaker
+        self._update_drawdown_state(daily_pnl)
+
+        if self._drawdown_halt_active:
+            log.warning("CIRCUIT BREAKER: Drawdown halt active - no new positions")
+            return 0.0
+
+        # Base position size from conviction tier
+        if conviction_pct >= self.config.conviction_tier_high:
+            base_size = self.config.position_size_max  # $1,500
+            tier = "HIGH (1.5x)"
+        elif conviction_pct >= self.config.conviction_tier_mid:
+            base_size = self.config.position_size_full  # $1,000
+            tier = "FULL (1x)"
+        elif conviction_pct >= self.config.conviction_tier_low:
+            base_size = self.config.position_size_half  # $500
+            tier = "HALF (0.5x)"
+        else:
+            log.info(f"Conviction {conviction_pct:.0f}% below minimum {self.config.conviction_tier_low}% - no trade")
+            return 0.0
+
+        # Apply drawdown reduction if active
+        if self._drawdown_half_size_active or self._consecutive_losing_days >= self.config.consecutive_loss_days_threshold:
+            base_size = base_size / 2
+            log.warning(f"CIRCUIT BREAKER: Position size halved to ${base_size:.0f} (drawdown protection)")
+
+        log.info(f"Conviction sizing: {conviction_pct:.0f}% -> {tier} -> ${base_size:.0f}")
+        return base_size
+
+    def _update_drawdown_state(self, daily_pnl: float) -> None:
+        """Update drawdown circuit breaker state based on daily P/L."""
+        with self._lock:
+            # Check daily drawdown thresholds
+            if daily_pnl <= self.config.drawdown_halt_threshold:
+                if not self._drawdown_halt_active:
+                    self._drawdown_halt_active = True
+                    log.warning(f"CIRCUIT BREAKER ACTIVATED: Daily PnL ${daily_pnl:.2f} <= ${self.config.drawdown_halt_threshold} - HALTING ALL NEW ENTRIES")
+            elif daily_pnl <= self.config.drawdown_half_size_threshold:
+                if not self._drawdown_half_size_active:
+                    self._drawdown_half_size_active = True
+                    log.warning(f"CIRCUIT BREAKER: Daily PnL ${daily_pnl:.2f} <= ${self.config.drawdown_half_size_threshold} - HALVING POSITION SIZES")
+            else:
+                # Reset if P/L improves
+                if self._drawdown_half_size_active and daily_pnl > self.config.drawdown_half_size_threshold + 50:
+                    self._drawdown_half_size_active = False
+                    log.info("Circuit breaker half-size deactivated - P/L improved")
+
+    def update_consecutive_losing_days(self, end_of_day_pnl: float) -> None:
+        """
+        Track consecutive losing days for circuit breaker.
+        Call at end of trading day with the day's total P/L.
+        """
+        from datetime import date
+        today = date.today().isoformat()
+
+        with self._lock:
+            if self._last_day_date != today:
+                # New day - check if previous day was a loss
+                if self._last_day_pnl is not None and self._last_day_pnl < 0:
+                    self._consecutive_losing_days += 1
+                    log.warning(f"Consecutive losing days: {self._consecutive_losing_days}")
+                elif self._last_day_pnl is not None and self._last_day_pnl >= 0:
+                    self._consecutive_losing_days = 0
+                    log.info("Consecutive losing days reset after winning day")
+
+                self._last_day_pnl = end_of_day_pnl
+                self._last_day_date = today
+
+    def get_drawdown_status(self) -> Dict:
+        """Get current drawdown circuit breaker status."""
+        with self._lock:
+            return {
+                "half_size_active": self._drawdown_half_size_active,
+                "halt_active": self._drawdown_halt_active,
+                "consecutive_losing_days": self._consecutive_losing_days,
+                "daily_pnl": self._daily_pnl_realized,
+            }
+
+    def check_correlation_guard(
+        self,
+        ticker: str,
+        existing_positions: List[str],
+    ) -> Tuple[bool, str]:
+        """
+        RISK WARDEN: Correlation guard to prevent overlapping risk.
+
+        Blocks trades on assets > 0.8 correlated with existing positions.
+
+        Args:
+            ticker: Ticker to check
+            existing_positions: List of tickers currently held
+
+        Returns:
+            (allowed, reason) - False if correlation too high
+        """
+        if not existing_positions:
+            return True, "ok"
+
+        # Known high-correlation pairs (hardcoded for speed, update as needed)
+        CORRELATION_MAP = {
+            # Index ETFs - highly correlated
+            "SPY": {"QQQ": 0.92, "IWM": 0.88, "DIA": 0.95},
+            "QQQ": {"SPY": 0.92, "IWM": 0.82, "TQQQ": 0.99, "SQQQ": -0.99},
+            "IWM": {"SPY": 0.88, "QQQ": 0.82},
+            # Tech mega caps - correlated
+            "NVDA": {"AMD": 0.85, "SMCI": 0.82, "TSM": 0.78},
+            "AMD": {"NVDA": 0.85, "INTC": 0.72},
+            "AAPL": {"MSFT": 0.82, "GOOGL": 0.78},
+            "MSFT": {"AAPL": 0.82, "GOOGL": 0.80},
+            # Precious metals - highly correlated
+            "GLD": {"SLV": 0.85, "GDX": 0.82, "GDXJ": 0.80},
+            "SLV": {"GLD": 0.85, "GDX": 0.75},
+            "GDX": {"GLD": 0.82, "GDXJ": 0.95, "SLV": 0.75},
+            "GDXJ": {"GDX": 0.95, "GLD": 0.80},
+            # Energy - correlated
+            "XLE": {"USO": 0.85, "XOM": 0.88, "CVX": 0.85},
+            "USO": {"XLE": 0.85, "UNG": 0.45},
+            # Space stocks - correlated
+            "RKLB": {"ASTS": 0.75, "LUNR": 0.72},
+            "ASTS": {"RKLB": 0.75, "LUNR": 0.70},
+        }
+
+        ticker_upper = ticker.upper()
+        correlations = CORRELATION_MAP.get(ticker_upper, {})
+
+        for existing_ticker in existing_positions:
+            existing_upper = existing_ticker.upper()
+            if existing_upper in correlations:
+                corr = correlations[existing_upper]
+                if abs(corr) >= self.config.max_correlation_threshold:
+                    reason = f"CORRELATION GUARD: {ticker} has {corr:.0%} correlation with existing {existing_ticker}"
+                    log.warning(reason)
+                    return False, reason
+
+        return True, "ok"
 
     def compute_position_size(
         self,
@@ -543,7 +755,156 @@ class RiskGovernor:
         """Manually resume trading (admin override)."""
         with self._lock:
             self._win_rate_pause_active = False
+            self._profit_target_hit = False
             log.warning("WIN RATE PAUSE manually disabled - trading resumed")
+
+    # ═══════════════════════════════════════════════════════════════
+    # WEAPONIZED: Daily Profit Target and Power Hour Tracking
+    # ═══════════════════════════════════════════════════════════════
+
+    def check_profit_target(self) -> Tuple[bool, str]:
+        """
+        Check if daily profit target has been hit.
+
+        Returns (target_hit, reason).
+        """
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+
+            if self._profit_target_hit:
+                return True, f"PROFIT TARGET HIT: ${self._daily_pnl_realized:.2f} >= ${self.config.daily_profit_target:.2f} — PRESERVE GAINS"
+
+            if self._daily_pnl_realized >= self.config.daily_profit_target:
+                self._profit_target_hit = True
+                log.warning(
+                    f"PROFIT TARGET ACHIEVED: ${self._daily_pnl_realized:.2f} | "
+                    f"Stopping trading to preserve gains"
+                )
+                return True, f"PROFIT TARGET HIT: ${self._daily_pnl_realized:.2f}"
+
+            return False, ""
+
+    def check_drawdown_from_peak(self) -> Tuple[bool, str]:
+        """
+        Check if we've drawn down too much from daily peak.
+
+        Returns (should_reduce_size, reason).
+        """
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+
+            # Update peak
+            if self._daily_pnl_realized > self._daily_pnl_peak:
+                self._daily_pnl_peak = self._daily_pnl_realized
+
+            # Check drawdown from peak
+            drawdown = self._daily_pnl_peak - self._daily_pnl_realized
+            if drawdown >= self.config.max_drawdown_from_peak:
+                reason = (
+                    f"DRAWDOWN ALERT: Down ${drawdown:.2f} from peak ${self._daily_pnl_peak:.2f} | "
+                    f"Current: ${self._daily_pnl_realized:.2f} — HALF SIZE MODE"
+                )
+                log.warning(reason)
+                return True, reason
+
+            return False, ""
+
+    def record_power_hour_trade(self, pnl: float) -> None:
+        """Track power hour specific P&L."""
+        with self._lock:
+            self._power_hour_pnl += pnl
+            self._power_hour_trades += 1
+            log.info(
+                f"POWER_HOUR: Trade #{self._power_hour_trades} | "
+                f"Trade P&L: ${pnl:.2f} | Power Hour Total: ${self._power_hour_pnl:.2f}"
+            )
+
+    def check_power_hour_target(self) -> Tuple[bool, str]:
+        """
+        Check if power hour profit target has been hit.
+
+        Returns (target_hit, reason).
+        """
+        with self._lock:
+            if self._power_hour_pnl >= self.config.power_hour_target:
+                reason = (
+                    f"POWER_HOUR TARGET HIT: ${self._power_hour_pnl:.2f} >= "
+                    f"${self.config.power_hour_target:.2f} — EXIT POWER HOUR"
+                )
+                log.warning(reason)
+                return True, reason
+            return False, ""
+
+    def get_position_size_multiplier(self) -> float:
+        """
+        Get position size multiplier based on current risk state.
+
+        Returns 0.5 if drawdown from peak, 1.0 otherwise.
+        """
+        should_reduce, _ = self.check_drawdown_from_peak()
+        if should_reduce:
+            return 0.5
+        return 1.0
+
+    def can_open_new_position(self, is_blowup_mode: bool = False) -> Tuple[bool, str]:
+        """
+        Check all risk conditions before opening a new position.
+
+        Args:
+            is_blowup_mode: True if in blowup mode (different limits)
+
+        Returns (can_trade, reason).
+        """
+        # Check kill switch
+        if self._kill_switch_manual:
+            return False, "Kill switch active"
+
+        # Check profit target
+        target_hit, target_reason = self.check_profit_target()
+        if target_hit:
+            return False, target_reason
+
+        # Check consecutive loss cooldown
+        in_cooldown, cooldown_reason = self.is_in_cooldown()
+        if in_cooldown:
+            return False, cooldown_reason
+
+        # Check win rate pause
+        win_rate_paused, win_rate_reason = self.is_win_rate_pause_active()
+        if win_rate_paused:
+            return False, win_rate_reason
+
+        # Check drawdown halt
+        if self._drawdown_halt_active:
+            return False, "CIRCUIT BREAKER: Drawdown halt active"
+
+        return True, "ok"
+
+    def get_weaponized_status(self) -> Dict:
+        """Get full weaponized risk status."""
+        with self._lock:
+            self._reset_daily_stats_if_new_day()
+            return {
+                # Daily stats
+                "daily_pnl": self._daily_pnl_realized,
+                "daily_pnl_peak": self._daily_pnl_peak,
+                "daily_profit_target": self.config.daily_profit_target,
+                "profit_target_hit": self._profit_target_hit,
+                # Win/loss
+                "daily_wins": self._daily_win_count,
+                "daily_losses": self._daily_loss_count,
+                "daily_win_rate": self.get_daily_win_rate(),
+                "consecutive_losses": self._consecutive_losses,
+                # Power hour
+                "power_hour_pnl": self._power_hour_pnl,
+                "power_hour_trades": self._power_hour_trades,
+                "power_hour_target": self.config.power_hour_target,
+                # Circuit breakers
+                "drawdown_half_size": self._drawdown_half_size_active,
+                "drawdown_halt": self._drawdown_halt_active,
+                "win_rate_pause": self._win_rate_pause_active,
+                "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
+            }
 
     def sync_daily_stats_from_alpaca(self) -> dict:
         """
