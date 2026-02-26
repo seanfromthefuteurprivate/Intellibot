@@ -66,7 +66,8 @@ class AIAdvisor:
         })
 
         # System context for all requests
-        self.system_context = """You are the VM Guardian Agent for WSB Snake, a 0DTE options trading system.
+        wsb_path = os.getenv("WSB_SNAKE_PATH", "/home/ubuntu/wsb-snake")
+        self.system_context = f"""You are the VM Guardian Agent for WSB Snake, a 0DTE options trading system.
 
 Your role:
 1. Monitor system health and diagnose issues
@@ -74,11 +75,11 @@ Your role:
 3. Recommend fixes and recovery actions
 4. Help with service restarts and deployments
 
-The system runs on a DigitalOcean droplet with:
+The system runs on an AWS EC2 instance with:
 - wsb-snake.service: Main trading engine
 - wsb-dashboard.service: Dashboard API on port 8080
-- Python 3.x with venv at /root/wsb-snake/venv
-- Git repo at /root/wsb-snake
+- Python 3.x with venv at {wsb_path}/venv
+- Git repo at {wsb_path}
 
 Be concise. Provide actionable commands when possible."""
 
@@ -315,13 +316,14 @@ Provide:
         Returns:
             AIResponse with suggested commands
         """
+        wsb_path = os.getenv("WSB_SNAKE_PATH", "/home/ubuntu/wsb-snake")
         messages = [{
             "role": "user",
             "content": f"""Suggest the exact shell commands to: {task_description}
 
 Context:
-- Working directory: /root/wsb-snake
-- Python venv: /root/wsb-snake/venv
+- Working directory: {wsb_path}
+- Python venv: {wsb_path}/venv
 - Services: wsb-snake.service, wsb-dashboard.service
 
 Provide only the commands, one per line, ready to execute."""

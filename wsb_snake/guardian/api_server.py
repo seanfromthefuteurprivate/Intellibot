@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 API_PORT = int(os.getenv("GUARDIAN_API_PORT", "8888"))
 API_TOKEN = os.getenv("GUARDIAN_API_TOKEN", "")  # Optional auth token
+WSB_SNAKE_PATH = os.getenv("WSB_SNAKE_PATH", "/home/ubuntu/wsb-snake")
 
 
 class GuardianAPIHandler(BaseHTTPRequestHandler):
@@ -377,13 +378,13 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
             ("journalctl -n", "journalctl -n "),
             # File reading (safe paths only)
             ("cat /proc/", "cat /proc/"),
-            ("cat /root/wsb-snake/", "cat /root/wsb-snake/"),
+            ("cat wsb-snake/", f"cat {WSB_SNAKE_PATH}/"),
             # Git commands (read-only)
-            ("git log", "git -C /root/wsb-snake log"),
-            ("git status", "git -C /root/wsb-snake status"),
-            ("git branch", "git -C /root/wsb-snake branch"),
-            ("git rev-parse", "git -C /root/wsb-snake rev-parse"),
-            ("git diff", "git -C /root/wsb-snake diff"),
+            ("git log", f"git -C {WSB_SNAKE_PATH} log"),
+            ("git status", f"git -C {WSB_SNAKE_PATH} status"),
+            ("git branch", f"git -C {WSB_SNAKE_PATH} branch"),
+            ("git rev-parse", f"git -C {WSB_SNAKE_PATH} rev-parse"),
+            ("git diff", f"git -C {WSB_SNAKE_PATH} diff"),
             # System info
             ("free", "free"),
             ("df", "df"),
@@ -392,7 +393,7 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
             ("top -bn1", "top -bn1"),
             ("cat /etc/os-release", "cat /etc/os-release"),
             # Python in venv (safe)
-            ("python --version", "/root/wsb-snake/venv/bin/python --version"),
+            ("python --version", f"{WSB_SNAKE_PATH}/venv/bin/python --version"),
         ]
 
         is_allowed = False
@@ -418,7 +419,7 @@ class GuardianAPIHandler(BaseHTTPRequestHandler):
                 capture_output=True,
                 text=True,
                 timeout=30,
-                cwd="/root/wsb-snake"
+                cwd=WSB_SNAKE_PATH
             )
 
             self._send_json({

@@ -76,14 +76,17 @@ class HealthMonitor:
     DISK_WARNING = 80
     DISK_CRITICAL = 95
 
-    def __init__(self, repo_path: str = "/root/wsb-snake"):
+    # Default repo path - configurable via WSB_SNAKE_PATH env var
+    DEFAULT_REPO_PATH = os.getenv("WSB_SNAKE_PATH", "/home/ubuntu/wsb-snake")
+
+    def __init__(self, repo_path: str = None):
         """
         Initialize health monitor.
 
         Args:
-            repo_path: Path to the git repository
+            repo_path: Path to the git repository (defaults to WSB_SNAKE_PATH env var or /home/ubuntu/wsb-snake)
         """
-        self.repo_path = repo_path
+        self.repo_path = repo_path or self.DEFAULT_REPO_PATH
         self.last_report: Optional[HealthReport] = None
 
     def _run_command(self, cmd: List[str], timeout: int = 10) -> tuple:
