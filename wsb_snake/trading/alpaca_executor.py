@@ -844,13 +844,21 @@ No overnight risk. Fresh start tomorrow!
         logger.info(f"EXECUTOR: execute_scalp_entry called for {underlying} {direction} @ ${entry_price:.2f}")
 
         self._reset_daily_count_if_needed()
+        logger.debug(f"EXECUTOR: daily count reset done")
+
         governor = get_risk_governor()
+        logger.debug(f"EXECUTOR: got risk governor")
+
         open_positions = [p for p in self.positions.values() if p.status in (PositionStatus.OPEN, PositionStatus.PENDING)]
         open_count = len(open_positions)
+        logger.info(f"EXECUTOR: {open_count} open positions")
+
         positions_with_cost = [
             (p.symbol, p.option_symbol, p.entry_price * p.qty * 100)
             for p in open_positions
         ]
+        logger.debug(f"EXECUTOR: calling can_trade")
+
         allowed, reason = governor.can_trade(
             engine=engine,
             ticker=underlying,
@@ -859,15 +867,19 @@ No overnight risk. Fresh start tomorrow!
             daily_pnl=self.daily_pnl,
             daily_exposure_used=self.daily_exposure_used,
         )
+        logger.info(f"EXECUTOR: can_trade returned allowed={allowed}, reason={reason}")
+
         if not allowed:
             logger.warning(f"Risk governor blocked trade: {reason}")
             send_alpaca_status(f"⏸️ Risk governor: {reason}")
             return None
 
+        logger.info(f"EXECUTOR: acquiring lock")
         with self._lock:
             if open_count >= self.MAX_CONCURRENT_POSITIONS:
                 logger.warning("Max concurrent positions reached, skipping entry")
                 return None
+        logger.info(f"EXECUTOR: lock released")
 
         logger.info(f"EXECUTOR: Passed risk checks, proceeding with {underlying} {direction}")
 
