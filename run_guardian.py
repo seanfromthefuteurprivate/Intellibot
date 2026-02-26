@@ -148,6 +148,10 @@ def log_startup_config():
 
 def main():
     """Main entry point for the guardian agent."""
+    # CRITICAL: Prevent duplicate instances
+    from wsb_snake.utils.pid_lock import acquire_lock
+    _lock = acquire_lock("vm-guardian", exit_on_fail=True)
+
     logger.info("=" * 60)
     logger.info("       VM GUARDIAN AGENT - Starting")
     logger.info("=" * 60)

@@ -414,7 +414,7 @@ class HealthMonitor:
         logger.info(f"Restarting service: {service_name}")
 
         stdout, stderr, rc = self._run_command(
-            ["systemctl", "restart", f"{service_name}.service"],
+            ["sudo", "systemctl", "restart", f"{service_name}.service"],
             timeout=30
         )
 

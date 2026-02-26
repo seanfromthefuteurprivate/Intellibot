@@ -105,6 +105,10 @@ def _sleep_until_market_open_et() -> None:
 
 
 def main():
+    # CRITICAL: Prevent duplicate instances
+    from wsb_snake.utils.pid_lock import acquire_lock
+    _lock = acquire_lock("cpl-scanner", exit_on_fail=True)
+
     parser = argparse.ArgumentParser(description="CPL Jobs Day runner")
     parser.add_argument("--dry-run", action="store_true", help="Generate calls only; no DB, no Telegram")
     parser.add_argument("--broadcast", action="store_true", help="Save to DB and send alerts to Telegram")

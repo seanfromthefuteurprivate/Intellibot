@@ -43,6 +43,7 @@ from wsb_snake.execution.jobs_day_cpl import JobsDayCPL
 from wsb_snake.collectors.hydra_bridge import start_hydra_bridge, get_hydra_bridge
 from wsb_snake.engines.dual_mode_engine import get_dual_mode_engine
 from wsb_snake.engines.power_hour_protocol import start_power_hour_protocol
+from wsb_snake.utils.pid_lock import acquire_lock
 
 
 def send_startup_ping():
@@ -185,10 +186,13 @@ def run_jobs_report_tracker_once():
 
 
 def main():
+    # CRITICAL: Prevent duplicate instances
+    _lock = acquire_lock("wsb-snake-main", exit_on_fail=True)
+
     log.info("=" * 50)
     log.info("WSB SNAKE 0DTE ENGINE STARTING")
     log.info("=" * 50)
-    
+
     # Initialize database
     log.info("Initializing database...")
     init_database()

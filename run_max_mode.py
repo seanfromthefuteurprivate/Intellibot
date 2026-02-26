@@ -232,6 +232,10 @@ def is_market_open():
     return True
 
 def main():
+    # CRITICAL: Prevent duplicate instances
+    from wsb_snake.utils.pid_lock import acquire_lock
+    _lock = acquire_lock("max-mode", exit_on_fail=True)
+
     print("=" * 70)
     print("🔥🔥🔥 MAX MODE ACTIVATED - PREDATOR TRADING 🔥🔥🔥")
     print("=" * 70)

@@ -1,0 +1,21 @@
+[Unit]
+Description=WSB Snake Trading Engine
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/wsb-snake
+Environment="PATH=/home/ubuntu/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="WSB_SNAKE_PATH=/home/ubuntu/wsb-snake"
+EnvironmentFile=/home/ubuntu/wsb-snake/.env
+ExecStart=/home/ubuntu/wsb-snake/venv/bin/python -m wsb_snake.main
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wsb-snake
+
+[Install]
+WantedBy=multi-user.target
