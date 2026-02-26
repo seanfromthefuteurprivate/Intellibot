@@ -928,6 +928,53 @@ class RiskGovernor:
                 "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
             }
 
+    def sync_daily_exposure_from_alpaca(self) -> dict:
+        """
+        TIER 1 FIX: Sync daily exposure from Alpaca positions on startup.
+
+        Calculates current exposure from open positions to prevent
+        exceeding limits after restart.
+        """
+        import os
+        try:
+            import alpaca_trade_api as tradeapi
+
+            api = tradeapi.REST(
+                os.environ.get("ALPACA_API_KEY"),
+                os.environ.get("ALPACA_SECRET_KEY"),
+                os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+            )
+
+            # Get current positions
+            positions = api.list_positions()
+            total_exposure = 0.0
+            position_details = []
+
+            for pos in positions:
+                market_value = abs(float(pos.market_value))
+                total_exposure += market_value
+                position_details.append({
+                    "symbol": pos.symbol,
+                    "qty": pos.qty,
+                    "market_value": market_value,
+                })
+
+            log.info(
+                f"SYNCED DAILY EXPOSURE FROM ALPACA: ${total_exposure:.2f} "
+                f"across {len(positions)} positions"
+            )
+
+            return {
+                "total_exposure": total_exposure,
+                "position_count": len(positions),
+                "positions": position_details,
+                "synced": True,
+            }
+
+        except Exception as e:
+            log.error(f"Failed to sync daily exposure from Alpaca: {e}")
+            return {"synced": False, "error": str(e)}
+
     def sync_daily_stats_from_alpaca(self) -> dict:
         """
         Sync daily stats from Alpaca trade history on startup.

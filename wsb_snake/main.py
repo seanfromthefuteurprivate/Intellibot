@@ -44,6 +44,9 @@ from wsb_snake.collectors.hydra_bridge import start_hydra_bridge, get_hydra_brid
 from wsb_snake.engines.dual_mode_engine import get_dual_mode_engine
 from wsb_snake.engines.power_hour_protocol import start_power_hour_protocol
 from wsb_snake.utils.pid_lock import acquire_lock
+from wsb_snake.coordination.strategy_coordinator import get_strategy_coordinator
+from wsb_snake.engines.berserker_engine import get_berserker_engine
+from wsb_snake.learning.self_evolving_memory import get_self_evolving_engine
 
 
 def send_startup_ping():
@@ -141,6 +144,14 @@ def run_daily_report():
     send_daily_summary()
     # Apply weight decay for next day
     learning_memory.apply_daily_decay()
+    # Self-evolving memory: apply daily decay to Thompson Sampling distributions
+    try:
+        evolving_engine = get_self_evolving_engine()
+        evolving_engine.apply_daily_decay()
+        stats = evolving_engine.get_evolution_stats()
+        log.info(f"SELF_EVOLVING: Daily decay applied. {stats['total_lessons']} lessons, {len(stats['thompson_stats'])} strategies tracked")
+    except Exception as e:
+        log.debug(f"Self-evolving daily decay failed: {e}")
 
 
 def _jobs_report_tracker_should_run() -> bool:
@@ -196,7 +207,36 @@ def main():
     # Initialize database
     log.info("Initializing database...")
     init_database()
-    
+
+    # ============================================
+    # STRATEGY COORDINATOR - Central hub for all engines
+    # Must start BEFORE individual engines so they can register
+    # ============================================
+    log.info("Starting Strategy Coordinator...")
+    coordinator = get_strategy_coordinator()
+
+    # Set up executor callback for coordinator to execute trades
+    def coordinator_executor(ticker, direction, entry_price, target_price, stop_loss, confidence, expiry_preference, metadata):
+        """Execute trades through Alpaca executor."""
+        try:
+            position = alpaca_executor.execute_scalp_entry(
+                underlying=ticker,
+                direction=direction,
+                entry_price=entry_price,
+                target_price=target_price,
+                stop_loss=stop_loss,
+                confidence=confidence,
+                pattern=metadata.get("pattern", "COORDINATOR")
+            )
+            return position.position_id if position else None
+        except Exception as e:
+            log.error(f"Coordinator executor error: {e}")
+            return None
+
+    coordinator.set_executor(coordinator_executor)
+    coordinator.start()
+    log.info("Strategy Coordinator active - central hub for all engines")
+
     # Start ChartBrain background AI analysis
     log.info("Starting ChartBrain AI background analysis...")
     chart_brain = get_chart_brain()
@@ -205,6 +245,7 @@ def main():
     
     # Start SPY 0DTE Scalper - hawk-like monitoring for quick gains
     log.info("Starting SPY 0DTE Scalper (hawk mode)...")
+    spy_scalper.set_coordinator(coordinator)  # Register with coordinator
     spy_scalper.start()
     log.info("SPY Scalper active - watching for 15-30% scalp opportunities")
     
@@ -361,6 +402,17 @@ def main():
     except Exception as e:
         log.warning(f"Power Hour Protocol startup failed: {e}")
         power_hour = None
+
+    # BERSERKER ENGINE: Aggressive 0DTE SPX trading when GEX conditions are optimal
+    log.info("Starting BERSERKER Engine...")
+    try:
+        berserker = get_berserker_engine()
+        berserker.set_coordinator(coordinator)  # Register with coordinator
+        berserker.start()
+        log.info("BERSERKER Engine armed - watching for GEX edge opportunities (flip proximity < 0.3%)")
+    except Exception as e:
+        log.warning(f"BERSERKER Engine startup failed: {e}")
+        berserker = None
 
     # Run immediately on startup if market-appropriate
     log.info("Running initial pipeline check...")

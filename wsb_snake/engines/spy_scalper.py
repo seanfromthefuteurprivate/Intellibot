@@ -44,6 +44,9 @@ from wsb_snake.utils.session_regime import (
     get_market_regime_info,
     RegimeType,
 )
+from wsb_snake.learning.self_evolving_memory import get_self_evolving_engine
+from wsb_snake.learning.debate_consensus import get_debate_engine
+from wsb_snake.learning.introspection_engine import get_introspection_engine, PatternHealth
 
 log = get_logger(__name__)
 
@@ -241,12 +244,26 @@ class SPYScalper:
         self._classified_trades_cache: Optional[Dict] = None
         self._classified_trades_time: Optional[datetime] = None
         self._classified_trades_ttl = 30  # 30 second cache
-        
+
+        # Strategy coordinator integration (set by main.py)
+        self._coordinator = None
+
         # Initialize database table
         self._init_db()
         
         log.info("SPY 0DTE Scalper initialized - hawk mode activated")
-    
+
+    def set_coordinator(self, coordinator) -> None:
+        """Set the strategy coordinator for centralized trade coordination."""
+        self._coordinator = coordinator
+        if hasattr(coordinator, 'register_engine'):
+            coordinator.register_engine("scalper", "SPY_0DTE_SCALPER", {
+                "scan_interval": self.scan_interval,
+                "min_confidence": self.MIN_CONFIDENCE_FOR_ALERT,
+                "symbol": self.symbol,
+            })
+        log.info("SPY Scalper: Registered with strategy coordinator")
+
     def _init_db(self):
         """Initialize scalper tracking table."""
         conn = get_connection()
@@ -413,8 +430,24 @@ class SPYScalper:
             log.debug("No setups found this cycle")
             return
 
-        # Phase 2: Sort by confidence and only AI-analyze the top 1-2
-        all_setups.sort(key=lambda x: x[1].confidence, reverse=True)
+        # Phase 2: Apply Thompson Sampling boost to pattern selection
+        # This helps select patterns that have historically performed better
+        try:
+            evolving_engine = get_self_evolving_engine()
+            for ticker, setup in all_setups:
+                pattern_key = f"pattern:{setup.pattern.value}"
+                stats = evolving_engine.thompson_sampler.get_stats(pattern_key)
+                # Boost confidence based on historical win rate (max +10 points)
+                if stats.get("observations", 0) >= 5:
+                    win_rate_boost = (stats.get("mean", 0.5) - 0.5) * 20  # -10 to +10
+                    setup.pattern_memory_boost += win_rate_boost
+                    if win_rate_boost > 2:
+                        log.debug(f"THOMPSON: {ticker} {setup.pattern.value} boosted +{win_rate_boost:.1f} (win_rate={stats['mean']:.1%})")
+        except Exception as e:
+            log.debug(f"Thompson Sampling boost failed: {e}")
+
+        # Sort by confidence (including Thompson boost) and only AI-analyze the top 1-2
+        all_setups.sort(key=lambda x: x[1].confidence + x[1].pattern_memory_boost, reverse=True)
 
         # Only process top setup(s) that meet threshold
         top_setups = [(t, s) for t, s in all_setups[:2] if s.confidence >= self.MIN_CONFIDENCE_FOR_AI]
@@ -464,6 +497,39 @@ class SPYScalper:
             if setup.direction == "short" and regime_info.get("regime") == RegimeType.TREND_UP.value:
                 log.info(f"⏸️ Regime trend_up – skipping short scalp on {ticker}")
                 return
+            # ========== GATE 35: INTROSPECTION - PATTERN HEALTH CHECK ==========
+            # Evaluate if this pattern is working RIGHT NOW (not just historically)
+            try:
+                introspection = get_introspection_engine()
+                health_result = introspection.evaluate_pattern_health(
+                    pattern=setup.pattern.value,
+                    ticker=ticker
+                )
+
+                # Apply introspection adjustments
+                if health_result.recommendation == "PAUSE":
+                    log.info(f"GATE_35: {ticker} {setup.pattern.value} PAUSED - {health_result.reason}")
+                    continue  # Skip this setup entirely
+                elif health_result.recommendation == "SKIP":
+                    log.info(f"GATE_35: {ticker} {setup.pattern.value} SKIPPED (COLD) - {health_result.reason}")
+                    continue  # Skip this setup entirely
+                elif health_result.recommendation == "REDUCE_SIZE":
+                    setup.contracts = max(1, int(setup.contracts * health_result.conviction_multiplier))
+                    setup.notes += f" | INTROSPECT: {health_result.pattern_health.value} ({health_result.conviction_multiplier:.0%})"
+                    final_confidence *= health_result.conviction_multiplier  # Also reduce confidence
+                else:  # FULL_SIZE
+                    if health_result.pattern_health == PatternHealth.HOT:
+                        setup.notes += f" | INTROSPECT: HOT ({health_result.recent_win_rate:.0%} WR)"
+                        final_confidence += 3  # Small boost for hot patterns
+
+                # Regime shift warning
+                if health_result.regime_status.value in ["VOL_SPIKE", "REGIME_SHIFT"]:
+                    setup.notes += f" | ⚠️ REGIME: {health_result.regime_status.value}"
+                    final_confidence -= 5  # Penalize during regime transitions
+            except Exception as e:
+                log.debug(f"GATE_35: Introspection failed - {e}")
+            # ========== END GATE 35 ==========
+
             # Check if it meets alert threshold
             if final_confidence >= self.MIN_CONFIDENCE_FOR_ALERT:
                 log.info(f"🎯 SNIPER STRIKE on {ticker}: {setup.pattern.value} @ {final_confidence:.0f}%")
@@ -1377,14 +1443,70 @@ class SPYScalper:
             if analysis and analysis.confirmed_by:
                 setup.confidence += 5
                 setup.notes += f" | OLD_STACK GPT CONFIRMED"
-        
+
+            # ========== GATE 15: BULL/BEAR DEBATE ==========
+            # Run adversarial debate to catch traps and confirmation bias
+            try:
+                debate_engine = get_debate_engine()
+                debate_context = {
+                    "ticker": ticker,
+                    "pattern": setup.pattern.value,
+                    "direction": setup.direction,
+                    "predator_verdict": prime_verdict if prime_verdict else None,
+                    "recent_lessons": [],  # Could populate from self-evolving memory
+                    "trap_detected": prime_verdict.trap_detected if prime_verdict else "NONE",
+                    "hours_to_expiry": hours_to_expiry,
+                    "vix_regime": "NORMAL",  # Could get from VIX structure
+                }
+                debate_result = debate_engine.evaluate(setup, debate_context)
+
+                # Apply debate consensus
+                if debate_result.consensus_action == "ABORT":
+                    setup.ai_confirmed = False
+                    setup.confidence = max(0, setup.confidence - 30)
+                    setup.notes += f" | DEBATE: ABORT ({debate_result.bear_conviction:.0f}% bear)"
+                    log.info(f"GATE_15: {ticker} DEBATE ABORT - Bear={debate_result.bear_conviction:.0f}%")
+                elif debate_result.consensus_action == "REDUCE_SIZE":
+                    setup.contracts = max(1, int(setup.contracts * debate_result.confidence_multiplier))
+                    setup.notes += f" | DEBATE: REDUCE ({debate_result.confidence_multiplier:.0%})"
+                    log.info(f"GATE_15: {ticker} DEBATE REDUCE - multiplier={debate_result.confidence_multiplier:.0%}")
+                else:  # STRIKE
+                    setup.notes += f" | DEBATE: STRIKE (Bull={debate_result.bull_conviction:.0f}%)"
+                    if debate_result.debate_quality == "HIGH":
+                        setup.confidence += 3  # Small boost for high-quality consensus
+            except Exception as e:
+                log.debug(f"GATE_15: Debate failed - {e}")
+            # ========== END GATE 15 ==========
+
         except Exception as e:
             log.error(f"Predator Stack AI confirmation error: {e}")
-        
+
         return setup
     
     def _send_entry_alert(self, setup: ScalpSetup, ticker: str = "SPY"):
         """Send entry alert to Telegram and add to stalking mode."""
+        # ========== SELF-EVOLVING: Query lessons before trading ==========
+        try:
+            evolving_engine = get_self_evolving_engine()
+            lessons = evolving_engine.get_relevant_lessons({
+                "ticker": ticker,
+                "pattern": setup.pattern.value,
+                "direction": setup.direction,
+            })
+            if lessons:
+                for lesson in lessons[:2]:  # Top 2 lessons
+                    log.info(f"LESSON: {lesson['title']} - Action: {lesson['action']}")
+                    # Adjust confidence based on lessons
+                    if "tighter stops" in lesson['action'].lower():
+                        setup.stop_pct = max(0.05, setup.stop_pct * 0.8)
+                        setup.notes += f" | Lesson: tighter stops"
+                    if "smaller position" in lesson['action'].lower():
+                        setup.contracts = max(1, setup.contracts - 1)
+                        setup.notes += f" | Lesson: smaller size"
+        except Exception as e:
+            log.debug(f"Lessons query failed: {e}")
+        # ========== END SELF-EVOLVING ==========
+
         # ========== CRITICAL: CPL ALIGNMENT CHECK ==========
         # MUST verify CPL intelligence agrees with trade direction
         # This prevents executing trades that conflict with market regime
@@ -1484,24 +1606,70 @@ class SPYScalper:
         # same position with option quotes and sends alerts with option spec (strike, DTE)
         # and Entry/Exit (option premium), so the user can match to Webull's options chain.
 
-        # Execute REAL paper trade on Alpaca
+        # Execute trade through coordinator (if available) or direct to Alpaca
         total_confidence = setup.confidence + setup.pattern_memory_boost + setup.time_quality_score
-        try:
-            alpaca_position = alpaca_executor.execute_scalp_entry(
-                underlying=ticker,
-                direction=setup.direction,
-                entry_price=setup.entry_price,
-                target_price=setup.target_price,
-                stop_loss=setup.stop_loss,
-                confidence=total_confidence,
-                pattern=setup.pattern.value
-            )
-            if alpaca_position:
-                log.info(f"📈 Alpaca paper trade placed for {ticker}: {alpaca_position.option_symbol}")
-            else:
-                log.warning(f"Alpaca paper trade not placed for {ticker} (max positions or error)")
-        except Exception as e:
-            log.error(f"Alpaca execution error: {e}")
+        executed_via_coordinator = False
+
+        # Route through coordinator for centralized conflict detection
+        if self._coordinator:
+            try:
+                from wsb_snake.coordination.strategy_coordinator import TradeRequest
+                request = TradeRequest(
+                    request_id=f"scalp_{ticker}_{datetime.utcnow().strftime('%H%M%S')}",
+                    engine="scalper",
+                    ticker=ticker,
+                    direction=setup.direction,
+                    entry_price=setup.entry_price,
+                    target_price=setup.target_price,
+                    stop_loss=setup.stop_loss,
+                    confidence=total_confidence,
+                    pattern=setup.pattern.value,
+                    priority=3,  # Scalper priority
+                    expiry_preference="0dte",
+                    metadata={
+                        "vwap": setup.vwap,
+                        "volume_ratio": setup.volume_ratio,
+                        "momentum": setup.momentum,
+                        "ai_confirmed": setup.ai_confirmed,
+                    },
+                )
+                response = self._coordinator.submit_trade_request(request)
+
+                if response.executed:
+                    log.info(f"📈 Coordinator executed trade for {ticker}: {response.position_id}")
+                    executed_via_coordinator = True
+                elif response.queued:
+                    log.info(f"📋 Trade queued by coordinator: position {response.queue_position}")
+                    executed_via_coordinator = True  # Don't double-execute
+                elif not response.approved:
+                    log.warning(f"🚫 Coordinator blocked trade: {response.reason}")
+                    return  # Coordinator actively blocked - don't execute
+                elif response.coordinator_error:
+                    log.warning(f"Coordinator error: {response.reason} - will fall back to direct")
+                else:
+                    log.warning(f"Coordinator returned unexpected response: {response.reason}")
+
+            except Exception as e:
+                log.error(f"Coordinator error - falling back to direct execution: {e}")
+
+        # Direct execution (fallback if coordinator failed or not available)
+        if not executed_via_coordinator:
+            try:
+                alpaca_position = alpaca_executor.execute_scalp_entry(
+                    underlying=ticker,
+                    direction=setup.direction,
+                    entry_price=setup.entry_price,
+                    target_price=setup.target_price,
+                    stop_loss=setup.stop_loss,
+                    confidence=total_confidence,
+                    pattern=setup.pattern.value
+                )
+                if alpaca_position:
+                    log.info(f"📈 Alpaca paper trade placed for {ticker}: {alpaca_position.option_symbol}")
+                else:
+                    log.warning(f"Alpaca paper trade not placed for {ticker} (max positions or error)")
+            except Exception as e:
+                log.error(f"Alpaca execution error: {e}")
         
         # Record in history
         self._record_signal(setup)

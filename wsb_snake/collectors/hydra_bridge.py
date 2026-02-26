@@ -543,6 +543,25 @@ def get_regime_adjustment() -> float:
     return bridge.get_conviction_adjustment()
 
 
+def get_hydra_predator_raw() -> Optional[Dict]:
+    """
+    Get raw HYDRA /api/predator response for advanced analysis.
+
+    Used by BERSERKER engine for GEX calculator integration.
+
+    Usage:
+        from wsb_snake.collectors.hydra_bridge import get_hydra_predator_raw
+        raw = get_hydra_predator_raw()
+        if raw:
+            gex_data = raw.get('gex', {})
+    """
+    bridge = get_hydra_bridge()
+    intel = bridge.get_intel()
+    if intel.connected and intel.raw_data:
+        return intel.raw_data
+    return None
+
+
 def send_trade_feedback(
     ticker: str,
     direction: str,

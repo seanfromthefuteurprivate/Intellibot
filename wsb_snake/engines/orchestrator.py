@@ -70,22 +70,48 @@ from wsb_snake.engines.spy_scalper import spy_scalper
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.utils.cpl_gate import check as cpl_check, block_trade as cpl_block
 from wsb_snake.config import ZERO_DTE_UNIVERSE
+from wsb_snake.execution.predator_prime import get_predator_prime
+from wsb_snake.learning.advanced_gates import (
+    get_drawdown_velocity_monitor,
+    get_hydra_booster,
+    get_approval_gate,
+    get_test_time_reasoner,
+)
 
 
 class SnakeOrchestrator:
     """
     Orchestrates the complete 0DTE signal pipeline.
     """
-    
+
     # Alert thresholds
     A_PLUS_THRESHOLD = 85
     A_THRESHOLD = 70
     B_THRESHOLD = 50
-    
+
     def __init__(self):
         self.last_scan_time: Optional[datetime] = None
         self.alerts_sent_today: Dict[str, datetime] = {}
         self.alert_cooldown_minutes = 30  # Don't spam same ticker
+
+        # TIER 1: Strategy coordinator integration
+        self._coordinator = None
+
+        # TIER 1-3: Advanced gates
+        self._velocity_monitor = get_drawdown_velocity_monitor()
+        self._hydra_booster = get_hydra_booster()
+        self._approval_gate = get_approval_gate()
+        self._tot_reasoner = get_test_time_reasoner()
+
+    def set_coordinator(self, coordinator) -> None:
+        """Set the strategy coordinator for centralized trade coordination."""
+        self._coordinator = coordinator
+        if hasattr(coordinator, 'register_engine'):
+            coordinator.register_engine("orchestrator", "ORCHESTRATOR_PIPELINE", {
+                "scan_interval": 600,  # 10 minutes
+                "min_confidence": self.A_THRESHOLD,
+            })
+        log.info("Orchestrator: Registered with strategy coordinator")
     
     def run_full_pipeline(self) -> Dict:
         """
@@ -1043,7 +1069,7 @@ _Urgency: {alert.urgency}/5_
                             entry_price = prob.get("entry_price") or prob.get("price", 0)
                             direction_raw = prob.get("direction", "long")
                             direction = "long" if direction_raw in ["bullish", "long", "calls"] else "short"
-                            
+
                             # Calculate targets based on direction
                             if direction == "long":
                                 target = entry_price * 1.004  # 0.4% target
@@ -1051,25 +1077,110 @@ _Urgency: {alert.urgency}/5_
                             else:
                                 target = entry_price * 0.996
                                 stop = entry_price * 1.003
-                            
+
                             confidence = score  # Use probability score as confidence
-                            
+
                             try:
                                 if entry_price > 0:
                                     # CPL GATE - Check alignment before execution
                                     cpl_ok, cpl_reason = cpl_check(ticker, direction)
                                     if not cpl_ok:
                                         cpl_block(ticker, direction, cpl_reason)
-                                    else:
-                                        log.info(f"✅ CPL GATE PASSED: {ticker} - {cpl_reason}")
-                                        # Only execute if CPL passed
+                                        continue
+
+                                    log.info(f"✅ CPL GATE PASSED: {ticker} - {cpl_reason}")
+
+                                    # TIER 1: Check velocity monitor
+                                    vel_halt, vel_reason, vel_mult = self._velocity_monitor.check_velocity_halt()
+                                    if vel_halt:
+                                        log.warning(f"🚫 VELOCITY HALT: {ticker} - {vel_reason}")
+                                        continue
+
+                                    # TIER 2: HYDRA signal boosting
+                                    boosted_conf, hydra_reason, hydra_data = self._hydra_booster.get_boost(
+                                        ticker, direction, confidence
+                                    )
+                                    log.info(f"HYDRA: {ticker} {hydra_reason}")
+
+                                    # TIER 2: Test-time reasoning (3 paths)
+                                    tot_execute, tot_paths, tot_rec = self._tot_reasoner.evaluate_paths(
+                                        ticker=ticker,
+                                        direction=direction,
+                                        entry_price=entry_price,
+                                        target_pct=0.004,
+                                        stop_pct=0.003,
+                                        hours_to_expiry=4.0,
+                                        context={
+                                            "ai_confidence": boosted_conf,
+                                            "hydra_aligned": hydra_data.get("available", False),
+                                            "pattern_win_rate": 0.6,
+                                        }
+                                    )
+
+                                    # TIER 2: Trade approval gate
+                                    approval = self._approval_gate.evaluate(
+                                        ticker=ticker,
+                                        direction=direction,
+                                        base_confidence=boosted_conf,
+                                        checks={
+                                            "ai": {"confirmed": boosted_conf > 70, "confidence": boosted_conf},
+                                            "hydra": {"boost": boosted_conf - confidence},
+                                            "tot": {"should_execute": tot_execute, "ev": 0.02},
+                                            "risk": {"can_trade": True},
+                                            "velocity": {"halt": vel_halt, "multiplier": vel_mult},
+                                        }
+                                    )
+
+                                    if not approval.approved:
+                                        log.warning(f"🚫 APPROVAL GATE: {ticker} - {approval.reason}")
+                                        continue
+
+                                    # TIER 1: Route through coordinator if available
+                                    executed_via_coordinator = False
+                                    if self._coordinator:
+                                        try:
+                                            from wsb_snake.coordination.strategy_coordinator import TradeRequest
+                                            request = TradeRequest(
+                                                request_id=f"orch_{ticker}_{datetime.utcnow().strftime('%H%M%S')}",
+                                                engine="orchestrator",
+                                                ticker=ticker,
+                                                direction=direction,
+                                                entry_price=entry_price,
+                                                target_price=target,
+                                                stop_loss=stop,
+                                                confidence=approval.confidence,
+                                                pattern=f"orchestrator_{family_name}",
+                                                priority=4,  # Orchestrator priority
+                                                metadata={
+                                                    "family": family_name,
+                                                    "hydra_boost": boosted_conf - confidence,
+                                                    "tot_approved": tot_execute,
+                                                },
+                                            )
+                                            response = self._coordinator.submit_trade_request(request)
+
+                                            if response.executed:
+                                                log.info(f"📈 Coordinator executed: {ticker} -> {response.position_id}")
+                                                results["paper_trades"] += 1
+                                                executed_via_coordinator = True
+                                            elif response.queued:
+                                                log.info(f"📋 Trade queued: position {response.queue_position}")
+                                                executed_via_coordinator = True
+                                            elif not response.approved:
+                                                log.warning(f"🚫 Coordinator blocked: {response.reason}")
+                                                continue
+                                        except Exception as e:
+                                            log.error(f"Coordinator error - falling back to direct: {e}")
+
+                                    # Direct execution fallback
+                                    if not executed_via_coordinator:
                                         alpaca_position = alpaca_executor.execute_scalp_entry(
                                             underlying=ticker,
                                             direction=direction,
                                             entry_price=entry_price,
                                             target_price=target,
                                             stop_loss=stop,
-                                            confidence=confidence,
+                                            confidence=approval.confidence,
                                             pattern=f"orchestrator_{family_name}"
                                         )
                                         if alpaca_position:

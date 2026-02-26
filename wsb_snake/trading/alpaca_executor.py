@@ -22,6 +22,9 @@ from wsb_snake.trading.risk_governor import (
 )
 from wsb_snake.trading.outcome_recorder import outcome_recorder
 from wsb_snake.collectors.vix_structure import vix_structure
+from wsb_snake.learning.self_evolving_memory import record_trade_for_learning
+from wsb_snake.learning.introspection_engine import get_introspection_engine
+from wsb_snake.learning.debate_consensus import get_debate_engine
 
 logger = get_logger(__name__)
 
@@ -67,6 +70,7 @@ class AlpacaPosition:
     engine: str = "scalper"  # scalper | momentum | macro – for trim-and-hold
     trimmed: bool = False  # True after partial exit at +50%
     signal_id: Optional[int] = None  # Links to signals table for learning
+    pattern: str = ""  # Pattern that triggered this trade (for self-evolving learning)
 
     def option_spec_line(self) -> str:
         """
@@ -1197,6 +1201,7 @@ Confidence: {confidence:.0f}%
             alpaca_order_id=order.get("id"),
             engine=engine.value,
             signal_id=signal_id,
+            pattern=pattern,  # Store pattern for self-evolving learning
         )
         
         with self._lock:
@@ -1310,6 +1315,52 @@ Reason: {reason}
             )
         except Exception as e:
             logger.error(f"Failed to record outcome: {e}")
+
+        # SELF-EVOLVING MEMORY: Record trade for Thompson Sampling + Lessons Learning
+        try:
+            hold_minutes = int((position.exit_time - position.entry_time).total_seconds() / 60) if position.entry_time else 0
+            direction = "long" if position.trade_type == "CALLS" else "short"
+            # Use stored pattern or fall back to engine name
+            pattern = position.pattern if position.pattern else position.engine
+
+            record_trade_for_learning(
+                ticker=position.symbol,
+                pattern=pattern,
+                strategy=position.engine,
+                direction=direction,
+                pnl_pct=position.pnl_pct,
+                hold_time_minutes=hold_minutes,
+                exit_reason=reason,
+                entry_price=position.entry_price,
+                exit_price=current_price,
+            )
+            logger.debug(f"SELF_EVOLVING: Recorded {position.symbol} trade for learning")
+        except Exception as e:
+            logger.debug(f"Self-evolving memory record failed: {e}")
+
+        # GATE 35: INTROSPECTION - Record outcome for pattern health tracking
+        try:
+            introspection = get_introspection_engine()
+            pattern = position.pattern if position.pattern else position.engine
+            introspection.record_trade_outcome(
+                pattern=pattern,
+                ticker=position.symbol,
+                pnl_pct=position.pnl_pct
+            )
+            logger.debug(f"GATE_35: Recorded {position.symbol} outcome for introspection")
+        except Exception as e:
+            logger.debug(f"Introspection record failed: {e}")
+
+        # GATE 15: DEBATE - Record outcome to track bull/bear accuracy
+        try:
+            debate = get_debate_engine()
+            debate.record_outcome(
+                ticker=position.symbol,
+                pnl_pct=position.pnl_pct
+            )
+            logger.debug(f"GATE_15: Recorded {position.symbol} outcome for debate learning")
+        except Exception as e:
+            logger.debug(f"Debate record failed: {e}")
 
         # HYDRA FEEDBACK: Send trade result to HYDRA for learning
         try:
