@@ -155,7 +155,9 @@ class RiskGovernor:
     def __init__(self, config: Optional[GovernorConfig] = None):
         self.config = config or GovernorConfig.from_env()
         self._kill_switch_manual = False
-        self._lock = threading.Lock()
+        # CRITICAL: Use RLock (reentrant) because some methods call other lock-acquiring methods
+        # e.g., is_win_rate_pause_active() -> get_daily_win_rate()
+        self._lock = threading.RLock()
         # HYDRA-style consecutive loss tracking
         self._consecutive_losses = 0
         self._cooldown_until: Optional[datetime] = None
