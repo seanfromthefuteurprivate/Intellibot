@@ -47,6 +47,11 @@ from wsb_snake.utils.session_regime import (
 from wsb_snake.learning.self_evolving_memory import get_self_evolving_engine
 from wsb_snake.learning.debate_consensus import get_debate_engine
 from wsb_snake.learning.introspection_engine import get_introspection_engine, PatternHealth
+# VENOM: Wire ALL idle components
+from wsb_snake.learning.specialist_swarm import get_specialist_swarm
+from wsb_snake.learning.trade_graph import get_trade_graph
+from wsb_snake.learning.trading_thesis import create_thesis_from_setup, TradingThesis
+from wsb_snake.learning.semantic_memory import get_semantic_memory
 
 log = get_logger(__name__)
 
@@ -1485,6 +1490,120 @@ class SPYScalper:
     
     def _send_entry_alert(self, setup: ScalpSetup, ticker: str = "SPY"):
         """Send entry alert to Telegram and add to stalking mode."""
+
+        # ========== VENOM: WIRE ALL IDLE COMPONENTS ==========
+
+        # 1. TRADING THESIS: Build structured thesis for this trade
+        thesis = None
+        try:
+            thesis = create_thesis_from_setup(
+                ticker=ticker,
+                pattern=setup.pattern.value,
+                direction=setup.direction,
+                entry_price=setup.entry_price,
+                confidence=setup.confidence,
+                vwap=setup.vwap,
+                volume_ratio=setup.volume_ratio,
+                momentum=setup.momentum,
+            )
+            log.info(f"THESIS: {ticker} {thesis.direction} | Evidence: {len(thesis.evidence)} items | Risk: {len(thesis.risks)} factors")
+            setup.notes += f" | THESIS: {thesis.confidence_level.value}"
+        except Exception as e:
+            log.debug(f"Trading thesis failed: {e}")
+
+        # 2. TRADE GRAPH: Query similar historical conditions
+        try:
+            trade_graph = get_trade_graph()
+            similar = trade_graph.find_similar_conditions(
+                ticker=ticker,
+                pattern=setup.pattern.value,
+                direction=setup.direction,
+                vwap_position="above" if setup.entry_price > setup.vwap else "below",
+                volume_ratio=setup.volume_ratio,
+            )
+            if similar:
+                avg_return = sum(t.get('pnl_pct', 0) for t in similar) / len(similar)
+                win_count = sum(1 for t in similar if t.get('pnl_pct', 0) > 0)
+                win_rate = win_count / len(similar) if similar else 0
+
+                log.info(f"TRADE_GRAPH: {len(similar)} similar trades | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
+
+                if avg_return < -5:
+                    # Historical losers - reduce size
+                    setup.contracts = max(1, setup.contracts - 1)
+                    setup.notes += f" | GRAPH: Historically loses ({avg_return:+.1f}%)"
+                    log.warning(f"TRADE_GRAPH: Reducing size - similar setups average {avg_return:+.1f}%")
+                elif avg_return > 10 and win_rate > 0.6:
+                    # Historical winners - boost confidence
+                    setup.confidence += 5
+                    setup.notes += f" | GRAPH: Historically wins ({avg_return:+.1f}%)"
+                    log.info(f"TRADE_GRAPH: Boosting confidence - similar setups average {avg_return:+.1f}%")
+        except Exception as e:
+            log.debug(f"Trade graph query failed: {e}")
+
+        # 3. SPECIALIST SWARM: Get votes from 12 legendary investor personas
+        swarm_approved = True
+        try:
+            swarm = get_specialist_swarm()
+            swarm_result = swarm.evaluate(
+                ticker=ticker,
+                direction=setup.direction,
+                pattern=setup.pattern.value,
+                entry_price=setup.entry_price,
+                confidence=setup.confidence,
+                thesis=thesis,
+            )
+
+            if swarm_result:
+                consensus = swarm_result.consensus
+                log.info(
+                    f"SWARM: {consensus.action} | Bull: {consensus.bull_votes}/{consensus.total_votes} | "
+                    f"Bears: {[p.persona.value for p in swarm_result.analyses if p.direction == 'BEARISH'][:3]}"
+                )
+
+                if consensus.action == "ABORT":
+                    swarm_approved = False
+                    setup.notes += f" | SWARM: ABORT ({consensus.bull_votes}/{consensus.total_votes})"
+                    log.warning(f"SWARM ABORT: Only {consensus.bull_votes}/{consensus.total_votes} bulls")
+                elif consensus.action == "REDUCE":
+                    setup.contracts = max(1, int(setup.contracts * 0.5))
+                    setup.notes += f" | SWARM: REDUCE ({consensus.confidence_pct:.0f}%)"
+                else:
+                    setup.notes += f" | SWARM: GO ({consensus.confidence_pct:.0f}%)"
+
+                # Log notable persona opinions
+                for analysis in swarm_result.analyses[:3]:
+                    log.info(f"  {analysis.persona.value}: {analysis.direction} - {analysis.reasoning[:50]}...")
+        except Exception as e:
+            log.debug(f"Specialist swarm failed: {e}")
+
+        # If swarm says ABORT, don't trade
+        if not swarm_approved:
+            log.warning(f"🚫 TRADE BLOCKED BY SPECIALIST SWARM: {ticker} {setup.direction}")
+            return
+
+        # 4. SEMANTIC MEMORY: Query for similar past conditions
+        try:
+            semantic = get_semantic_memory()
+            semantic_result = semantic.query_similar(
+                ticker=ticker,
+                pattern=setup.pattern.value,
+                direction=setup.direction,
+                hour=datetime.now().hour,
+            )
+            if semantic_result and semantic_result.similar_trades:
+                best_match = semantic_result.similar_trades[0]
+                log.info(f"SEMANTIC: {len(semantic_result.similar_trades)} similar | Best: {best_match.similarity:.0%} match")
+
+                # Apply learned rules
+                for rule in semantic_result.applicable_rules[:2]:
+                    log.info(f"SEMANTIC RULE: {rule.rule} (confidence: {rule.confidence:.0%})")
+                    if "avoid" in rule.rule.lower() or "don't" in rule.rule.lower():
+                        setup.confidence -= 5
+                        setup.notes += f" | SEMANTIC: {rule.rule[:30]}..."
+        except Exception as e:
+            log.debug(f"Semantic memory failed: {e}")
+
         # ========== SELF-EVOLVING: Query lessons before trading ==========
         try:
             evolving_engine = get_self_evolving_engine()
@@ -1505,7 +1624,7 @@ class SPYScalper:
                         setup.notes += f" | Lesson: smaller size"
         except Exception as e:
             log.debug(f"Lessons query failed: {e}")
-        # ========== END SELF-EVOLVING ==========
+        # ========== END VENOM COMPONENT WIRING ==========
 
         # ========== CRITICAL: CPL ALIGNMENT CHECK ==========
         # MUST verify CPL intelligence agrees with trade direction

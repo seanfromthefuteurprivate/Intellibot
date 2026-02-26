@@ -57,70 +57,98 @@ DEFAULT_SECTOR = "other"
 class GovernorConfig:
     """Configurable limits (can be overridden via env)."""
     # ═══════════════════════════════════════════════════════════════
-    # DAILY P&L TARGETS AND RISK LIMITS (WEAPONIZED)
+    # VENOM COMPOUNDING MODE - PERCENTAGE BASED EVERYTHING
+    # From $5K -> $50K+ requires aggressive reinvestment
     # ═══════════════════════════════════════════════════════════════
 
-    # Kill switch - JP MORGAN GRADE (tighter controls)
-    max_daily_loss: float = -300.0  # Stop at -$300 (kill switch)
+    # Kill switch - PERCENTAGE BASED (not flat dollar)
+    max_daily_loss_pct: float = 0.20  # Stop at -20% of account (not flat $300)
     kill_switch_manual: bool = False  # Set True to force halt
 
-    # Daily profit targets (paper trading - adjust for live)
-    daily_profit_target: float = 500.0  # Stop trading after hitting $500
-    power_hour_target: float = 300.0    # Power hour contributes $300 of $500
-    max_drawdown_from_peak: float = 200.0  # If we drop $200 from daily high, half size
+    # Daily profit targets - COMPOUND OR DIE
+    daily_profit_target_pct: float = 0.15  # Target +15% daily (aggressive compounding)
+    power_hour_target_pct: float = 0.10    # Power hour contributes 10%
+    max_drawdown_from_peak_pct: float = 0.10  # If we drop 10% from daily high, half size
 
     # Global position limits
-    max_concurrent_positions_global: int = 3  # Reduce correlation risk (scalp mode)
-    max_concurrent_positions_blowup: int = 2  # In blowup mode (size is 2x)
-    max_daily_exposure_global: float = 4000.0  # $4k daily max
-    max_total_exposure_pct: float = 0.25  # Max 25% of buying power
-    max_single_position: float = 2000.0  # Max $2k even in blowup mode
+    max_concurrent_positions_global: int = 4  # Allow 4 positions (more action)
+    max_concurrent_positions_blowup: int = 2  # In blowup mode (size is 3x)
+    max_daily_exposure_pct: float = 0.80  # 80% of account can be deployed daily
+    max_total_exposure_pct: float = 0.40  # Max 40% at any one time
+    max_single_position_pct: float = 0.25  # Max 25% per position
 
     # Per-engine position limits
-    max_positions_scalper: int = 2  # Focus on quality, not quantity
-    max_positions_momentum: int = 1
+    max_positions_scalper: int = 3  # More scalps = more compounding
+    max_positions_momentum: int = 2
     max_positions_macro: int = 1
     max_positions_vol_sell: int = 1
 
-    # Per-ticker / per-sector exposure (dollars)
-    max_exposure_per_ticker: float = 1000.0  # Max $1k per ticker
-    max_exposure_per_sector: float = 2000.0  # Max $2k per sector
+    # Per-ticker / per-sector exposure (percentage of account)
+    max_exposure_per_ticker_pct: float = 0.25  # Max 25% per ticker
+    max_exposure_per_sector_pct: float = 0.40  # Max 40% per sector
 
-    # Position sizing: max premium per trade by engine (base before confidence/vol scaling)
-    max_premium_scalper: float = 1000.0   # $1k max for 0DTE
-    max_premium_momentum: float = 800.0   # $800 for momentum
-    max_premium_macro: float = 1500.0     # $1.5k for LEAPS
-    max_premium_vol_sell: float = 1000.0  # $1k for vol selling
+    # Position sizing: max premium per trade by engine (% of buying power)
+    max_premium_scalper_pct: float = 0.20   # 20% max for 0DTE
+    max_premium_momentum_pct: float = 0.15  # 15% for momentum
+    max_premium_macro_pct: float = 0.25     # 25% for LEAPS
+    max_premium_vol_sell_pct: float = 0.15  # 15% for vol selling
 
     # Account cap: max % of buying power per trade
-    max_pct_buying_power_per_trade: float = 0.05  # 5% (was 10%)
+    max_pct_buying_power_per_trade: float = 0.20  # 20% (AGGRESSIVE)
 
-    # Consecutive loss cooldown - HYDRA standard
-    consecutive_loss_threshold: int = 3  # 3 losses triggers cooldown
-    cooldown_hours: float = 4.0  # 4 hour pause after consecutive losses
+    # Consecutive loss cooldown - SHORTER for compounding
+    consecutive_loss_threshold: int = 4  # 4 losses triggers cooldown (was 3)
+    cooldown_hours: float = 2.0  # 2 hour pause (was 4)
 
-    # WIN RATE PRESERVATION - Preserve daily profits
-    min_daily_win_rate: float = 0.75  # 75% - stop trading if win rate drops below
-    min_trades_for_win_rate_check: int = 2  # Need at least 2 trades before enforcing
-    high_vol_exception_vix: float = 25.0  # VIX > 25 allows trading even with low win rate
-    preserve_profit_threshold: float = 50.0  # If daily P/L > $50, protect it more aggressively
+    # WIN RATE PRESERVATION - Still important
+    min_daily_win_rate: float = 0.60  # 60% (lowered from 75% - let winners run)
+    min_trades_for_win_rate_check: int = 3  # Need 3 trades before enforcing
+    high_vol_exception_vix: float = 30.0  # VIX > 30 allows trading (raised)
+    preserve_profit_threshold_pct: float = 0.05  # Protect when up 5%+
 
-    # ========== RISK WARDEN ENHANCEMENTS ==========
-    # Conviction-based position sizing tiers
-    conviction_tier_low: float = 68.0      # 68-75% conviction: half size ($500)
-    conviction_tier_mid: float = 75.0      # 75-85% conviction: full size ($1,000)
-    conviction_tier_high: float = 85.0     # 85%+ conviction: 1.5x size ($1,500)
-    position_size_half: float = 500.0      # Half position size
-    position_size_full: float = 1000.0     # Full position size
-    position_size_max: float = 1500.0      # Max position size (1.5x)
+    # ========== VENOM COMPOUNDING ENHANCEMENTS ==========
+    # Conviction-based position sizing tiers (% of account)
+    conviction_tier_low: float = 65.0      # 65-75% conviction: 10% of account
+    conviction_tier_mid: float = 75.0      # 75-85% conviction: 15% of account
+    conviction_tier_high: float = 85.0     # 85%+ conviction: 20% of account
+    position_pct_low: float = 0.10         # 10% of account
+    position_pct_mid: float = 0.15         # 15% of account
+    position_pct_high: float = 0.20        # 20% of account
 
-    # Drawdown circuit breaker thresholds
-    drawdown_half_size_threshold: float = -150.0   # -$150 daily -> half position size
-    drawdown_halt_threshold: float = -200.0        # -$200 daily -> halt all new entries
-    consecutive_loss_days_threshold: int = 3       # 3 consecutive losing days -> half size
+    # COMPOUNDING MULTIPLIERS - Size up after wins, down after losses
+    win_streak_multiplier: float = 1.25    # +25% size after each win (up to 2x)
+    loss_streak_divisor: float = 0.50      # -50% size after loss
+    max_win_streak_multiplier: float = 2.0  # Cap at 2x
+    reinvest_profit_pct: float = 0.50      # Reinvest 50% of daily gains
+
+    # Drawdown circuit breaker thresholds (PERCENTAGE)
+    drawdown_half_size_threshold_pct: float = 0.10  # -10% daily -> half position size
+    drawdown_halt_threshold_pct: float = 0.15       # -15% daily -> halt all new entries
+    consecutive_loss_days_threshold: int = 2        # 2 consecutive losing days -> half size
 
     # Correlation guard
-    max_correlation_threshold: float = 0.80  # Block trades > 0.8 correlated with existing
+    max_correlation_threshold: float = 0.85  # Allow slightly more correlation for compounding
+
+    # ========== LEGACY FLAT DOLLAR FALLBACKS (for backwards compat) ==========
+    # These are calculated from percentages at runtime based on account size
+    max_daily_loss: float = -1000.0  # Will be overridden by percentage
+    daily_profit_target: float = 750.0
+    power_hour_target: float = 500.0
+    max_drawdown_from_peak: float = 500.0
+    max_daily_exposure_global: float = 4000.0
+    max_single_position: float = 1250.0
+    max_exposure_per_ticker: float = 1250.0
+    max_exposure_per_sector: float = 2000.0
+    max_premium_scalper: float = 1000.0
+    max_premium_momentum: float = 750.0
+    max_premium_macro: float = 1250.0
+    max_premium_vol_sell: float = 750.0
+    position_size_half: float = 500.0
+    position_size_full: float = 750.0
+    position_size_max: float = 1000.0
+    drawdown_half_size_threshold: float = -500.0
+    drawdown_halt_threshold: float = -750.0
+    preserve_profit_threshold: float = 250.0
 
     @classmethod
     def from_env(cls) -> "GovernorConfig":
@@ -160,6 +188,7 @@ class RiskGovernor:
         self._lock = threading.RLock()
         # HYDRA-style consecutive loss tracking
         self._consecutive_losses = 0
+        self._consecutive_wins = 0  # VENOM: Track win streaks for compounding
         self._cooldown_until: Optional[datetime] = None
         self._win_count = 0
         self._loss_count = 0
@@ -180,6 +209,9 @@ class RiskGovernor:
         self._profit_target_hit = False
         self._power_hour_pnl = 0.0
         self._power_hour_trades = 0
+        # VENOM COMPOUNDING: Track account size and streak multiplier
+        self._account_size: float = 5000.0  # Default starting account
+        self._current_streak_multiplier: float = 1.0
 
     def set_kill_switch(self, on: bool) -> None:
         """Manually halt all new trades."""
@@ -349,6 +381,120 @@ class RiskGovernor:
 
         log.info(f"Conviction sizing: {conviction_pct:.0f}% -> {tier} -> ${base_size:.0f}")
         return base_size
+
+    def compute_venom_position_size(
+        self,
+        conviction_pct: float,
+        buying_power: float,
+        daily_pnl: float = 0.0,
+    ) -> float:
+        """
+        VENOM COMPOUNDING: Percentage-based position sizing with streak multipliers.
+
+        Position size = account % based on conviction, multiplied by streak factor.
+        - After wins: size UP (1.25x per win, max 2x)
+        - After losses: size DOWN (0.5x)
+        - Reinvest 50% of daily profits
+
+        Args:
+            conviction_pct: Conviction score (0-100)
+            buying_power: Current buying power
+            daily_pnl: Current daily realized P/L
+
+        Returns:
+            Maximum position size in dollars
+        """
+        with self._lock:
+            # Update account size with daily profits (reinvest portion)
+            if daily_pnl > 0:
+                reinvest_amount = daily_pnl * self.config.reinvest_profit_pct
+                effective_account = buying_power + reinvest_amount
+            else:
+                effective_account = buying_power
+
+            # Check drawdown circuit breakers (percentage-based)
+            daily_pnl_pct = daily_pnl / buying_power if buying_power > 0 else 0
+
+            if daily_pnl_pct <= -self.config.drawdown_halt_threshold_pct:
+                log.warning(f"CIRCUIT BREAKER: Daily loss {daily_pnl_pct:.1%} - HALT")
+                return 0.0
+
+            # Base position size from conviction tier (% of account)
+            if conviction_pct >= self.config.conviction_tier_high:
+                base_pct = self.config.position_pct_high  # 20%
+                tier = "HIGH (20%)"
+            elif conviction_pct >= self.config.conviction_tier_mid:
+                base_pct = self.config.position_pct_mid  # 15%
+                tier = "MID (15%)"
+            elif conviction_pct >= self.config.conviction_tier_low:
+                base_pct = self.config.position_pct_low  # 10%
+                tier = "LOW (10%)"
+            else:
+                log.info(f"Conviction {conviction_pct:.0f}% below minimum {self.config.conviction_tier_low}% - no trade")
+                return 0.0
+
+            base_size = effective_account * base_pct
+
+            # Apply streak multiplier (SIZE UP AFTER WINS)
+            streak_adjusted = base_size * self._current_streak_multiplier
+
+            # Apply drawdown reduction if active
+            if daily_pnl_pct <= -self.config.drawdown_half_size_threshold_pct:
+                streak_adjusted = streak_adjusted / 2
+                log.warning(f"DRAWDOWN PROTECTION: Position halved to ${streak_adjusted:.0f}")
+
+            # Cap at max single position
+            max_position = effective_account * self.config.max_single_position_pct
+            final_size = min(streak_adjusted, max_position)
+
+            log.info(
+                f"VENOM SIZE: {conviction_pct:.0f}% -> {tier} | "
+                f"Base: ${base_size:.0f} x {self._current_streak_multiplier:.2f}x streak = ${final_size:.0f} | "
+                f"Streak: {self._consecutive_wins}W / {self._consecutive_losses}L"
+            )
+            return final_size
+
+    def update_streak_multiplier(self, is_win: bool) -> None:
+        """
+        Update the streak multiplier after a trade.
+        Wins increase size, losses decrease it.
+        """
+        with self._lock:
+            if is_win:
+                self._consecutive_wins += 1
+                self._consecutive_losses = 0
+                # Size up: 1.25x per win, capped at 2x
+                new_mult = min(
+                    self.config.max_win_streak_multiplier,
+                    1.0 + (self._consecutive_wins * 0.25)
+                )
+                self._current_streak_multiplier = new_mult
+                log.info(f"🔥 WIN STREAK: {self._consecutive_wins} wins -> {new_mult:.2f}x multiplier")
+            else:
+                self._consecutive_losses += 1
+                self._consecutive_wins = 0
+                # Size down: 0.5x after loss
+                self._current_streak_multiplier = self.config.loss_streak_divisor
+                log.warning(f"📉 LOSS: Streak reset -> {self._current_streak_multiplier:.2f}x multiplier")
+
+    def sync_account_size(self, buying_power: float) -> None:
+        """Sync the account size from Alpaca."""
+        with self._lock:
+            self._account_size = buying_power
+            # Update legacy dollar limits based on percentage
+            self.config.max_daily_loss = -buying_power * self.config.max_daily_loss_pct
+            self.config.daily_profit_target = buying_power * self.config.daily_profit_target_pct
+            self.config.max_daily_exposure_global = buying_power * self.config.max_daily_exposure_pct
+            self.config.max_single_position = buying_power * self.config.max_single_position_pct
+            self.config.max_exposure_per_ticker = buying_power * self.config.max_exposure_per_ticker_pct
+            self.config.max_exposure_per_sector = buying_power * self.config.max_exposure_per_sector_pct
+            self.config.drawdown_half_size_threshold = -buying_power * self.config.drawdown_half_size_threshold_pct
+            self.config.drawdown_halt_threshold = -buying_power * self.config.drawdown_halt_threshold_pct
+            log.info(
+                f"VENOM: Synced account ${buying_power:.2f} | "
+                f"Max loss: ${self.config.max_daily_loss:.0f} | "
+                f"Target: ${self.config.daily_profit_target:.0f}"
+            )
 
     def _update_drawdown_state(self, daily_pnl: float) -> None:
         """Update drawdown circuit breaker state based on daily P/L."""
@@ -570,37 +716,51 @@ class RiskGovernor:
     def record_trade_outcome(self, outcome: str, pnl: float = 0.0) -> None:
         """
         Track consecutive losses for cooldown AND daily win rate.
+        VENOM: Also updates streak multiplier for compounding.
 
         Args:
             outcome: 'win' or 'loss'
             pnl: Realized P/L in dollars (optional, for daily tracking)
 
-        HYDRA standard: 3 consecutive losses triggers a 4-hour cooldown
+        HYDRA standard: 4 consecutive losses triggers a 2-hour cooldown
         to prevent emotional/revenge trading.
 
-        WIN RATE PRESERVATION: Also tracks daily win rate and P/L.
+        VENOM COMPOUNDING: Updates streak multiplier for position sizing.
         """
         with self._lock:
             # Track daily stats for win rate preservation
             self._reset_daily_stats_if_new_day()
             self._daily_pnl_realized += pnl
 
-            if outcome.lower() == 'win':
+            is_win = outcome.lower() == 'win'
+
+            # VENOM: Update streak multiplier FIRST
+            self.update_streak_multiplier(is_win)
+
+            if is_win:
                 self._win_count += 1
                 self._daily_win_count += 1
-                self._consecutive_losses = 0  # Reset streak on win
-                log.info(f"Trade outcome: WIN (+${pnl:.2f}). Consecutive losses reset. Total: {self._win_count}W / {self._loss_count}L")
-            elif outcome.lower() == 'loss':
+                # consecutive_losses reset happens in update_streak_multiplier
+                log.info(
+                    f"🔥 WIN (+${pnl:.2f}) | Streak: {self._consecutive_wins}W | "
+                    f"Multiplier: {self._current_streak_multiplier:.2f}x | "
+                    f"Total: {self._win_count}W/{self._loss_count}L"
+                )
+            else:
                 self._loss_count += 1
                 self._daily_loss_count += 1
-                self._consecutive_losses += 1
-                log.warning(f"Trade outcome: LOSS (${pnl:.2f}). Consecutive losses: {self._consecutive_losses}. Total: {self._win_count}W / {self._loss_count}L")
+                # consecutive_wins reset happens in update_streak_multiplier
+                log.warning(
+                    f"📉 LOSS (${pnl:.2f}) | Streak: {self._consecutive_losses}L | "
+                    f"Multiplier: {self._current_streak_multiplier:.2f}x | "
+                    f"Total: {self._win_count}W/{self._loss_count}L"
+                )
 
                 # Check if cooldown should be triggered
                 if self._consecutive_losses >= self.config.consecutive_loss_threshold:
                     self._cooldown_until = datetime.now() + timedelta(hours=self.config.cooldown_hours)
                     log.warning(
-                        f"HYDRA COOLDOWN ACTIVATED: {self._consecutive_losses} consecutive losses. "
+                        f"⏸️ COOLDOWN ACTIVATED: {self._consecutive_losses} consecutive losses. "
                         f"Trading paused until {self._cooldown_until.strftime('%Y-%m-%d %H:%M:%S')}"
                     )
 
@@ -609,7 +769,7 @@ class RiskGovernor:
             daily_wr = self._daily_win_count / total_daily if total_daily > 0 else 0
             log.info(
                 f"DAILY: {self._daily_win_count}W/{self._daily_loss_count}L ({daily_wr:.0%}) | "
-                f"P/L: ${self._daily_pnl_realized:.2f}"
+                f"P/L: ${self._daily_pnl_realized:.2f} | Next trade: {self._current_streak_multiplier:.2f}x size"
             )
 
     def is_in_cooldown(self) -> Tuple[bool, str]:

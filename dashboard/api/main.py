@@ -357,6 +357,117 @@ async def get_counterfactual_endpoint(limit: int = 100, call_id: str = None):
 
 
 # =============================================================================
+# VENOM WAR ROOM - Complete System Visibility
+# =============================================================================
+
+@app.get("/api/war-room")
+async def get_war_room_state():
+    """
+    VENOM WAR ROOM - Every fang visible.
+
+    Returns complete system state:
+    - Live P&L per position
+    - Win rate (daily, weekly, all-time)
+    - GEX regime + flip distance
+    - Every engine's status
+    - Trade debate transcripts
+    - Memory recalls
+    - Specialist votes
+    - Component health
+
+    This is the MASTER endpoint for system visibility.
+    """
+    try:
+        from wsb_snake.dashboard.war_room import get_war_room_state as fetch_state
+        return fetch_state()
+    except ImportError as e:
+        logger.warning(f"War room import failed: {e}")
+        # Fallback: build basic state manually
+        return await _build_basic_war_room_state()
+    except Exception as e:
+        logger.error(f"War room error: {e}")
+        return {"error": str(e), "timestamp": datetime.utcnow().isoformat()}
+
+
+async def _build_basic_war_room_state():
+    """Fallback basic war room state when full module unavailable."""
+    state = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "status": "degraded",
+        "note": "Full war room module not loaded",
+    }
+
+    # Try to get basic executor stats
+    try:
+        from wsb_snake.trading.alpaca_executor import alpaca_executor
+        stats = alpaca_executor.get_session_stats()
+        state["executor"] = stats
+    except:
+        pass
+
+    # Try to get HYDRA state
+    try:
+        from wsb_snake.collectors.hydra_bridge import get_hydra_intel
+        intel = get_hydra_intel()
+        state["hydra"] = {
+            "connected": intel.connected,
+            "direction": intel.direction,
+            "regime": intel.regime,
+            "blowup_probability": intel.blowup_probability,
+            "gex_regime": intel.gex_regime,
+            "gex_flip_point": intel.gex_flip_point,
+        }
+    except:
+        pass
+
+    # Try to get risk governor state
+    try:
+        from wsb_snake.trading.risk_governor import get_risk_governor
+        governor = get_risk_governor()
+        state["governor"] = governor.get_weaponized_status()
+    except:
+        pass
+
+    return state
+
+
+@app.websocket("/ws/war-room")
+async def war_room_websocket(websocket: WebSocket):
+    """
+    Real-time war room updates via WebSocket.
+
+    Sends war room state updates every 5 seconds while connected.
+    """
+    import asyncio
+    await websocket.accept()
+    logger.info("War room WebSocket connected")
+
+    try:
+        while True:
+            # Get current state
+            try:
+                from wsb_snake.dashboard.war_room import get_war_room_state as fetch_state
+                state = fetch_state()
+            except:
+                state = await _build_basic_war_room_state()
+
+            # Send to client
+            await websocket.send_json({
+                "type": "war_room_update",
+                "data": state,
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+
+            # Wait 5 seconds
+            await asyncio.sleep(5)
+
+    except WebSocketDisconnect:
+        logger.info("War room WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"War room WebSocket error: {e}")
+
+
+# =============================================================================
 # WebSocket Endpoints
 # =============================================================================
 

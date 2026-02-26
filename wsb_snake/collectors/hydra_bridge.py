@@ -362,11 +362,85 @@ class HydraBridge:
         Returns:
             True if connected AND blowup_probability > 60
         """
-        return (
+        should_enter = (
             self.intel.connected and
             not self.intel.is_stale() and
             self.intel.blowup_probability > self.BLOWUP_THRESHOLD
         )
+
+        # VENOM: If entering blowup mode, trigger emergency position review
+        if should_enter:
+            logger.warning(
+                f"🚨 BLOWUP MODE ACTIVATED: probability={self.intel.blowup_probability}% "
+                f"direction={self.intel.direction} regime={self.intel.regime}"
+            )
+            self._trigger_blowup_position_review()
+
+        return should_enter
+
+    def _trigger_blowup_position_review(self) -> None:
+        """
+        VENOM: When blowup mode triggers, review and potentially close positions.
+
+        If HYDRA says CRASH with >70% probability, CLOSE ALL.
+        If direction is opposite to our positions, CLOSE THOSE.
+        """
+        try:
+            from wsb_snake.trading.alpaca_executor import alpaca_executor
+            from wsb_snake.notifications.telegram_bot import send_alert as send_telegram_alert
+
+            positions = alpaca_executor.get_options_positions()
+            if not positions:
+                logger.info("BLOWUP_MODE: No positions to review")
+                return
+
+            # CRASH MODE: Close everything if probability > 70%
+            if self.intel.regime == "CRASH" and self.intel.blowup_probability > 70:
+                logger.warning(f"🚨 CRASH DETECTED ({self.intel.blowup_probability}%) - CLOSING ALL POSITIONS")
+                send_telegram_alert(
+                    f"🚨 **CRASH MODE ACTIVATED**\n\n"
+                    f"HYDRA: {self.intel.blowup_probability}% blowup probability\n"
+                    f"Regime: {self.intel.regime}\n\n"
+                    f"CLOSING ALL {len(positions)} POSITIONS"
+                )
+                closed = alpaca_executor.close_all_0dte_positions()
+                logger.warning(f"BLOWUP_MODE: Emergency closed {closed} positions")
+                return
+
+            # DIRECTION CONFLICT: Close positions opposite to HYDRA direction
+            for pos in positions:
+                symbol = pos.get('symbol', '')
+                side = pos.get('side', 'long')
+
+                # Determine if position conflicts with HYDRA direction
+                is_call = 'C' in symbol[len(symbol.split('2')[0]):][:7]  # Rough check
+                is_bullish_position = (side == 'long' and is_call) or (side == 'short' and not is_call)
+
+                should_close = False
+                reason = ""
+
+                if self.intel.direction == "BEARISH" and is_bullish_position:
+                    should_close = True
+                    reason = f"HYDRA says BEARISH but position is bullish"
+                elif self.intel.direction == "BULLISH" and not is_bullish_position:
+                    should_close = True
+                    reason = f"HYDRA says BULLISH but position is bearish"
+
+                if should_close:
+                    logger.warning(f"🚨 BLOWUP CLOSE: {symbol} - {reason}")
+                    try:
+                        alpaca_executor.close_position(symbol)
+                        send_telegram_alert(
+                            f"🚨 **BLOWUP MODE CLOSE**\n\n"
+                            f"Position: {symbol}\n"
+                            f"Reason: {reason}\n"
+                            f"HYDRA: {self.intel.direction} ({self.intel.blowup_probability}%)"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to close {symbol} in blowup mode: {e}")
+
+        except Exception as e:
+            logger.error(f"BLOWUP_MODE position review failed: {e}")
 
     def should_exit_blowup_mode(self) -> bool:
         """

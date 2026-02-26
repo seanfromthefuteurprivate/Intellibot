@@ -183,18 +183,22 @@ class AlpacaExecutor:
     # 3. Quick rotations - capture volatility, move on
     # 4. Predator mode - strike fast, book profit, hunt again
     #
-    # Scalper exit defaults (overridable via env: SCALP_TARGET_PCT, SCALP_STOP_PCT, SCALP_MAX_HOLD_MINUTES)
-    # RISK WARDEN: Tighter 0DTE stops for better risk control
-    _SCALP_TARGET_PCT_DEFAULT = 1.06   # +6% target (achievable in 0DTE with decay)
-    _SCALP_STOP_PCT_DEFAULT = 0.93     # -7% initial stop (RISK WARDEN: tighter than -10%)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 5  # 5 MIN - exit before theta acceleration
+    # ========== VENOM MODE: LET WINNERS RUN ==========
+    # GEX flips can do 200-500% on 0DTE. No fixed targets. Trailing stop rides the wave.
+    _SCALP_TARGET_PCT_DEFAULT = 5.00   # +400% - effectively NO CAP (trail will exit)
+    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% initial stop (give room to breathe)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 45  # 45 MIN - let winners run
 
-    # RISK WARDEN: Trailing stop tiers for locking profits
-    TRAIL_BREAKEVEN_TRIGGER = 0.03   # Move to breakeven at +3% profit
-    TRAIL_LOCK_PROFIT_TRIGGER = 0.08  # At +8% profit, lock in +5%
-    TRAIL_LOCK_PROFIT_LEVEL = 0.05   # Lock +5% when at +8%+
-    TRAIL_TIME_TIGHTEN_MINUTES = 30  # After 30 min, trail to -3% from peak
-    TRAIL_TIME_TIGHTEN_PCT = 0.03    # -3% trailing stop after 30 min
+    # VENOM TRAILING STOPS - Aggressive trailing to capture 200-500% moves
+    TRAIL_BREAKEVEN_TRIGGER = 0.10   # Move to breakeven at +10% profit
+    TRAIL_LOCK_PROFIT_TRIGGER = 0.25  # At +25% profit, trail at 15% below peak
+    TRAIL_LOCK_PROFIT_LEVEL = 0.15   # Lock 15% below peak when running
+    TRAIL_AGGRESSIVE_TRIGGER = 0.50   # At +50%, tighten trail to 10% below peak
+    TRAIL_AGGRESSIVE_LEVEL = 0.10    # 10% trail when up big
+    TRAIL_MOONSHOT_TRIGGER = 1.00    # At +100%, trail at 8% below peak
+    TRAIL_MOONSHOT_LEVEL = 0.08      # 8% trail - ride it to the moon
+    TRAIL_TIME_TIGHTEN_MINUTES = 30  # After 30 min, trail to -5% from peak
+    TRAIL_TIME_TIGHTEN_PCT = 0.05    # -5% trailing stop after 30 min
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -1383,6 +1387,48 @@ Reason: {reason}
         except Exception as e:
             logger.debug(f"HYDRA feedback skipped: {e}")
 
+        # VENOM: SEMANTIC MEMORY AUTO-REFLECTION
+        # Learn from this trade outcome to improve future decisions
+        try:
+            from wsb_snake.learning.semantic_memory import get_semantic_memory
+            semantic = get_semantic_memory()
+            semantic.record_trade(
+                ticker=position.symbol,
+                pattern=position.pattern if position.pattern else position.engine,
+                direction="long" if position.trade_type == "CALLS" else "short",
+                entry_price=position.entry_price,
+                exit_price=current_price,
+                pnl_pct=position.pnl_pct,
+                hold_minutes=hold_minutes,
+                exit_reason=reason,
+                hour=position.entry_time.hour if position.entry_time else datetime.now().hour,
+            )
+            # Trigger auto-reflection to learn rules
+            semantic.auto_reflect()
+            logger.debug(f"SEMANTIC_MEMORY: Recorded and reflected on {position.symbol}")
+        except Exception as e:
+            logger.debug(f"Semantic memory reflection skipped: {e}")
+
+        # VENOM: TRADE GRAPH - Record trade as node for future reference
+        try:
+            from wsb_snake.learning.trade_graph import get_trade_graph
+            trade_graph = get_trade_graph()
+            trade_graph.record_trade(
+                ticker=position.symbol,
+                pattern=position.pattern if position.pattern else position.engine,
+                direction="long" if position.trade_type == "CALLS" else "short",
+                entry_price=position.entry_price,
+                exit_price=current_price,
+                pnl_pct=position.pnl_pct,
+                hold_minutes=hold_minutes,
+                exit_reason=reason,
+                entry_time=position.entry_time,
+                exit_time=position.exit_time,
+            )
+            logger.debug(f"TRADE_GRAPH: Recorded {position.symbol} trade")
+        except Exception as e:
+            logger.debug(f"Trade graph record skipped: {e}")
+
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
 
         emoji = "💰" if position.pnl > 0 else "🛑"
@@ -1612,63 +1658,95 @@ Reason: Order was {order_status}
                         self.execute_exit(position, "STOP LOSS", current_price)
                     continue
                 
-                # Scalper: RISK WARDEN TRAILING STOP - tighter 0DTE risk control
-                # Initial: -7% stop (tighter than old -10%)
-                # Breakeven at +3% (trigger)
-                # Lock +5% at +8% profit
-                # After 30 min, trail to -3% from peak
+                # ========== VENOM MODE: LET WINNERS RUN ==========
+                # GEX flips do 200-500% on 0DTE. Trail aggressively, never cap gains.
+                # The snake rides the wave until the wave dies.
 
                 # Calculate current profit percentage
                 profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
 
-                # Track peak price for time-based trailing (store as attribute)
+                # Track peak price for trailing (store as attribute)
                 if not hasattr(position, '_peak_price') or current_price > getattr(position, '_peak_price', 0):
                     position._peak_price = current_price
+                    if profit_pct > 0.30:  # Log when we're winning big
+                        logger.info(f"🚀 NEW PEAK: {position.option_symbol} @ ${current_price:.2f} (+{profit_pct*100:.0f}%)")
+
+                peak_price = getattr(position, '_peak_price', current_price)
 
                 # Calculate hold time
                 hold_minutes = 0
                 if position.entry_time:
                     hold_minutes = (datetime.now() - position.entry_time).total_seconds() / 60
 
-                # RISK WARDEN: Time-based stop tightening after 30 minutes
-                if hold_minutes >= self.TRAIL_TIME_TIGHTEN_MINUTES:
-                    # Trail to -3% from peak price (not entry)
-                    peak_price = getattr(position, '_peak_price', current_price)
-                    time_trail_stop = peak_price * (1 - self.TRAIL_TIME_TIGHTEN_PCT)
-                    if position.stop_loss < time_trail_stop:
-                        position.stop_loss = time_trail_stop
-                        logger.info(f"TIME TRAIL: {position.option_symbol} stop to ${time_trail_stop:.2f} (-3% from peak ${peak_price:.2f}) after {hold_minutes:.0f}min")
+                # ========== VENOM TRAILING LADDER ==========
+                # Higher profits = tighter trail to lock in gains
 
-                # RISK WARDEN: Profit-based trailing stops (tighter than before)
-                if profit_pct >= self.TRAIL_LOCK_PROFIT_TRIGGER:  # +8% profit
-                    # Lock in +5% profit (RISK WARDEN: was +3% at +5%)
-                    new_stop = position.entry_price * (1 + self.TRAIL_LOCK_PROFIT_LEVEL)
+                if profit_pct >= self.TRAIL_MOONSHOT_TRIGGER:  # +100%+ = MOONSHOT
+                    # Trail at 8% below peak - ride to the moon
+                    new_stop = peak_price * (1 - self.TRAIL_MOONSHOT_LEVEL)
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL: {position.option_symbol} LOCK +5% profit at ${new_stop:.2f} (profit: +{profit_pct*100:.1f}%)")
-                elif profit_pct >= self.TRAIL_BREAKEVEN_TRIGGER:  # +3% profit
-                    # Move stop to breakeven (RISK WARDEN: was +5% trigger)
+                        logger.warning(f"🌙 MOONSHOT TRAIL: {position.option_symbol} stop to ${new_stop:.2f} (8% from peak ${peak_price:.2f}, profit: +{profit_pct*100:.0f}%)")
+
+                elif profit_pct >= self.TRAIL_AGGRESSIVE_TRIGGER:  # +50%+
+                    # Trail at 10% below peak
+                    new_stop = peak_price * (1 - self.TRAIL_AGGRESSIVE_LEVEL)
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"🔥 AGGRESSIVE TRAIL: {position.option_symbol} stop to ${new_stop:.2f} (10% from peak ${peak_price:.2f}, profit: +{profit_pct*100:.0f}%)")
+
+                elif profit_pct >= self.TRAIL_LOCK_PROFIT_TRIGGER:  # +25%+
+                    # Trail at 15% below peak
+                    new_stop = peak_price * (1 - self.TRAIL_LOCK_PROFIT_LEVEL)
+                    if position.stop_loss < new_stop:
+                        position.stop_loss = new_stop
+                        logger.info(f"💰 LOCK TRAIL: {position.option_symbol} stop to ${new_stop:.2f} (15% from peak ${peak_price:.2f}, profit: +{profit_pct*100:.0f}%)")
+
+                elif profit_pct >= self.TRAIL_BREAKEVEN_TRIGGER:  # +10%+
+                    # Move stop to breakeven
                     new_stop = position.entry_price * 1.0
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
                         logger.info(f"TRAIL: {position.option_symbol} to BREAKEVEN (${new_stop:.2f})")
-                elif profit_pct >= 0.02:  # +2% profit
-                    # Reduce initial risk to -5%
-                    new_stop = position.entry_price * 0.95
+
+                elif profit_pct >= 0.05:  # +5% profit
+                    # Reduce initial risk to -8%
+                    new_stop = position.entry_price * 0.92
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL: {position.option_symbol} stop to -5% (${new_stop:.2f})")
+                        logger.info(f"TRAIL: {position.option_symbol} stop to -8% (${new_stop:.2f})")
 
-                # Check exits
-                if current_price >= position.target_price:
-                    self.execute_exit(position, "TARGET HIT 🎯", current_price)
-                elif current_price <= position.stop_loss:
-                    exit_reason = "STOP LOSS" if position.stop_loss <= position.entry_price else f"TRAIL STOP (+{(position.stop_loss/position.entry_price-1)*100:.0f}%)"
+                # Time-based tightening after 30 min (only if not already trailing higher)
+                if hold_minutes >= self.TRAIL_TIME_TIGHTEN_MINUTES and profit_pct > 0:
+                    time_trail_stop = peak_price * (1 - self.TRAIL_TIME_TIGHTEN_PCT)
+                    if position.stop_loss < time_trail_stop:
+                        position.stop_loss = time_trail_stop
+                        logger.info(f"TIME TRAIL: {position.option_symbol} stop to ${time_trail_stop:.2f} (-5% from peak ${peak_price:.2f}) after {hold_minutes:.0f}min")
+
+                # ========== VENOM EXIT LOGIC ==========
+                # NO fixed target exit - let trailing stop do its job
+                # Winners ride until trail catches them
+
+                if current_price <= position.stop_loss:
+                    profit_pct_exit = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
+                    if profit_pct_exit > 0:
+                        # Exiting with profit via trail
+                        exit_reason = f"🔥 TRAIL EXIT (+{profit_pct_exit*100:.0f}%)"
+                        if profit_pct_exit >= 1.0:
+                            exit_reason = f"🌙 MOONSHOT EXIT (+{profit_pct_exit*100:.0f}%)"
+                        elif profit_pct_exit >= 0.50:
+                            exit_reason = f"💰 BIG WIN EXIT (+{profit_pct_exit*100:.0f}%)"
+                    else:
+                        exit_reason = "STOP LOSS"
                     self.execute_exit(position, exit_reason, current_price)
                 elif position.entry_time:
                     elapsed = (datetime.now() - position.entry_time).total_seconds() / 60
                     if elapsed >= self.SCALP_MAX_HOLD_MINUTES:
-                        self.execute_exit(position, f"TIME DECAY ({self.SCALP_MAX_HOLD_MINUTES}min)", current_price)
+                        profit_pct_time = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
+                        if profit_pct_time > 0:
+                            self.execute_exit(position, f"TIME EXIT (+{profit_pct_time*100:.0f}% after {self.SCALP_MAX_HOLD_MINUTES}min)", current_price)
+                        else:
+                            self.execute_exit(position, f"TIME DECAY ({self.SCALP_MAX_HOLD_MINUTES}min)", current_price)
     
     def get_session_stats(self) -> Dict:
         """Get current session statistics."""

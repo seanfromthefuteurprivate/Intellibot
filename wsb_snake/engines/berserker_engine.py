@@ -39,6 +39,11 @@ from wsb_snake.learning.gex_calculator import (
     check_berserker_conditions_from_hydra,
     parse_hydra_gex_data,
 )
+# VENOM: Wire ALL learning components for FULL SEND
+from wsb_snake.learning.specialist_swarm import get_specialist_swarm
+from wsb_snake.learning.trade_graph import get_trade_graph
+from wsb_snake.learning.trading_thesis import create_thesis_from_setup
+from wsb_snake.learning.semantic_memory import get_semantic_memory
 
 logger = get_logger(__name__)
 
@@ -493,15 +498,116 @@ class BerserkerEngine:
         return now.replace(hour=21, minute=0, second=0, microsecond=0)
 
     def _execute_signal(self, signal: BerserkerSignal) -> None:
-        """Execute BERSERKER signal through coordinator."""
+        """Execute BERSERKER signal through coordinator - WITH ALL COMPONENTS WIRED."""
         if not self._coordinator:
             logger.warning("BERSERKER: No coordinator set - cannot execute")
             return
 
+        # ========== VENOM: FULL COMPONENT CHECK BEFORE FULL SEND ==========
+        # GEX flip + HYDRA + Specialist Swarm + Trade Graph + Semantic Memory
+        # ALL must agree for BERSERKER to strike
+
+        full_send_approved = True
+        notes = []
+
+        # 1. TRADE GRAPH: Check historical GEX flip trades
+        try:
+            trade_graph = get_trade_graph()
+            similar = trade_graph.find_similar_conditions(
+                ticker="SPX",
+                pattern=f"BERSERKER_{signal.direction}",
+                direction="long",
+                gex_regime=signal.gex_regime,
+            )
+            if similar:
+                avg_return = sum(t.get('pnl_pct', 0) for t in similar) / len(similar)
+                win_count = sum(1 for t in similar if t.get('pnl_pct', 0) > 0)
+                win_rate = win_count / len(similar) if similar else 0
+                logger.info(f"BERSERKER GRAPH: {len(similar)} similar | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
+
+                if avg_return < -10 and len(similar) >= 3:
+                    # Historical losers - abort
+                    full_send_approved = False
+                    notes.append(f"GRAPH_ABORT: Historical avg {avg_return:+.1f}%")
+                    logger.warning(f"BERSERKER ABORT: Trade graph shows {avg_return:+.1f}% avg")
+                elif avg_return > 20:
+                    signal.confidence += 10
+                    notes.append(f"GRAPH_BOOST: +{avg_return:.0f}% historical")
+        except Exception as e:
+            logger.debug(f"BERSERKER trade graph check failed: {e}")
+
+        # 2. SPECIALIST SWARM: Get legendary investor votes
+        try:
+            swarm = get_specialist_swarm()
+            swarm_result = swarm.evaluate(
+                ticker="SPX",
+                direction="long" if signal.direction == "CALL" else "short",
+                pattern=f"BERSERKER_GEX_FLIP",
+                entry_price=signal.entry_price,
+                confidence=signal.confidence,
+                context={
+                    "gex_regime": signal.gex_regime,
+                    "gex_flip_distance": signal.gex_flip_distance_pct,
+                    "flow_bias": signal.flow_bias,
+                    "vix": signal.vix_level,
+                }
+            )
+
+            if swarm_result:
+                consensus = swarm_result.consensus
+                logger.info(
+                    f"BERSERKER SWARM: {consensus.action} | "
+                    f"Bulls: {consensus.bull_votes}/{consensus.total_votes} | "
+                    f"Confidence: {consensus.confidence_pct:.0f}%"
+                )
+
+                if consensus.action == "ABORT" and consensus.confidence_pct < 50:
+                    full_send_approved = False
+                    notes.append(f"SWARM_ABORT: {consensus.bull_votes}/{consensus.total_votes}")
+                    logger.warning(f"BERSERKER SWARM ABORT: Only {consensus.bull_votes} bulls")
+                elif consensus.confidence_pct > 75:
+                    signal.confidence += 5
+                    notes.append(f"SWARM_GO: {consensus.confidence_pct:.0f}%")
+        except Exception as e:
+            logger.debug(f"BERSERKER swarm check failed: {e}")
+
+        # 3. SEMANTIC MEMORY: Query for similar GEX setups
+        try:
+            semantic = get_semantic_memory()
+            semantic_result = semantic.query_similar(
+                ticker="SPX",
+                pattern="BERSERKER_GEX_FLIP",
+                direction="long" if signal.direction == "CALL" else "short",
+                hour=datetime.now(timezone.utc).hour,
+            )
+            if semantic_result and semantic_result.similar_trades:
+                avg_outcome = sum(t.outcome.pnl_pct for t in semantic_result.similar_trades) / len(semantic_result.similar_trades)
+                logger.info(f"BERSERKER SEMANTIC: {len(semantic_result.similar_trades)} similar | Avg: {avg_outcome:+.1f}%")
+
+                # Apply any learned rules
+                for rule in semantic_result.applicable_rules[:2]:
+                    if "avoid" in rule.rule.lower() and rule.confidence > 0.7:
+                        full_send_approved = False
+                        notes.append(f"SEMANTIC_RULE: {rule.rule[:30]}")
+                        logger.warning(f"BERSERKER SEMANTIC ABORT: {rule.rule}")
+        except Exception as e:
+            logger.debug(f"BERSERKER semantic check failed: {e}")
+
+        # ========== FINAL DECISION ==========
+        if not full_send_approved:
+            logger.warning(f"BERSERKER BLOCKED by component checks: {notes}")
+            return
+
+        logger.warning(
+            f"🔥 BERSERKER FULL SEND APPROVED: GEX={signal.gex_flip_distance_pct:.2f}% | "
+            f"Direction={signal.direction} | Confidence={signal.confidence:.0f}% | "
+            f"Notes: {notes}"
+        )
+
         try:
             from wsb_snake.coordination.strategy_coordinator import TradeRequest
 
-            # Build trade request
+            # Build trade request - 3x SIZE because all components agree
             request = TradeRequest(
                 request_id=f"berserker_{signal.symbol}_{datetime.now().strftime('%H%M%S')}",
                 engine="berserker",
@@ -524,6 +630,7 @@ class BerserkerEngine:
                     "vix_level": signal.vix_level,
                     "position_multiplier": self.config.position_multiplier,
                     "max_hold_minutes": self.config.max_hold_minutes,
+                    "full_send_notes": notes,
                 },
             )
 
