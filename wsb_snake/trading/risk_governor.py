@@ -220,17 +220,25 @@ class RiskGovernor:
         Returns (allowed, reason).
         If allowed is False, reason explains why (e.g. daily loss, kill switch, cap).
         """
+        log.info(f"GOVERNOR: can_trade called for {ticker}")
+
+        log.debug("GOVERNOR: acquiring lock for kill switch check")
         with self._lock:
             if self._kill_switch_manual:
                 return False, "Kill switch active (manual)"
+        log.debug("GOVERNOR: kill switch check passed")
 
         # HYDRA: Check consecutive loss cooldown
+        log.debug("GOVERNOR: checking cooldown")
         in_cooldown, cooldown_reason = self.is_in_cooldown()
         if in_cooldown:
             return False, cooldown_reason
+        log.debug("GOVERNOR: cooldown check passed")
 
         # WIN RATE PRESERVATION: Check if win rate pause is active
+        log.debug("GOVERNOR: checking win rate pause")
         win_rate_paused, win_rate_reason = self.is_win_rate_pause_active()
+        log.info(f"GOVERNOR: win rate check done, paused={win_rate_paused}")
         if win_rate_paused:
             return False, win_rate_reason
 
