@@ -840,6 +840,9 @@ No overnight risk. Fresh start tomorrow!
         
         engine: SCALPER (default), MOMENTUM, or MACRO – used for risk governor limits and position sizing.
         """
+        # DIAGNOSTIC: Log entry to help trace execution flow
+        logger.info(f"EXECUTOR: execute_scalp_entry called for {underlying} {direction} @ ${entry_price:.2f}")
+
         self._reset_daily_count_if_needed()
         governor = get_risk_governor()
         open_positions = [p for p in self.positions.values() if p.status in (PositionStatus.OPEN, PositionStatus.PENDING)]
@@ -865,7 +868,9 @@ No overnight risk. Fresh start tomorrow!
             if open_count >= self.MAX_CONCURRENT_POSITIONS:
                 logger.warning("Max concurrent positions reached, skipping entry")
                 return None
-        
+
+        logger.info(f"EXECUTOR: Passed risk checks, proceeding with {underlying} {direction}")
+
         # Option type: use override if provided (for CPL), else infer from direction
         if option_type_override:
             option_type = option_type_override.lower()
@@ -1367,16 +1372,36 @@ Total P&L: ${self.total_pnl:+.2f}
             time.sleep(2)  # Check every 2 seconds for faster stop loss reaction on 0DTE
     
     def _check_order_fills(self):
-        """Check if pending orders have filled."""
+        """Check if pending orders have filled.
+
+        CRITICAL: Do NOT hold lock during network calls to avoid blocking execute_scalp_entry.
+        """
+        # Step 1: Collect pending positions WITHOUT holding lock during network I/O
+        pending_to_check = []
         with self._lock:
             for position in list(self.positions.values()):
-                if position.status != PositionStatus.PENDING:
-                    continue
-                
-                if not position.alpaca_order_id:
-                    continue
-                
-                order = self.get_order_status(position.alpaca_order_id)
+                if position.status == PositionStatus.PENDING and position.alpaca_order_id:
+                    pending_to_check.append((position.position_id, position.alpaca_order_id))
+
+        if not pending_to_check:
+            return
+
+        # Step 2: Make network calls WITHOUT holding lock
+        order_results = {}
+        for pos_id, order_id in pending_to_check:
+            order = self.get_order_status(order_id)
+            if order:
+                order_results[pos_id] = order
+
+        if not order_results:
+            return
+
+        # Step 3: Update positions WITH lock held (no network calls here)
+        with self._lock:
+            for pos_id, order in order_results.items():
+                position = self.positions.get(pos_id)
+                if not position or position.status != PositionStatus.PENDING:
+                    continue  # Position may have changed while we were checking
                 if not order:
                     continue
                 
@@ -1469,24 +1494,46 @@ Reason: Order was {order_status}
         return False
 
     def _check_exits(self):
-        """Check open positions for exit conditions. Trim-and-hold for momentum/macro."""
+        """Check open positions for exit conditions. Trim-and-hold for momentum/macro.
+
+        CRITICAL: Do NOT hold lock during network calls to avoid blocking execute_scalp_entry.
+        """
+        # Step 1: Collect open positions WITHOUT holding lock during network I/O
+        open_to_check = []
+        with self._lock:
+            for position in list(self.positions.values()):
+                if position.status == PositionStatus.OPEN:
+                    open_to_check.append(position.option_symbol)
+
+        if not open_to_check:
+            return
+
+        # Step 2: Fetch all quotes WITHOUT holding lock
+        quotes = {}
+        for option_symbol in open_to_check:
+            quote = self.get_option_quote(option_symbol)
+            if quote:
+                bp = float(quote.get("bp", 0))
+                ap = float(quote.get("ap", 0))
+                current_price = (bp + ap) / 2 if (bp > 0 and ap > 0) else (bp or ap)
+                if current_price > 0:
+                    quotes[option_symbol] = current_price
+
+        if not quotes:
+            return
+
+        # Step 3: Process exit logic WITH lock held (no network calls)
         with self._lock:
             for position in list(self.positions.values()):
                 if position.status != PositionStatus.OPEN:
                     continue
-                
-                quote = self.get_option_quote(position.option_symbol)
-                if not quote:
+
+                current_price = quotes.get(position.option_symbol)
+                if not current_price:
                     continue
-                # Use mid for exit decisions to avoid bid bias (we're long → bid is below ask; using bid alone hits stop too often)
-                bp = float(quote.get("bp", 0))
-                ap = float(quote.get("ap", 0))
-                current_price = (bp + ap) / 2 if (bp > 0 and ap > 0) else (bp or ap)
-                if current_price <= 0:
-                    continue
-                
+
                 pnl_pct = (current_price / position.entry_price - 1) * 100 if position.entry_price else 0
-                
+
                 # Trim-and-hold: momentum/macro – at +50% trim half, trail rest at +20%
                 if position.engine in ("momentum", "macro"):
                     if not position.trimmed and pnl_pct >= 50:
