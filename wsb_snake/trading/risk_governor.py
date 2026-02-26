@@ -676,11 +676,23 @@ class RiskGovernor:
             }
 
     def _get_current_vix(self) -> float:
-        """Get current VIX level for high-volatility exception."""
+        """Get current VIX level for high-volatility exception.
+
+        CRITICAL: Must be non-blocking! Use cached value only.
+        Network calls here block execute_scalp_entry.
+        """
         try:
             from wsb_snake.collectors.vix_structure import vix_structure
-            signal = vix_structure.get_trading_signal()
-            return signal.get("vix_level", 20.0)
+            # Only use cached VIX - don't block on network calls
+            import time
+            cache_key = "term_structure"
+            if cache_key in vix_structure.cache:
+                cached = vix_structure.cache[cache_key]
+                # Accept cache even if stale rather than blocking
+                data = cached.get("data", {})
+                return data.get("vix_spot", 20.0)
+            # No cache yet - return default, background will populate later
+            return 20.0
         except Exception:
             return 20.0  # Default if VIX unavailable
 
