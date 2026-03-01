@@ -19,11 +19,12 @@ import random
 ALPACA_KEY = os.environ.get("ALPACA_API_KEY", "PKWT6T5BFKHBTFDW3CPAFW2XBZ")
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET_KEY", "pVdzbVte2pQvL1RmCTFw3oaQ6TBWYimAzC42DUyTEy8")
 
-# BERSERKER MODE PARAMETERS
+# RISK-MANAGED BERSERKER PARAMETERS
 INITIAL_ACCOUNT = 5000.0
-POSITION_SIZE_PCT = 0.30  # 30% per trade for aggressive sizing
+POSITION_SIZE_PCT = 0.15  # 15% per trade - disciplined sizing
 SLIPPAGE_PCT = 0.01  # 1% per side (options have wider spreads)
-MAX_POSITIONS = 5
+MAX_POSITIONS = 2  # Max 2 concurrent positions
+MIN_ACCOUNT_FLOOR = 500.0  # Stop trading if account drops below this
 
 # Target OTM offset for LOTTO tickets (points from ATM)
 OTM_OFFSET = 2  # 2 points OTM = cheaper options, bigger leverage
@@ -34,9 +35,9 @@ TRAIL_LOCK = 1.00  # +100% locks in profit
 TRAIL_AGGRESSIVE = 2.00  # +200% tight trail
 TRAIL_MOONSHOT = 5.00  # +500% tightest trail
 
-# Pyramiding
-PYRAMID_TRIGGER = 0.75  # +75% triggers add
-PYRAMID_ADD_PCT = 0.50
+# Pyramiding - much smaller adds
+PYRAMID_TRIGGER = 1.00  # +100% triggers add (not 75%)
+PYRAMID_ADD_PCT = 0.25  # Only add 25% (not 50%)
 
 
 @dataclass
@@ -265,7 +266,7 @@ def detect_signal(bars: List[Dict], idx: int) -> Optional[Tuple[str, float, floa
         confidence = min(90, 50 + abs(momentum) * 2000 + vol_spike * 10 + bar_range * 500)
         strike = round(current_price) - OTM_OFFSET  # OTM put
 
-    if direction and confidence >= 55:
+    if direction and confidence >= 68:  # Higher threshold = fewer but better signals
         return (direction, confidence, strike)
 
     return None
@@ -326,8 +327,8 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
             # Check trailing stops
             exit_reason = None
 
-            # Stop loss check (-50% of option value)
-            if current_pnl_pct <= -0.50:
+            # Stop loss check (-40% of option value - tighter to preserve capital)
+            if current_pnl_pct <= -0.40:
                 exit_reason = "STOP_LOSS"
 
             # Trailing stop from peak
@@ -388,14 +389,32 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
                     max_drawdown = dd
 
         # 2. Check for new signals
+        # RISK MANAGEMENT: Stop trading if account is below floor
+        if account < MIN_ACCOUNT_FLOOR:
+            continue  # Skip all trading, preserve remaining capital
+
         if len(positions) < MAX_POSITIONS:
             signal = detect_signal(bars, i)
 
             if signal:
                 direction, confidence, strike = signal
 
-                # Position sizing
-                position_value = account * POSITION_SIZE_PCT
+                # Dynamic position sizing - scale with account performance
+                # When losing: trade smaller to preserve capital
+                # When winning: slightly larger to compound
+                account_ratio = account / INITIAL_ACCOUNT
+                if account_ratio < 0.5:  # Down 50%+
+                    size_multiplier = 0.5  # Cut size in half
+                elif account_ratio < 0.8:  # Down 20-50%
+                    size_multiplier = 0.75  # Reduce size
+                elif account_ratio > 1.5:  # Up 50%+
+                    size_multiplier = 1.25  # Slightly larger
+                elif account_ratio > 2.0:  # Up 100%+
+                    size_multiplier = 1.5  # Compound gains
+                else:
+                    size_multiplier = 1.0
+
+                position_value = account * POSITION_SIZE_PCT * size_multiplier
 
                 # Get option price
                 option_price = get_option_entry_price(spy_price, strike, direction)
@@ -414,7 +433,7 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
                     contracts=contracts,
                     entry_option_price=option_price,
                     position_cost=actual_cost,
-                    stop_loss_pct=-0.50,
+                    stop_loss_pct=-0.40,  # Tighter stop
                     peak_option_price=option_price,
                     original_contracts=contracts
                 )
@@ -422,9 +441,12 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
                 print(f"  [{bar_time.strftime('%H:%M')}] ENTRY {direction} ${strike}: {contracts}x @ ${option_price:.2f} (${actual_cost:,.0f}) | Conf: {confidence:.0f}%")
 
-        # 3. Pyramiding on big winners
+        # 3. Pyramiding on big winners (only if account is healthy)
+        if account < MIN_ACCOUNT_FLOOR:
+            continue  # No pyramiding when low on capital
+
         for pos in positions:
-            if pos.pyramid_adds < 2:
+            if pos.pyramid_adds < 1:  # Max 1 pyramid add (was 2)
                 current_option_price = calculate_option_price(
                     spy_price, pos.strike, pos.direction,
                     pos.entry_option_price, pos.entry_spy_price
