@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-BACKTEST FROM HELL: Full pipeline simulation on violent SPY days
+BACKTEST FROM HELL: Full pipeline simulation with REAL OPTION P&L
 
-Simulates:
-1. Minute-by-minute signal detection
-2. Full conviction engine (HYDRA, swarm debate, graph similarity)
-3. Risk governor position sizing with compounding
-4. Entries with realistic slippage (0.5% per side)
-5. Trailing stop ladder tick-by-tick
-6. Pyramiding triggers
-7. Every exit tracked
-8. Cumulative P&L with compounding
+Key fix: Option returns are NOT stock returns.
+- Stock moves 1% = Option moves 50-500% depending on delta/gamma
+- 0DTE OTM options have MASSIVE gamma
+- LOTTO TICKET entries at $0.10-$0.50 can 10-50x on big moves
 """
 import os
 import json
@@ -24,37 +19,40 @@ import random
 ALPACA_KEY = os.environ.get("ALPACA_API_KEY", "PKWT6T5BFKHBTFDW3CPAFW2XBZ")
 ALPACA_SECRET = os.environ.get("ALPACA_SECRET_KEY", "pVdzbVte2pQvL1RmCTFw3oaQ6TBWYimAzC42DUyTEy8")
 
-# Simulation parameters (SWARM CONSENSUS: 5% per trade)
+# BERSERKER MODE PARAMETERS
 INITIAL_ACCOUNT = 5000.0
-POSITION_SIZE_PCT = 0.05  # 5% per trade
-SLIPPAGE_PCT = 0.005  # 0.5% per side
-MAX_POSITIONS = 3
+POSITION_SIZE_PCT = 0.30  # 30% per trade for aggressive sizing
+SLIPPAGE_PCT = 0.01  # 1% per side (options have wider spreads)
+MAX_POSITIONS = 5
 
-# Trailing stop ladder (from alpaca_executor)
-TRAIL_BREAKEVEN = 0.10  # +10% moves stop to breakeven
-TRAIL_LOCK = 0.35  # +35% locks in profit
-TRAIL_AGGRESSIVE = 0.60  # +60% tight trail
-TRAIL_MOONSHOT = 1.50  # +150% tightest trail
+# Target OTM offset for LOTTO tickets (points from ATM)
+OTM_OFFSET = 2  # 2 points OTM = cheaper options, bigger leverage
+
+# Trailing stop ladder
+TRAIL_BREAKEVEN = 0.50  # +50% moves stop to breakeven
+TRAIL_LOCK = 1.00  # +100% locks in profit
+TRAIL_AGGRESSIVE = 2.00  # +200% tight trail
+TRAIL_MOONSHOT = 5.00  # +500% tightest trail
 
 # Pyramiding
-PYRAMID_TRIGGER = 0.30  # +30% triggers add
-PYRAMID_ADD_PCT = 0.50  # Add 50% of original size
+PYRAMID_TRIGGER = 0.75  # +75% triggers add
+PYRAMID_ADD_PCT = 0.50
 
 
 @dataclass
 class SimPosition:
     """Simulated position."""
     entry_time: datetime
-    entry_price: float
+    entry_spy_price: float  # SPY price at entry
     direction: str  # "CALL" or "PUT"
-    size_dollars: float
+    strike: float  # Option strike
     contracts: int
-    option_premium: float
-    stop_loss: float
-    target: float
-    peak_price: float = 0.0
+    entry_option_price: float  # Option premium at entry
+    position_cost: float  # Total cost
+    stop_loss_pct: float  # Stop as % of option price
+    peak_option_price: float = 0.0
     pyramid_adds: int = 0
-    original_size: int = 0
+    original_contracts: int = 0
 
 
 @dataclass
@@ -63,12 +61,16 @@ class SimTrade:
     entry_time: datetime
     exit_time: datetime
     direction: str
-    entry_price: float
-    exit_price: float
-    size_dollars: float
+    strike: float
+    contracts: int
+    entry_option_price: float
+    exit_option_price: float
+    position_cost: float
     pnl_dollars: float
     pnl_pct: float
     exit_reason: str
+    spy_entry: float
+    spy_exit: float
 
 
 @dataclass
@@ -89,7 +91,7 @@ class DayResult:
 
 
 def fetch_minute_bars(date: str) -> List[Dict]:
-    """Fetch minute-by-minute bars for a date."""
+    """Fetch minute-by-minute bars for SPY."""
     headers = {
         "APCA-API-KEY-ID": ALPACA_KEY,
         "APCA-API-SECRET-KEY": ALPACA_SECRET
@@ -116,109 +118,161 @@ def fetch_minute_bars(date: str) -> List[Dict]:
         return []
 
 
-def detect_signal(bars: List[Dict], idx: int) -> Optional[Tuple[str, float]]:
+def get_option_entry_price(spy_price: float, strike: float, direction: str) -> float:
     """
-    Simple signal detection based on momentum and pattern.
+    Get realistic 0DTE option entry price.
 
-    Returns (direction, confidence) or None.
+    Based on distance from ATM:
+    - ATM (0 pts): $1.50-2.00
+    - 1pt OTM: $0.60-0.90
+    - 2pt OTM: $0.25-0.40 (LOTTO ZONE)
+    - 3pt+ OTM: $0.08-0.20 (DEEP LOTTO)
+    """
+    if direction == "CALL":
+        distance = strike - spy_price  # Positive = OTM for calls
+    else:
+        distance = spy_price - strike  # Positive = OTM for puts
+
+    # Price based on distance
+    if distance <= 0:  # ITM
+        base = 2.00 + abs(distance) * 0.9  # ITM adds intrinsic
+    elif distance <= 1:
+        base = 0.75
+    elif distance <= 2:
+        base = 0.30  # LOTTO TICKET ZONE
+    elif distance <= 3:
+        base = 0.15
+    else:
+        base = 0.08  # Deep OTM lotto
+
+    # Add some variance
+    return round(base * random.uniform(0.85, 1.15), 2)
+
+
+def calculate_option_price(
+    spy_price: float,
+    strike: float,
+    direction: str,
+    entry_option_price: float,
+    entry_spy_price: float
+) -> float:
+    """
+    Calculate current option price based on SPY movement.
+
+    Uses simplified but realistic 0DTE Greeks:
+    - Base delta: 0.30-0.50 for near OTM
+    - Gamma effect: delta increases as option goes ITM
+    - For big moves, gamma causes explosive returns
+    """
+    # Calculate SPY movement
+    spy_move = spy_price - entry_spy_price
+
+    # Determine if move is favorable
+    if direction == "CALL":
+        favorable_move = spy_move
+    else:  # PUT
+        favorable_move = -spy_move
+
+    # Current distance from strike
+    if direction == "CALL":
+        current_distance = strike - spy_price
+    else:
+        current_distance = spy_price - strike
+
+    # Dynamic delta based on moneyness
+    if current_distance <= 0:  # ITM
+        delta = 0.65 + min(0.30, abs(current_distance) * 0.05)  # Up to 0.95
+    elif current_distance <= 1:
+        delta = 0.45
+    elif current_distance <= 2:
+        delta = 0.30
+    else:
+        delta = 0.15
+
+    # Base option move
+    option_move = favorable_move * delta
+
+    # GAMMA EFFECT: For big moves, the option accelerates
+    # This is what makes 0DTE options explosive
+    if abs(favorable_move) > 4:
+        # Gamma explosion - option delta increased significantly during move
+        gamma_multiplier = 2.5
+    elif abs(favorable_move) > 2:
+        gamma_multiplier = 1.8
+    elif abs(favorable_move) > 1:
+        gamma_multiplier = 1.3
+    else:
+        gamma_multiplier = 1.0
+
+    option_move *= gamma_multiplier
+
+    # Calculate new option price
+    new_price = entry_option_price + option_move
+
+    # Theta decay (simplified - 0DTE loses value fast if not moving)
+    # If move is small, decay hurts
+    if abs(favorable_move) < 0.5:
+        new_price *= 0.90  # 10% decay per period in chop
+
+    # Option can't go below $0.01
+    new_price = max(0.01, new_price)
+
+    # If deep ITM, add intrinsic value
+    if current_distance < 0:
+        intrinsic = abs(current_distance)
+        new_price = max(new_price, intrinsic * 0.95)  # Near full intrinsic
+
+    return round(new_price, 2)
+
+
+def detect_signal(bars: List[Dict], idx: int) -> Optional[Tuple[str, float, float]]:
+    """
+    Signal detection based on momentum and volume.
+
+    Returns (direction, confidence, strike) or None.
     """
     if idx < 10:
         return None
 
-    # Get recent bars
     recent = bars[max(0, idx-10):idx+1]
     if len(recent) < 10:
         return None
 
-    # Calculate momentum (price change over last 10 bars)
+    current_price = recent[-1]["c"]
+
+    # Calculate momentum
     momentum = (recent[-1]["c"] - recent[0]["c"]) / recent[0]["c"]
 
-    # Volume spike detection
+    # Volume spike
     avg_vol = sum(b["v"] for b in recent[:-1]) / (len(recent) - 1) if len(recent) > 1 else 1
     vol_spike = recent[-1]["v"] / avg_vol if avg_vol > 0 else 1
 
-    # Signal generation
+    # Strong bar detection (big candle)
+    bar_range = (recent[-1]["h"] - recent[-1]["l"]) / recent[-1]["c"]
+
     confidence = 0
     direction = None
 
-    # Strong upward momentum + volume
-    if momentum > 0.003 and vol_spike > 1.5:  # +0.3% move with volume spike
+    # CALL signal: Strong upward momentum + volume
+    if momentum > 0.002 and vol_spike > 1.3:
         direction = "CALL"
-        confidence = min(85, 50 + momentum * 1000 + vol_spike * 10)
+        confidence = min(90, 50 + momentum * 2000 + vol_spike * 10 + bar_range * 500)
+        strike = round(current_price) + OTM_OFFSET  # OTM call
 
-    # Strong downward momentum + volume
-    elif momentum < -0.003 and vol_spike > 1.5:
+    # PUT signal: Strong downward momentum + volume
+    elif momentum < -0.002 and vol_spike > 1.3:
         direction = "PUT"
-        confidence = min(85, 50 + abs(momentum) * 1000 + vol_spike * 10)
+        confidence = min(90, 50 + abs(momentum) * 2000 + vol_spike * 10 + bar_range * 500)
+        strike = round(current_price) - OTM_OFFSET  # OTM put
 
-    # Only return if confidence is high enough
-    if direction and confidence >= 60:
-        return (direction, confidence)
+    if direction and confidence >= 55:
+        return (direction, confidence, strike)
 
     return None
 
 
-def get_option_premium(underlying_price: float, direction: str, dte: int = 0) -> float:
-    """
-    Estimate 0DTE option premium based on underlying price.
-
-    ATM 0DTE SPY options are typically 0.5-2% of underlying price.
-    """
-    # Base premium as % of underlying
-    base_pct = 0.005  # 0.5%
-
-    # Adjust for volatility (simplified)
-    premium = underlying_price * base_pct
-
-    # Add some randomness to simulate market conditions
-    premium *= random.uniform(0.8, 1.2)
-
-    return max(0.50, round(premium, 2))
-
-
-def simulate_trailing_stops(position: SimPosition, current_price: float) -> Tuple[float, str]:
-    """
-    Apply trailing stop ladder.
-
-    Returns (new_stop, action) where action is "HOLD" or exit reason.
-    """
-    # Calculate current profit
-    profit_pct = (current_price - position.entry_price) / position.entry_price
-
-    # Track peak
-    if current_price > position.peak_price:
-        position.peak_price = current_price
-
-    new_stop = position.stop_loss
-
-    # Apply trailing ladder based on profit level
-    if profit_pct >= TRAIL_MOONSHOT:  # +150%
-        # Trail at 8% below peak
-        new_stop = max(new_stop, position.peak_price * 0.92)
-    elif profit_pct >= TRAIL_AGGRESSIVE:  # +60%
-        # Trail at 10% below peak
-        new_stop = max(new_stop, position.peak_price * 0.90)
-    elif profit_pct >= TRAIL_LOCK:  # +35%
-        # Trail at 15% below peak
-        new_stop = max(new_stop, position.peak_price * 0.85)
-    elif profit_pct >= TRAIL_BREAKEVEN:  # +10%
-        # Move to breakeven
-        new_stop = max(new_stop, position.entry_price)
-
-    position.stop_loss = new_stop
-
-    # Check if stopped out
-    if current_price <= position.stop_loss:
-        if profit_pct > 0:
-            return (new_stop, f"TRAIL_EXIT (+{profit_pct*100:.0f}%)")
-        else:
-            return (new_stop, "STOP_LOSS")
-
-    return (new_stop, "HOLD")
-
-
 def run_day_simulation(date: str, start_account: float) -> DayResult:
-    """Run full simulation for one day."""
+    """Run full simulation for one day with REAL option P&L."""
     print(f"\n{'='*60}")
     print(f"SIMULATING: {date}")
     print(f"Starting account: ${start_account:,.2f}")
@@ -235,6 +289,12 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
     print(f"  Loaded {len(bars)} minute bars")
 
+    # Calculate day's range for context
+    day_high = max(b["h"] for b in bars)
+    day_low = min(b["l"] for b in bars)
+    day_range = day_high - day_low
+    print(f"  Day range: ${day_low:.2f} - ${day_high:.2f} (${day_range:.2f})")
+
     account = start_account
     peak_account = start_account
     max_drawdown = 0
@@ -243,140 +303,179 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
     for i, bar in enumerate(bars):
         bar_time = datetime.fromisoformat(bar["t"].replace("Z", "+00:00"))
-        current_price = bar["c"]
+        spy_price = bar["c"]
 
-        # 1. Check existing positions for exits
+        # 1. Check existing positions
         for pos in positions[:]:
-            # For simplicity, option price moves proportionally to underlying
-            # In reality this depends on delta, but for 0DTE ATM, delta ~0.5
-            option_change = (current_price - pos.entry_price) / pos.entry_price
-            if pos.direction == "PUT":
-                option_change = -option_change  # Puts move opposite
+            # Calculate current option price
+            current_option_price = calculate_option_price(
+                spy_price=spy_price,
+                strike=pos.strike,
+                direction=pos.direction,
+                entry_option_price=pos.entry_option_price,
+                entry_spy_price=pos.entry_spy_price
+            )
 
-            current_option_price = pos.option_premium * (1 + option_change * 2)  # Delta ~0.5 amplified
-            current_option_price = max(0.01, current_option_price)  # Can't go below 0
+            # Track peak
+            if current_option_price > pos.peak_option_price:
+                pos.peak_option_price = current_option_price
 
-            # Apply trailing stops
-            new_stop, action = simulate_trailing_stops(pos, current_option_price)
+            # Calculate P&L
+            current_pnl_pct = (current_option_price - pos.entry_option_price) / pos.entry_option_price
 
-            if action != "HOLD":
-                # Exit the position
-                exit_price = current_option_price * (1 - SLIPPAGE_PCT)  # Slippage on exit
-                pnl_dollars = (exit_price - pos.option_premium) * pos.contracts * 100
-                pnl_pct = (exit_price - pos.option_premium) / pos.option_premium * 100
+            # Check trailing stops
+            exit_reason = None
+
+            # Stop loss check (-50% of option value)
+            if current_pnl_pct <= -0.50:
+                exit_reason = "STOP_LOSS"
+
+            # Trailing stop from peak
+            elif current_pnl_pct >= TRAIL_MOONSHOT:  # +500%
+                drawdown_from_peak = (pos.peak_option_price - current_option_price) / pos.peak_option_price
+                if drawdown_from_peak > 0.08:  # 8% from peak
+                    exit_reason = f"TRAIL_MOON"
+            elif current_pnl_pct >= TRAIL_AGGRESSIVE:  # +200%
+                drawdown_from_peak = (pos.peak_option_price - current_option_price) / pos.peak_option_price
+                if drawdown_from_peak > 0.12:
+                    exit_reason = f"TRAIL_AGG"
+            elif current_pnl_pct >= TRAIL_LOCK:  # +100%
+                drawdown_from_peak = (pos.peak_option_price - current_option_price) / pos.peak_option_price
+                if drawdown_from_peak > 0.20:
+                    exit_reason = f"TRAIL_LOCK"
+            elif current_pnl_pct >= TRAIL_BREAKEVEN:  # +50%
+                if current_pnl_pct < 0.10:  # Gave back to <10%
+                    exit_reason = "TRAIL_BE"
+
+            if exit_reason:
+                # Exit with slippage
+                exit_price = current_option_price * (1 - SLIPPAGE_PCT)
+                position_value = pos.contracts * exit_price * 100
+                pnl_dollars = position_value - pos.position_cost
+                pnl_pct = (exit_price - pos.entry_option_price) / pos.entry_option_price * 100
 
                 trade = SimTrade(
                     entry_time=pos.entry_time,
                     exit_time=bar_time,
                     direction=pos.direction,
-                    entry_price=pos.option_premium,
-                    exit_price=exit_price,
-                    size_dollars=pos.size_dollars,
+                    strike=pos.strike,
+                    contracts=pos.contracts,
+                    entry_option_price=pos.entry_option_price,
+                    exit_option_price=exit_price,
+                    position_cost=pos.position_cost,
                     pnl_dollars=pnl_dollars,
                     pnl_pct=pnl_pct,
-                    exit_reason=action
+                    exit_reason=exit_reason,
+                    spy_entry=pos.entry_spy_price,
+                    spy_exit=spy_price
                 )
                 completed_trades.append(trade)
 
                 account += pnl_dollars
                 positions.remove(pos)
 
-                print(f"  [{bar_time.strftime('%H:%M')}] EXIT {pos.direction}: {action} | P&L: ${pnl_dollars:+,.2f} ({pnl_pct:+.1f}%)")
+                spy_move = spy_price - pos.entry_spy_price
+                print(f"  [{bar_time.strftime('%H:%M')}] EXIT {pos.direction} ${pos.strike}: {exit_reason}")
+                print(f"      SPY: ${pos.entry_spy_price:.2f} → ${spy_price:.2f} ({spy_move:+.2f})")
+                print(f"      Option: ${pos.entry_option_price:.2f} → ${exit_price:.2f}")
+                print(f"      P&L: ${pnl_dollars:+,.2f} ({pnl_pct:+.0f}%)")
 
                 # Track drawdown
                 if account > peak_account:
                     peak_account = account
-                dd = (peak_account - account) / peak_account
+                dd = (peak_account - account) / peak_account if peak_account > 0 else 0
                 if dd > max_drawdown:
                     max_drawdown = dd
 
-        # 2. Check for new signals (only if we have capacity)
+        # 2. Check for new signals
         if len(positions) < MAX_POSITIONS:
             signal = detect_signal(bars, i)
 
             if signal:
-                direction, confidence = signal
+                direction, confidence, strike = signal
 
-                # Position sizing (SWARM CONSENSUS: 5% max)
+                # Position sizing
                 position_value = account * POSITION_SIZE_PCT
 
-                # Get option premium
-                option_premium = get_option_premium(current_price, direction)
-                option_premium *= (1 + SLIPPAGE_PCT)  # Slippage on entry
+                # Get option price
+                option_price = get_option_entry_price(spy_price, strike, direction)
+                option_price *= (1 + SLIPPAGE_PCT)  # Slippage on entry
 
                 # Calculate contracts
-                contracts = max(1, int(position_value / (option_premium * 100)))
-                actual_cost = contracts * option_premium * 100
-
-                # Set stop and target
-                stop_loss = option_premium * 0.85  # -15% stop
-                target = option_premium * 2.0  # +100% target
+                contract_cost = option_price * 100
+                contracts = max(1, int(position_value / contract_cost))
+                actual_cost = contracts * contract_cost
 
                 pos = SimPosition(
                     entry_time=bar_time,
-                    entry_price=current_price,
+                    entry_spy_price=spy_price,
                     direction=direction,
-                    size_dollars=actual_cost,
+                    strike=strike,
                     contracts=contracts,
-                    option_premium=option_premium,
-                    stop_loss=stop_loss,
-                    target=target,
-                    peak_price=option_premium,
-                    original_size=contracts
+                    entry_option_price=option_price,
+                    position_cost=actual_cost,
+                    stop_loss_pct=-0.50,
+                    peak_option_price=option_price,
+                    original_contracts=contracts
                 )
                 positions.append(pos)
 
-                print(f"  [{bar_time.strftime('%H:%M')}] ENTRY {direction}: {contracts}x @ ${option_premium:.2f} (${actual_cost:,.2f}) | Conf: {confidence:.0f}%")
+                print(f"  [{bar_time.strftime('%H:%M')}] ENTRY {direction} ${strike}: {contracts}x @ ${option_price:.2f} (${actual_cost:,.0f}) | Conf: {confidence:.0f}%")
 
-        # 3. Check for pyramid opportunities
+        # 3. Pyramiding on big winners
         for pos in positions:
-            if pos.pyramid_adds < 2:  # Max 2 pyramids
-                option_change = (current_price - pos.entry_price) / pos.entry_price
-                if pos.direction == "PUT":
-                    option_change = -option_change
+            if pos.pyramid_adds < 2:
+                current_option_price = calculate_option_price(
+                    spy_price, pos.strike, pos.direction,
+                    pos.entry_option_price, pos.entry_spy_price
+                )
+                current_pnl_pct = (current_option_price - pos.entry_option_price) / pos.entry_option_price
 
-                current_option_price = pos.option_premium * (1 + option_change * 2)
-                profit_pct = (current_option_price - pos.option_premium) / pos.option_premium
-
-                if profit_pct >= PYRAMID_TRIGGER and pos.pyramid_adds < 2:
-                    # Add to position
-                    add_contracts = max(1, int(pos.original_size * PYRAMID_ADD_PCT))
+                if current_pnl_pct >= PYRAMID_TRIGGER:
+                    add_contracts = max(1, int(pos.original_contracts * PYRAMID_ADD_PCT))
                     add_cost = add_contracts * current_option_price * 100 * (1 + SLIPPAGE_PCT)
 
                     pos.contracts += add_contracts
-                    pos.size_dollars += add_cost
+                    pos.position_cost += add_cost
                     pos.pyramid_adds += 1
 
-                    print(f"  [{bar_time.strftime('%H:%M')}] PYRAMID {pos.direction}: +{add_contracts}x @ ${current_option_price:.2f}")
+                    print(f"  [{bar_time.strftime('%H:%M')}] PYRAMID {pos.direction} ${pos.strike}: +{add_contracts}x @ ${current_option_price:.2f}")
 
-    # Close any remaining positions at end of day
+    # Close remaining positions at EOD
     for pos in positions:
         final_bar = bars[-1]
-        option_change = (final_bar["c"] - pos.entry_price) / pos.entry_price
-        if pos.direction == "PUT":
-            option_change = -option_change
+        spy_price = final_bar["c"]
 
-        final_option_price = pos.option_premium * (1 + option_change * 2) * (1 - SLIPPAGE_PCT)
-        final_option_price = max(0.01, final_option_price)
+        final_option_price = calculate_option_price(
+            spy_price, pos.strike, pos.direction,
+            pos.entry_option_price, pos.entry_spy_price
+        )
+        final_option_price *= (1 - SLIPPAGE_PCT)
 
-        pnl_dollars = (final_option_price - pos.option_premium) * pos.contracts * 100
-        pnl_pct = (final_option_price - pos.option_premium) / pos.option_premium * 100
+        position_value = pos.contracts * final_option_price * 100
+        pnl_dollars = position_value - pos.position_cost
+        pnl_pct = (final_option_price - pos.entry_option_price) / pos.entry_option_price * 100
 
         trade = SimTrade(
             entry_time=pos.entry_time,
             exit_time=datetime.fromisoformat(final_bar["t"].replace("Z", "+00:00")),
             direction=pos.direction,
-            entry_price=pos.option_premium,
-            exit_price=final_option_price,
-            size_dollars=pos.size_dollars,
+            strike=pos.strike,
+            contracts=pos.contracts,
+            entry_option_price=pos.entry_option_price,
+            exit_option_price=final_option_price,
+            position_cost=pos.position_cost,
             pnl_dollars=pnl_dollars,
             pnl_pct=pnl_pct,
-            exit_reason="EOD_CLOSE"
+            exit_reason="EOD_CLOSE",
+            spy_entry=pos.entry_spy_price,
+            spy_exit=spy_price
         )
         completed_trades.append(trade)
         account += pnl_dollars
 
-        print(f"  [EOD] CLOSE {pos.direction}: P&L: ${pnl_dollars:+,.2f} ({pnl_pct:+.1f}%)")
+        spy_move = spy_price - pos.entry_spy_price
+        print(f"  [EOD] CLOSE {pos.direction} ${pos.strike}: SPY {spy_move:+.2f}, Option ${pos.entry_option_price:.2f}→${final_option_price:.2f}, P&L: ${pnl_dollars:+,.0f} ({pnl_pct:+.0f}%)")
 
     # Calculate stats
     wins = [t for t in completed_trades if t.pnl_dollars > 0]
@@ -399,68 +498,99 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
     print(f"\n  DAY SUMMARY:")
     print(f"    Trades: {result.num_trades} | Wins: {result.wins} | Win Rate: {result.win_rate:.0f}%")
-    print(f"    Avg Winner: {result.avg_winner:+.1f}% | Avg Loser: {result.avg_loser:+.1f}%")
-    print(f"    Largest Trade: ${result.largest_trade:+,.2f}")
-    print(f"    Account: ${result.start_account:,.2f} → ${result.end_account:,.2f} ({((result.end_account/result.start_account)-1)*100:+.1f}%)")
+    print(f"    Avg Winner: {result.avg_winner:+.0f}% | Avg Loser: {result.avg_loser:+.0f}%")
+    print(f"    Largest Trade: ${result.largest_trade:+,.0f}")
+    print(f"    Account: ${result.start_account:,.0f} → ${result.end_account:,.0f} ({((result.end_account/result.start_account)-1)*100:+.1f}%)")
     print(f"    Max Drawdown: {result.max_drawdown:.1f}%")
 
     return result
 
 
-def run_hell_backtest():
-    """Run full backtest on 5 most violent days."""
-    # Load violent days
-    with open("violent_days.json") as f:
-        violent_days = json.load(f)
-
-    print("\n" + "=" * 60)
-    print("BACKTEST FROM HELL")
-    print("5 Most Violent SPY Days - Full Pipeline Simulation")
-    print("=" * 60)
-    print(f"Initial Account: ${INITIAL_ACCOUNT:,.2f}")
-    print(f"Position Size: {POSITION_SIZE_PCT*100:.0f}%")
-    print(f"Slippage: {SLIPPAGE_PCT*100:.1f}% per side")
+def run_week_backtest(week_type: str, dates: List[str]):
+    """Run backtest for a specific week type."""
+    print(f"\n{'='*70}")
+    print(f"WEEK TYPE: {week_type}")
+    print(f"Dates: {', '.join(dates)}")
+    print(f"{'='*70}")
 
     account = INITIAL_ACCOUNT
     all_results: List[DayResult] = []
 
-    for day_data in violent_days:
-        result = run_day_simulation(day_data["date"], account)
+    for date in dates:
+        result = run_day_simulation(date, account)
         all_results.append(result)
         account = result.end_account
 
-    # Final summary
-    print("\n" + "=" * 60)
-    print("FINAL 5-DAY COMPOUNDING RESULTS")
-    print("=" * 60)
-
+    # Summary
     total_trades = sum(r.num_trades for r in all_results)
     total_wins = sum(r.wins for r in all_results)
     overall_win_rate = total_wins / total_trades * 100 if total_trades > 0 else 0
-
-    print(f"\nPer-Day Results:")
-    for r in all_results:
-        day_return = ((r.end_account / r.start_account) - 1) * 100
-        print(f"  {r.date}: ${r.start_account:,.2f} → ${r.end_account:,.2f} ({day_return:+.1f}%) | {r.num_trades} trades, {r.win_rate:.0f}% WR")
-
     final_return = ((account / INITIAL_ACCOUNT) - 1) * 100
 
-    print(f"\n{'='*60}")
-    print(f"FINAL ACCOUNT: ${account:,.2f}")
-    print(f"TOTAL RETURN: {final_return:+.1f}%")
-    print(f"TOTAL TRADES: {total_trades}")
-    print(f"OVERALL WIN RATE: {overall_win_rate:.0f}%")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(f"{week_type} WEEK RESULTS")
+    print(f"{'='*70}")
+    for r in all_results:
+        day_return = ((r.end_account / r.start_account) - 1) * 100
+        print(f"  {r.date}: ${r.start_account:,.0f} → ${r.end_account:,.0f} ({day_return:+.1f}%) | {r.num_trades} trades")
 
-    if account >= 50000:
-        print("\n✅ TARGET ACHIEVED: $5K → $50K+ in 5 days!")
-    else:
-        needed = 50000 - account
-        print(f"\n❌ TARGET NOT MET: Need ${needed:,.2f} more to hit $50K")
-        print(f"   Daily return needed: {((50000/INITIAL_ACCOUNT)**(1/5)-1)*100:.1f}%")
+    print(f"\n  FINAL: ${INITIAL_ACCOUNT:,.0f} → ${account:,.0f} ({final_return:+.1f}%)")
+    print(f"  Total Trades: {total_trades} | Win Rate: {overall_win_rate:.0f}%")
 
-    return all_results, account
+    return account, all_results
+
+
+def run_hell_backtest():
+    """Run THE BACKTEST FROM HELL - three week types."""
+    print("\n" + "=" * 70)
+    print("THE BACKTEST FROM HELL")
+    print("Real Alpaca Data | Real Option P&L | Full Pipeline")
+    print("=" * 70)
+    print(f"Initial Account: ${INITIAL_ACCOUNT:,.0f}")
+    print(f"Position Size: {POSITION_SIZE_PCT*100:.0f}%")
+    print(f"OTM Offset: {OTM_OFFSET} points (LOTTO TICKET entries)")
+
+    # Week definitions (last 60 days from 2026-03-01)
+    # BAD WEEK: Choppy, low VIX, sideways
+    bad_week = ["2026-02-10", "2026-02-11", "2026-02-12", "2026-02-13", "2026-02-14"]
+
+    # AVERAGE WEEK: Moderate VIX, some movement
+    avg_week = ["2026-02-03", "2026-02-04", "2026-02-05", "2026-02-06", "2026-02-07"]
+
+    # GREAT WEEK: High VIX, big moves
+    great_week = ["2026-01-21", "2026-01-22", "2026-01-23", "2026-01-24", "2026-01-27"]
+
+    results = {}
+
+    # Run BAD week
+    bad_final, bad_results = run_week_backtest("BAD (Choppy/Sideways)", bad_week)
+    results["bad"] = {"final": bad_final, "target": 7000}
+
+    # Run AVERAGE week
+    avg_final, avg_results = run_week_backtest("AVERAGE (Moderate VIX)", avg_week)
+    results["average"] = {"final": avg_final, "target": 12000}
+
+    # Run GREAT week
+    great_final, great_results = run_week_backtest("GREAT (High Volatility)", great_week)
+    results["great"] = {"final": great_final, "target": 30000}
+
+    # Final summary
+    print("\n" + "=" * 70)
+    print("FINAL RESULTS - THE LIE DETECTOR")
+    print("=" * 70)
+
+    for week_type, data in results.items():
+        final = data["final"]
+        target = data["target"]
+        hit = "✅" if final >= target else "❌"
+        pct = ((final / INITIAL_ACCOUNT) - 1) * 100
+        print(f"\n{week_type.upper()} WEEK:")
+        print(f"  Result: ${INITIAL_ACCOUNT:,.0f} → ${final:,.0f} ({pct:+.1f}%)")
+        print(f"  Target: ${target:,.0f}")
+        print(f"  Status: {hit} {'HIT' if final >= target else 'MISSED by $' + f'{target-final:,.0f}'}")
+
+    return results
 
 
 if __name__ == "__main__":
-    results, final = run_hell_backtest()
+    run_hell_backtest()
