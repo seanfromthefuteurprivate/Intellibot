@@ -139,6 +139,7 @@ class GammaSqueezeDetector:
         self._conditions_cache: Dict[str, SqueezeConditions] = {}
         self._last_check: Dict[str, datetime] = {}
         self._active_signals: Dict[str, SqueezeSignal] = {}
+        self._executed_tickers: set = set()  # Track executed squeeze tickers to avoid duplicates
         self._lock = threading.RLock()
 
         # Stats
@@ -328,8 +329,25 @@ class GammaSqueezeDetector:
         # Check all candidates
         best = self.get_best_squeeze()
         if best and best.confidence >= 75:
+            # Don't trigger if already executed today
+            if best.ticker in self._executed_tickers:
+                logger.debug(f"GAMMA_SQUEEZE: {best.ticker} already executed today, skipping")
+                return False, None
             return True, best
         return False, None
+
+    def mark_executed(self, ticker: str) -> None:
+        """Mark a ticker as executed for gamma squeeze to avoid duplicate trades."""
+        with self._lock:
+            self._executed_tickers.add(ticker)
+            self._stats["signals_triggered"] += 1
+        logger.info(f"GAMMA_SQUEEZE: Marked {ticker} as executed")
+
+    def reset_executed(self) -> None:
+        """Reset executed tickers (call at start of trading day)."""
+        with self._lock:
+            self._executed_tickers.clear()
+        logger.info("GAMMA_SQUEEZE: Reset executed tickers for new trading day")
 
     # ========== DATA FETCHING METHODS ==========
 
