@@ -146,8 +146,8 @@ def get_option_entry_price(spy_price: float, strike: float, direction: str) -> f
     else:
         base = 0.08  # Deep OTM lotto
 
-    # Add some variance
-    return round(base * random.uniform(0.85, 1.15), 2)
+    # Deterministic pricing - no random variance for reproducible results
+    return round(base, 2)
 
 
 def calculate_option_price(
@@ -572,15 +572,15 @@ def run_hell_backtest():
     print(f"Position Size: {POSITION_SIZE_PCT*100:.0f}%")
     print(f"OTM Offset: {OTM_OFFSET} points (LOTTO TICKET entries)")
 
-    # Week definitions (last 60 days from 2026-03-01)
-    # BAD WEEK: Choppy, low VIX, sideways
-    bad_week = ["2026-02-10", "2026-02-11", "2026-02-12", "2026-02-13", "2026-02-14"]
+    # Week definitions - VERIFIED BY ACTUAL SPY DATA
+    # BAD WEEK: Lowest volatility - avg $3.74 daily range
+    bad_week = ["2026-01-22", "2026-01-23", "2026-01-26", "2026-01-27", "2026-01-28"]
 
-    # AVERAGE WEEK: Moderate VIX, some movement
-    avg_week = ["2026-02-03", "2026-02-04", "2026-02-05", "2026-02-06", "2026-02-07"]
+    # AVERAGE WEEK: Moderate volatility - avg $7-8 daily range
+    avg_week = ["2026-02-09", "2026-02-10", "2026-02-11", "2026-02-12", "2026-02-13"]
 
-    # GREAT WEEK: High VIX, big moves
-    great_week = ["2026-01-21", "2026-01-22", "2026-01-23", "2026-01-24", "2026-01-27"]
+    # GREAT WEEK: Highest volatility - avg $9.84 daily range
+    great_week = ["2026-01-29", "2026-01-30", "2026-02-02", "2026-02-03", "2026-02-04"]
 
     results = {}
 
