@@ -64,11 +64,11 @@ def download_file(file_id):
     return base64.b64encode(r2.content).decode() if r2.ok else None
 
 def ocr_image_bedrock(b64_image):
-    """OCR with AWS Bedrock Claude 3 Sonnet - on-demand supported."""
+    """OCR with AWS Bedrock Claude 3.5 Sonnet via inference profile."""
     try:
-        # Use Claude 3 Sonnet (not 3.5) which supports on-demand invocation
+        # Use inference profile (cross-region) - direct model IDs are LEGACY
         response = bedrock.invoke_model(
-            modelId='anthropic.claude-3-sonnet-20240229-v1:0',
+            modelId='us.anthropic.claude-3-5-sonnet-20241022-v2:0',
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1500,
