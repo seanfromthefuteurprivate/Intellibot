@@ -64,22 +64,28 @@ def download_file(file_id):
     return base64.b64encode(r2.content).decode() if r2.ok else None
 
 def ocr_image_bedrock(b64_image):
-    """OCR with AWS Bedrock Claude Sonnet - faster, cheaper, better."""
+    """OCR with AWS Bedrock Claude 3 Sonnet - on-demand supported."""
     try:
+        # Use Claude 3 Sonnet (not 3.5) which supports on-demand invocation
         response = bedrock.invoke_model(
-            modelId='anthropic.claude-3-5-sonnet-20241022-v2:0',
+            modelId='anthropic.claude-3-sonnet-20240229-v1:0',
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1500,
                 "messages": [{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_image}},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_image}},
                     {"type": "text", "text": OCR_PROMPT}
                 ]}]
             })
         )
-        txt = json.loads(response['body'].read())['content'][0]['text']
+        result = json.loads(response['body'].read())
+        txt = result['content'][0]['text']
+        print(f"[BEDROCK] Raw response: {txt[:200]}...")
         txt = txt.replace("```json", "").replace("```", "").strip()
         return json.loads(txt)
+    except json.JSONDecodeError as e:
+        print(f"[BEDROCK] JSON parse error: {e}, raw: {txt[:300]}")
+        return {"trades": [], "confidence": 0, "raw_text": txt[:500]}
     except Exception as e:
         print(f"[BEDROCK] OCR error: {e}")
         return {"trades": [], "confidence": 0}
