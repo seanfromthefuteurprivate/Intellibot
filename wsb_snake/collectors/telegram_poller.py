@@ -1,48 +1,64 @@
 #!/usr/bin/env python3
-"""Telegram screenshot poller - Bedrock Claude Sonnet OCR, no OpenAI, no mercy."""
-import os, json, time, sqlite3, base64, requests, boto3
+"""Telegram screenshot poller - GPT-4o Vision OCR, aggressive extraction, no mercy."""
+import os, json, time, sqlite3, base64, requests
+from openai import OpenAI
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 DB_PATH = os.environ.get("DB_PATH", "/home/ubuntu/wsb-snake/wsb_snake_data/wsb_snake.db")
 OFFSET_FILE = "/home/ubuntu/wsb-snake/telegram_offset.txt"
 POLL_INTERVAL = 30
 
-bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
-OCR_PROMPT = """You are a trade data extraction expert. Extract ANY trade information visible in this screenshot. This could be from ANY brokerage platform (Robinhood, Webull, ThinkorSwim, Schwab, IBKR, Alpaca, etc.) or a cropped screenshot from Reddit/Twitter/Discord.
+OCR_PROMPT = """You are a financial trade data extraction expert. Extract ALL trade and position information from this brokerage screenshot.
 
-Extract ALL of the following that you can find. If a field isn't visible, use null — do NOT reject the screenshot:
+This image could be from ANY platform: Robinhood (green/white or dark mode), E*TRADE (dark purple UI), Webull (dark UI with red/green), Interactive Brokers (IBKR - gray/blue UI), ThinkorSwim, Schwab, or a Reddit/Twitter post containing a brokerage screenshot.
+
+Extract EVERY piece of financial data you can see. Return JSON:
 {
   "trades": [
     {
       "ticker": "SPY",
-      "trade_type": "CALL or PUT",
+      "trade_type": "CALL",
       "strike": 590,
-      "expiry": "2026-02-28",
-      "direction": "long or short",
+      "expiry": "2026-03-20",
+      "direction": "long",
+      "action": "buy",
       "entry_price": 2.50,
       "exit_price": 4.00,
       "quantity": 10,
       "total_cost": 2500,
       "total_credit": 4000,
       "profit_loss_dollars": 1500,
-      "profit_loss_pct": 60,
+      "profit_loss_pct": 60.0,
       "platform": "Robinhood",
       "date": "2026-02-26",
-      "is_0dte": true,
-      "notes": "any other context visible"
+      "is_0dte": false,
+      "is_open": false,
+      "notes": "any context"
     }
   ],
-  "raw_text": "any other relevant text visible in the screenshot",
-  "confidence": 0.85
+  "account_summary": {
+    "total_value": 150608,
+    "daily_gain_dollars": 67942,
+    "daily_gain_pct": 82.19,
+    "buying_power": 190214
+  },
+  "source": "robinhood",
+  "confidence": 0.95
 }
 
 CRITICAL RULES:
-- If you can see ANY ticker symbol and ANY financial data, extract it. Do NOT return empty trades.
-- A screenshot showing P&L IS a trade. A screenshot showing positions IS a trade. A screenshot showing filled orders IS a trade.
-- Multiple trades in one screenshot? Return all of them in the trades array.
-- If it's truly not financial (a meme, a text conversation about non-trading topics), ONLY THEN return {"trades": [], "raw_text": "description", "confidence": 0}
-- Partial data is better than no data. If you can see a ticker and a P&L but not the strike, still extract what you can.
+1. If you see ANY ticker, ANY dollar amount, ANY percentage — extract it. NEVER return empty trades unless the image is truly not financial.
+2. Multiple trades in one screenshot? Return ALL of them.
+3. Account summary screenshots (showing total value, daily P&L) — fill account_summary even if no individual trades visible.
+4. Reddit posts — extract the brokerage data visible inside the embedded screenshot. Also note the Reddit username and upvote count in notes.
+5. Position views showing unrealized gains ARE trades — extract them with is_open: true.
+6. Trade history lists — extract EVERY line item as a separate trade.
+7. If a field isn't visible, use null — do NOT reject the entire screenshot.
+8. For E*TRADE positions showing stocks (not options), set trade_type to 'STOCK' and strike to null.
+9. For options, parse the strike and expiry from the contract name (e.g., 'XOM Jan 21 28 $125 Call' = ticker XOM, strike 125, expiry 2028-01-21, type CALL).
+10. Confidence should reflect how much data you could extract, not whether it's a 'valid trade.'
 
 Return ONLY valid JSON, no markdown."""
 
@@ -63,31 +79,29 @@ def download_file(file_id):
     r2 = requests.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}")
     return base64.b64encode(r2.content).decode() if r2.ok else None
 
-def ocr_image_bedrock(b64_image):
-    """OCR with AWS Bedrock Claude 3 Haiku - fast and already enabled."""
+def ocr_image_gpt4o(b64_image):
+    """OCR with GPT-4o Vision - already authenticated and working."""
     try:
-        # Claude 3 Haiku is ACTIVE and doesn't require use case form
-        response = bedrock.invoke_model(
-            modelId='anthropic.claude-3-haiku-20240307-v1:0',
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1500,
-                "messages": [{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_image}},
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_image}"}},
                     {"type": "text", "text": OCR_PROMPT}
-                ]}]
-            })
+                ]
+            }],
+            max_tokens=2000
         )
-        result = json.loads(response['body'].read())
-        txt = result['content'][0]['text']
-        print(f"[BEDROCK] Raw response: {txt[:200]}...")
+        txt = response.choices[0].message.content
+        print(f"[GPT-4o] Raw response: {txt[:300]}...")
         txt = txt.replace("```json", "").replace("```", "").strip()
         return json.loads(txt)
     except json.JSONDecodeError as e:
-        print(f"[BEDROCK] JSON parse error: {e}, raw: {txt[:300]}")
+        print(f"[GPT-4o] JSON parse error: {e}, raw: {txt[:500]}")
         return {"trades": [], "confidence": 0, "raw_text": txt[:500]}
     except Exception as e:
-        print(f"[BEDROCK] OCR error: {e}")
+        print(f"[GPT-4o] OCR error: {e}")
         return {"trades": [], "confidence": 0}
 
 def init_db():
@@ -133,22 +147,34 @@ def process_update(update):
     print(f"[TELEGRAM] Processing image from chat {chat_id}")
     b64 = download_file(file_id)
     if not b64:
-        reply(chat_id, "❌ Failed to download image")
+        reply(chat_id, "Failed to download image")
         return
-    data = ocr_image_bedrock(b64)
+    data = ocr_image_gpt4o(b64)
     trades = data.get("trades", [])
     confidence = data.get("confidence", 0)
+    account = data.get("account_summary", {})
+
+    # Handle account summary even if no trades
+    if account and account.get("total_value"):
+        summary = f"*Account Summary*\nTotal: ${account.get('total_value', 0):,.2f}\nDaily: ${account.get('daily_gain_dollars', 0):+,.2f} ({account.get('daily_gain_pct', 0):+.2f}%)"
+        if not trades:
+            reply(chat_id, f"{summary}\n\n_Confidence: {confidence:.0%}_")
+            return
+
     if not trades:
-        reply(chat_id, f"🤔 No trades found (confidence: {confidence:.0%})\n\n{data.get('raw_text', '')[:200]}")
+        raw = data.get("raw_text", "")[:200]
+        reply(chat_id, f"No trades found (confidence: {confidence:.0%})\n\n{raw}")
         return
+
     for trade in trades:
-        insert_trade(trade, data.get("raw_text", ""), confidence, chat_id, msg_id)
+        insert_trade(trade, json.dumps(data.get("account_summary", {})), confidence, chat_id, msg_id)
         print(f"[TELEGRAM] Saved: {trade.get('ticker')} {trade.get('strike')} {trade.get('trade_type')} P/L: {trade.get('profit_loss_pct')}%")
-    summary = "\n".join([f"• {t.get('ticker')} ${t.get('strike')} {t.get('trade_type')} P/L: {t.get('profit_loss_pct') or 'N/A'}%" for t in trades])
-    reply(chat_id, f"✅ *{len(trades)} Trade(s) Captured*\n\n{summary}\n\n_Confidence: {confidence:.0%}_")
+
+    summary = "\n".join([f"• {t.get('ticker')} ${t.get('strike') or 'STOCK'} {t.get('trade_type') or ''} P/L: {t.get('profit_loss_pct') or 'N/A'}%" for t in trades])
+    reply(chat_id, f"*{len(trades)} Trade(s) Captured*\n\n{summary}\n\n_Confidence: {confidence:.0%}_")
 
 if __name__ == "__main__":
-    print(f"[TELEGRAM POLLER] Starting - Bedrock Claude Sonnet OCR - polling every {POLL_INTERVAL}s")
+    print(f"[TELEGRAM POLLER] Starting - GPT-4o Vision OCR - polling every {POLL_INTERVAL}s")
     init_db()
     offset = load_offset()
     while True:
