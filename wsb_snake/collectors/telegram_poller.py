@@ -1,12 +1,50 @@
 #!/usr/bin/env python3
-"""Telegram screenshot poller - bare loop, no frameworks, no mercy."""
-import os, json, time, sqlite3, base64, requests
+"""Telegram screenshot poller - Bedrock Claude Sonnet OCR, no OpenAI, no mercy."""
+import os, json, time, sqlite3, base64, requests, boto3
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", "/home/ubuntu/wsb-snake/wsb_snake_data/wsb_snake.db")
-OFFSET_FILE = "/tmp/telegram_offset.txt"
+OFFSET_FILE = "/home/ubuntu/wsb-snake/telegram_offset.txt"
 POLL_INTERVAL = 30
+
+bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+
+OCR_PROMPT = """You are a trade data extraction expert. Extract ANY trade information visible in this screenshot. This could be from ANY brokerage platform (Robinhood, Webull, ThinkorSwim, Schwab, IBKR, Alpaca, etc.) or a cropped screenshot from Reddit/Twitter/Discord.
+
+Extract ALL of the following that you can find. If a field isn't visible, use null — do NOT reject the screenshot:
+{
+  "trades": [
+    {
+      "ticker": "SPY",
+      "trade_type": "CALL or PUT",
+      "strike": 590,
+      "expiry": "2026-02-28",
+      "direction": "long or short",
+      "entry_price": 2.50,
+      "exit_price": 4.00,
+      "quantity": 10,
+      "total_cost": 2500,
+      "total_credit": 4000,
+      "profit_loss_dollars": 1500,
+      "profit_loss_pct": 60,
+      "platform": "Robinhood",
+      "date": "2026-02-26",
+      "is_0dte": true,
+      "notes": "any other context visible"
+    }
+  ],
+  "raw_text": "any other relevant text visible in the screenshot",
+  "confidence": 0.85
+}
+
+CRITICAL RULES:
+- If you can see ANY ticker symbol and ANY financial data, extract it. Do NOT return empty trades.
+- A screenshot showing P&L IS a trade. A screenshot showing positions IS a trade. A screenshot showing filled orders IS a trade.
+- Multiple trades in one screenshot? Return all of them in the trades array.
+- If it's truly not financial (a meme, a text conversation about non-trading topics), ONLY THEN return {"trades": [], "raw_text": "description", "confidence": 0}
+- Partial data is better than no data. If you can see a ticker and a P&L but not the strike, still extract what you can.
+
+Return ONLY valid JSON, no markdown."""
 
 def load_offset():
     try:
@@ -25,34 +63,50 @@ def download_file(file_id):
     r2 = requests.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{path}")
     return base64.b64encode(r2.content).decode() if r2.ok else None
 
-def ocr_image(b64_image):
-    r = requests.post("https://api.openai.com/v1/chat/completions", headers={
-        "Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"
-    }, json={
-        "model": "gpt-4o", "max_tokens": 500,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": "Extract trade data from this screenshot. Return JSON only: {\"ticker\": \"SPY\", \"strike\": 590, \"direction\": \"CALL\" or \"PUT\", \"entry_price\": 1.50, \"exit_price\": 2.25, \"pnl_pct\": 50.0, \"expiry\": \"2026-03-01\", \"notes\": \"any extra context\"}. If not a trade screenshot, return {\"error\": \"not a trade\"}"},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
-        ]}]
-    }, timeout=60)
+def ocr_image_bedrock(b64_image):
+    """OCR with AWS Bedrock Claude Sonnet - faster, cheaper, better."""
     try:
-        txt = r.json()["choices"][0]["message"]["content"]
+        response = bedrock.invoke_model(
+            modelId='anthropic.claude-3-5-sonnet-20241022-v2:0',
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1500,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_image}},
+                    {"type": "text", "text": OCR_PROMPT}
+                ]}]
+            })
+        )
+        txt = json.loads(response['body'].read())['content'][0]['text']
         txt = txt.replace("```json", "").replace("```", "").strip()
         return json.loads(txt)
-    except:
-        return {"error": "parse failed"}
+    except Exception as e:
+        print(f"[BEDROCK] OCR error: {e}")
+        return {"trades": [], "confidence": 0}
 
-def insert_trade(data, chat_id, msg_id):
+def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""CREATE TABLE IF NOT EXISTS learned_trades (
-        id INTEGER PRIMARY KEY, ticker TEXT, strike REAL, direction TEXT, entry_price REAL,
-        exit_price REAL, pnl_pct REAL, expiry TEXT, notes TEXT, source TEXT, created_at TEXT,
-        telegram_chat_id INTEGER, telegram_msg_id INTEGER)""")
-    conn.execute("""INSERT INTO learned_trades (ticker, strike, direction, entry_price, exit_price,
-        pnl_pct, expiry, notes, source, created_at, telegram_chat_id, telegram_msg_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'telegram', datetime('now'), ?, ?)""",
-        (data.get("ticker"), data.get("strike"), data.get("direction"), data.get("entry_price"),
-         data.get("exit_price"), data.get("pnl_pct"), data.get("expiry"), data.get("notes"), chat_id, msg_id))
+        id INTEGER PRIMARY KEY, ticker TEXT, trade_type TEXT, strike REAL, expiry TEXT,
+        direction TEXT, entry_price REAL, exit_price REAL, quantity INTEGER,
+        profit_loss_dollars REAL, profit_loss_pct REAL, platform TEXT, trade_date TEXT,
+        is_0dte INTEGER, notes TEXT, raw_text TEXT, confidence REAL,
+        source TEXT DEFAULT 'telegram', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        telegram_chat_id INTEGER, telegram_msg_id INTEGER, catalyst TEXT, pattern TEXT)""")
+    conn.commit()
+    conn.close()
+
+def insert_trade(trade, raw_text, confidence, chat_id, msg_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""INSERT INTO learned_trades (ticker, trade_type, strike, expiry, direction,
+        entry_price, exit_price, quantity, profit_loss_dollars, profit_loss_pct, platform,
+        trade_date, is_0dte, notes, raw_text, confidence, telegram_chat_id, telegram_msg_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (trade.get("ticker"), trade.get("trade_type"), trade.get("strike"), trade.get("expiry"),
+         trade.get("direction"), trade.get("entry_price"), trade.get("exit_price"),
+         trade.get("quantity"), trade.get("profit_loss_dollars"), trade.get("profit_loss_pct"),
+         trade.get("platform"), trade.get("date"), 1 if trade.get("is_0dte") else 0,
+         trade.get("notes"), raw_text, confidence, chat_id, msg_id))
     conn.commit()
     conn.close()
 
@@ -75,16 +129,21 @@ def process_update(update):
     if not b64:
         reply(chat_id, "❌ Failed to download image")
         return
-    data = ocr_image(b64)
-    if "error" in data:
-        reply(chat_id, f"❌ {data['error']}")
+    data = ocr_image_bedrock(b64)
+    trades = data.get("trades", [])
+    confidence = data.get("confidence", 0)
+    if not trades:
+        reply(chat_id, f"🤔 No trades found (confidence: {confidence:.0%})\n\n{data.get('raw_text', '')[:200]}")
         return
-    insert_trade(data, chat_id, msg_id)
-    reply(chat_id, f"✅ *Trade Captured*\n`{data.get('ticker')} ${data.get('strike')} {data.get('direction')}`\nP&L: {data.get('pnl_pct', 0):+.1f}%")
-    print(f"[TELEGRAM] Saved: {data.get('ticker')} {data.get('strike')} {data.get('direction')} {data.get('pnl_pct')}%")
+    for trade in trades:
+        insert_trade(trade, data.get("raw_text", ""), confidence, chat_id, msg_id)
+        print(f"[TELEGRAM] Saved: {trade.get('ticker')} {trade.get('strike')} {trade.get('trade_type')} P/L: {trade.get('profit_loss_pct')}%")
+    summary = "\n".join([f"• {t.get('ticker')} ${t.get('strike')} {t.get('trade_type')} P/L: {t.get('profit_loss_pct') or 'N/A'}%" for t in trades])
+    reply(chat_id, f"✅ *{len(trades)} Trade(s) Captured*\n\n{summary}\n\n_Confidence: {confidence:.0%}_")
 
 if __name__ == "__main__":
-    print(f"[TELEGRAM POLLER] Starting - polling every {POLL_INTERVAL}s")
+    print(f"[TELEGRAM POLLER] Starting - Bedrock Claude Sonnet OCR - polling every {POLL_INTERVAL}s")
+    init_db()
     offset = load_offset()
     while True:
         try:
@@ -95,5 +154,5 @@ if __name__ == "__main__":
                 offset = update["update_id"] + 1
                 save_offset(offset)
         except Exception as e:
-            print(f"[TELEGRAM] Error: {e}")
+            print(f"[TELEGRAM] Poll error: {e}")
         time.sleep(POLL_INTERVAL)
