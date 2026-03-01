@@ -64,11 +64,11 @@ def download_file(file_id):
     return base64.b64encode(r2.content).decode() if r2.ok else None
 
 def ocr_image_bedrock(b64_image):
-    """OCR with AWS Bedrock Claude 3.5 Sonnet via inference profile."""
+    """OCR with AWS Bedrock Claude 3 Haiku - fast and already enabled."""
     try:
-        # Use inference profile (cross-region) - direct model IDs are LEGACY
+        # Claude 3 Haiku is ACTIVE and doesn't require use case form
         response = bedrock.invoke_model(
-            modelId='us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+            modelId='anthropic.claude-3-haiku-20240307-v1:0',
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1500,
