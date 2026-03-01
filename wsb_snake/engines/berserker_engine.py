@@ -44,34 +44,37 @@ from wsb_snake.learning.specialist_swarm import get_specialist_swarm
 from wsb_snake.learning.trade_graph import get_trade_graph
 from wsb_snake.learning.trading_thesis import create_thesis_from_setup
 from wsb_snake.learning.semantic_memory import get_semantic_memory
+# VENOM: Wire dangerous detectors as BERSERKER triggers
+from wsb_snake.learning.gamma_squeeze_detector import get_gamma_squeeze_detector
+from wsb_snake.learning.overnight_gap_detector import get_overnight_gap_detector
 
 logger = get_logger(__name__)
 
 
 @dataclass
 class BerserkerConfig:
-    """Configuration for BERSERKER mode."""
-    # Entry conditions
-    gex_flip_proximity_threshold: float = 0.3  # % from flip point (0.3 = 0.3%)
-    min_hydra_confidence: float = 50.0
-    max_vix: float = 25.0
+    """Configuration for BERSERKER mode - VENOM AGGRESSIVE COMPOUNDING."""
+    # Entry conditions - RELAXED for more opportunities
+    gex_flip_proximity_threshold: float = 0.5  # % from flip point (WIDENED from 0.3 to catch more)
+    min_hydra_confidence: float = 45.0  # LOWERED from 50 for more action
+    max_vix: float = 30.0  # RAISED from 25 - trade in higher vol
     require_flow_confirmation: bool = True
 
-    # Position sizing
+    # Position sizing - AGGRESSIVE
     position_multiplier: float = 3.0  # 3x normal size
-    max_position_value: float = 3000.0  # $3k max per BERSERKER trade
+    max_position_value: float = 5000.0  # $5k max per BERSERKER trade (UP from $3k)
 
-    # Exit rules
-    target_pct: float = 50.0   # +50% on options
-    stop_pct: float = -15.0    # -15% stop (tight)
-    max_hold_minutes: int = 30  # 30 min max
+    # Exit rules - LET WINNERS RUN
+    target_pct: float = 150.0   # +150% target (UP from 50% - GEX flips run!)
+    stop_pct: float = -12.0    # -12% stop (WIDER from -15% - give room to breathe)
+    max_hold_minutes: int = 45  # 45 min max (UP from 30 - let it run)
 
-    # Limits
-    max_daily_trades: int = 3
+    # Limits - MORE AGGRESSIVE
+    max_daily_trades: int = 6  # UP from 3 - more compounding opportunities
 
-    # Timing
-    scan_interval_seconds: int = 30
-    cooldown_minutes: int = 15  # Min time between BERSERKER trades
+    # Timing - FASTER ROTATIONS
+    scan_interval_seconds: int = 20  # FASTER from 30s
+    cooldown_minutes: int = 8  # SHORTER from 15 min
 
 
 @dataclass
@@ -195,7 +198,11 @@ class BerserkerEngine:
             time.sleep(self.config.scan_interval_seconds)
 
     def _check_and_execute(self) -> None:
-        """Check activation conditions and execute if met."""
+        """Check activation conditions and execute if met.
+
+        VENOM: Also checks gamma squeeze detector and overnight gap detector
+        as additional BERSERKER triggers.
+        """
         # Check cooldown
         if self._last_trade_time:
             cooldown_end = self._last_trade_time + timedelta(minutes=self.config.cooldown_minutes)
@@ -203,7 +210,87 @@ class BerserkerEngine:
                 logger.debug(f"BERSERKER: In cooldown until {cooldown_end.strftime('%H:%M:%S')}")
                 return
 
-        # Check activation conditions
+        # ═══════════════════════════════════════════════════════════════
+        # VENOM: CHECK GAMMA SQUEEZE DETECTOR - AUTO-TRIGGER BERSERKER
+        # If gamma squeeze conditions are met, override normal activation
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            squeeze_detector = get_gamma_squeeze_detector()
+            should_squeeze, squeeze_signal = squeeze_detector.should_trigger_berserker()
+
+            if should_squeeze and squeeze_signal:
+                logger.warning(
+                    f"🚀 GAMMA SQUEEZE DETECTED: {squeeze_signal.ticker} | "
+                    f"Score: {squeeze_signal.squeeze_score:.0f} | "
+                    f"Direction: {squeeze_signal.direction} | "
+                    f"Confidence: {squeeze_signal.confidence:.0f}%"
+                )
+
+                # Convert squeeze signal to BERSERKER signal
+                squeeze_context = {
+                    "gex_flip_distance_pct": 0.1,  # Force activation
+                    "gex_regime": squeeze_signal.gex_regime or "NEGATIVE",
+                    "hydra_direction": squeeze_signal.direction.upper(),
+                    "flow_bias": "AGGRESSIVELY_" + squeeze_signal.direction.upper(),
+                    "vix_level": 20.0,
+                    "confidence": squeeze_signal.confidence,
+                    "connected": True,
+                    "squeeze_signal": squeeze_signal.to_dict(),
+                }
+
+                signal = self._generate_signal(squeeze_context)
+                if signal:
+                    signal.confidence = min(95, squeeze_signal.confidence + 10)
+                    self._stats["activations"] += 1
+                    logger.warning(f"🚀 GAMMA SQUEEZE BERSERKER: {signal.direction} @ {signal.strike}")
+                    self._execute_signal(signal)
+                    squeeze_detector.mark_executed(squeeze_signal.ticker)
+                    return
+
+        except Exception as e:
+            logger.debug(f"BERSERKER gamma squeeze check failed: {e}")
+
+        # ═══════════════════════════════════════════════════════════════
+        # VENOM: CHECK OVERNIGHT GAP DETECTOR - AUTO-TRIGGER BERSERKER
+        # If overnight gap is >1%, trigger BERSERKER at market open
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            gap_detector = get_overnight_gap_detector()
+            should_gap_trigger, gap_signal = gap_detector.should_trigger_berserker()
+
+            if should_gap_trigger and gap_signal:
+                logger.warning(
+                    f"📈 OVERNIGHT GAP BERSERKER: {gap_signal.ticker} | "
+                    f"Gap: {gap_signal.gap_analysis.gap_pct:+.2f}% | "
+                    f"Direction: {gap_signal.direction} | "
+                    f"Confidence: {gap_signal.confidence:.0f}%"
+                )
+
+                # Convert gap signal to BERSERKER signal
+                gap_context = {
+                    "gex_flip_distance_pct": 0.1,  # Force activation
+                    "gex_regime": gap_signal.gap_analysis.gex_regime or "NEGATIVE",
+                    "hydra_direction": gap_signal.direction.upper(),
+                    "flow_bias": "AGGRESSIVELY_" + gap_signal.direction.upper(),
+                    "vix_level": gap_signal.gap_analysis.vix_level,
+                    "confidence": gap_signal.confidence,
+                    "connected": True,
+                    "gap_signal": gap_signal.to_dict(),
+                }
+
+                signal = self._generate_signal(gap_context)
+                if signal:
+                    signal.confidence = min(95, gap_signal.confidence + 5)
+                    self._stats["activations"] += 1
+                    logger.warning(f"📈 OVERNIGHT GAP BERSERKER: {signal.direction} @ {signal.strike}")
+                    self._execute_signal(signal)
+                    gap_detector.mark_executed(gap_signal.ticker)
+                    return
+
+        except Exception as e:
+            logger.debug(f"BERSERKER overnight gap check failed: {e}")
+
+        # Check normal activation conditions
         activated, reason, context = self._check_activation_conditions()
 
         self._log_activation_check(activated, reason, context)
@@ -513,19 +600,25 @@ class BerserkerEngine:
         # 1. TRADE GRAPH: Check historical GEX flip trades
         try:
             trade_graph = get_trade_graph()
-            similar = trade_graph.find_similar_conditions(
-                ticker="SPX",
-                pattern=f"BERSERKER_{signal.direction}",
-                direction="long",
-                gex_regime=signal.gex_regime,
+            # find_similar_trades expects conditions dict, returns List[Tuple[TradeNode, float]]
+            similar = trade_graph.find_similar_trades(
+                conditions={
+                    "ticker": "SPX",
+                    "pattern": f"BERSERKER_{signal.direction}",
+                    "direction": "long",
+                    "gex_regime": signal.gex_regime,
+                },
+                top_k=10,
             )
             if similar:
-                avg_return = sum(t.get('pnl_pct', 0) for t in similar) / len(similar)
-                win_count = sum(1 for t in similar if t.get('pnl_pct', 0) > 0)
-                win_rate = win_count / len(similar) if similar else 0
-                logger.info(f"BERSERKER GRAPH: {len(similar)} similar | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
+                # similar is List[Tuple[TradeNode, float]] - extract trade nodes
+                trade_nodes = [t[0] for t in similar]
+                avg_return = sum(t.pnl_percent for t in trade_nodes) / len(trade_nodes)
+                win_count = sum(1 for t in trade_nodes if t.pnl_dollars > 0)
+                win_rate = win_count / len(trade_nodes) if trade_nodes else 0
+                logger.info(f"BERSERKER GRAPH: {len(trade_nodes)} similar | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
 
-                if avg_return < -10 and len(similar) >= 3:
+                if avg_return < -10 and len(trade_nodes) >= 3:
                     # Historical losers - abort
                     full_send_approved = False
                     notes.append(f"GRAPH_ABORT: Historical avg {avg_return:+.1f}%")
@@ -539,13 +632,14 @@ class BerserkerEngine:
         # 2. SPECIALIST SWARM: Get legendary investor votes
         try:
             swarm = get_specialist_swarm()
-            swarm_result = swarm.evaluate(
+            # analyze() returns SwarmConsensus directly (not wrapped in .consensus)
+            swarm_consensus = swarm.analyze(
                 ticker="SPX",
-                direction="long" if signal.direction == "CALL" else "short",
-                pattern=f"BERSERKER_GEX_FLIP",
-                entry_price=signal.entry_price,
-                confidence=signal.confidence,
                 context={
+                    "direction": "long" if signal.direction == "CALL" else "short",
+                    "pattern": "BERSERKER_GEX_FLIP",
+                    "price": signal.entry_price,
+                    "confidence": signal.confidence,
                     "gex_regime": signal.gex_regime,
                     "gex_flip_distance": signal.gex_flip_distance_pct,
                     "flow_bias": signal.flow_bias,
@@ -553,43 +647,61 @@ class BerserkerEngine:
                 }
             )
 
-            if swarm_result:
-                consensus = swarm_result.consensus
+            if swarm_consensus:
+                # SwarmConsensus has: direction, confidence, unanimity, verdicts, final_recommendation
+                bull_votes = sum(1 for v in swarm_consensus.verdicts if v.direction == "long")
+                total_votes = len(swarm_consensus.verdicts)
                 logger.info(
-                    f"BERSERKER SWARM: {consensus.action} | "
-                    f"Bulls: {consensus.bull_votes}/{consensus.total_votes} | "
-                    f"Confidence: {consensus.confidence_pct:.0f}%"
+                    f"BERSERKER SWARM: {swarm_consensus.final_recommendation} | "
+                    f"Bulls: {bull_votes}/{total_votes} | "
+                    f"Confidence: {swarm_consensus.confidence:.0f}%"
                 )
 
-                if consensus.action == "ABORT" and consensus.confidence_pct < 50:
+                if swarm_consensus.direction == "neutral" and swarm_consensus.confidence < 50:
                     full_send_approved = False
-                    notes.append(f"SWARM_ABORT: {consensus.bull_votes}/{consensus.total_votes}")
-                    logger.warning(f"BERSERKER SWARM ABORT: Only {consensus.bull_votes} bulls")
-                elif consensus.confidence_pct > 75:
+                    notes.append(f"SWARM_ABORT: {bull_votes}/{total_votes}")
+                    logger.warning(f"BERSERKER SWARM ABORT: Only {bull_votes} bulls")
+                elif swarm_consensus.confidence > 75:
                     signal.confidence += 5
-                    notes.append(f"SWARM_GO: {consensus.confidence_pct:.0f}%")
+                    notes.append(f"SWARM_GO: {swarm_consensus.confidence:.0f}%")
         except Exception as e:
             logger.debug(f"BERSERKER swarm check failed: {e}")
 
         # 3. SEMANTIC MEMORY: Query for similar GEX setups
         try:
+            from wsb_snake.learning.semantic_memory import TradeConditions as SemanticConditions
             semantic = get_semantic_memory()
-            semantic_result = semantic.query_similar(
+            # Build TradeConditions for semantic similarity search
+            semantic_conditions = SemanticConditions(
                 ticker="SPX",
-                pattern="BERSERKER_GEX_FLIP",
-                direction="long" if signal.direction == "CALL" else "short",
-                hour=datetime.now(timezone.utc).hour,
+                direction="LONG" if signal.direction == "CALL" else "SHORT",
+                entry_price=signal.entry_price,
+                rsi=50.0,  # Default - we don't have RSI in BERSERKER context
+                adx=25.0,
+                atr=1.0,
+                macd_signal="neutral",
+                volume_ratio=1.0,
+                regime="unknown",
+                vix=signal.vix_level,
+                gex_regime=signal.gex_regime,
+                hydra_direction=signal.hydra_direction,
+                confluence_score=signal.confidence / 100.0,
+                stop_distance_pct=15.0,
+                target_distance_pct=50.0,
             )
-            if semantic_result and semantic_result.similar_trades:
-                avg_outcome = sum(t.outcome.pnl_pct for t in semantic_result.similar_trades) / len(semantic_result.similar_trades)
-                logger.info(f"BERSERKER SEMANTIC: {len(semantic_result.similar_trades)} similar | Avg: {avg_outcome:+.1f}%")
+            # find_similar_trades returns List[SimilarTrade] where SimilarTrade.trade is TradeOutcome
+            similar_trades = semantic.find_similar_trades(semantic_conditions, top_k=5)
+            if similar_trades:
+                avg_outcome = sum(t.trade.pnl_percent for t in similar_trades) / len(similar_trades)
+                logger.info(f"BERSERKER SEMANTIC: {len(similar_trades)} similar | Avg: {avg_outcome:+.1f}%")
 
-                # Apply any learned rules
-                for rule in semantic_result.applicable_rules[:2]:
-                    if "avoid" in rule.rule.lower() and rule.confidence > 0.7:
+                # Check learned rules for these conditions
+                relevant_rules = semantic.get_relevant_rules(semantic_conditions)
+                for rule in relevant_rules[:2]:
+                    if "avoid" in rule.pattern_description.lower() and rule.confidence > 0.7:
                         full_send_approved = False
-                        notes.append(f"SEMANTIC_RULE: {rule.rule[:30]}")
-                        logger.warning(f"BERSERKER SEMANTIC ABORT: {rule.rule}")
+                        notes.append(f"SEMANTIC_RULE: {rule.pattern_description[:30]}")
+                        logger.warning(f"BERSERKER SEMANTIC ABORT: {rule.pattern_description}")
         except Exception as e:
             logger.debug(f"BERSERKER semantic check failed: {e}")
 
@@ -608,11 +720,15 @@ class BerserkerEngine:
             from wsb_snake.coordination.strategy_coordinator import TradeRequest
 
             # Build trade request - 3x SIZE because all components agree
+            # FIX: direction must match UNDERLYING direction, not option position
+            # CALL = bullish underlying = "long", PUT = bearish underlying = "short"
+            underlying_direction = "long" if signal.direction == "CALL" else "short"
+
             request = TradeRequest(
                 request_id=f"berserker_{signal.symbol}_{datetime.now().strftime('%H%M%S')}",
                 engine="berserker",
                 ticker=signal.symbol,
-                direction="long",  # We buy calls or puts, not short
+                direction=underlying_direction,  # FIX: Match underlying direction
                 entry_price=signal.entry_price,
                 target_price=signal.entry_price * (1 + self.config.target_pct / 100) if signal.direction == "CALL" else signal.entry_price * (1 - self.config.target_pct / 100),
                 stop_loss=signal.entry_price * (1 - abs(self.config.stop_pct) / 100) if signal.direction == "CALL" else signal.entry_price * (1 + abs(self.config.stop_pct) / 100),
@@ -631,6 +747,8 @@ class BerserkerEngine:
                     "position_multiplier": self.config.position_multiplier,
                     "max_hold_minutes": self.config.max_hold_minutes,
                     "full_send_notes": notes,
+                    "gex_regime": signal.gex_regime,  # VENOM FIX: Pass GEX regime for position sizing
+                    "pattern": f"BERSERKER_{signal.direction}",  # VENOM FIX: Pattern for tracking
                 },
             )
 

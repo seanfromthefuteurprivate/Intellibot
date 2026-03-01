@@ -67,14 +67,14 @@ class PowerHourConfig:
     emergency_hour: int = 15
     emergency_minute: int = 55
 
-    # Entry criteria
-    min_volume_ratio: float = 1.5  # Volume vs 20-day avg for 3 PM
-    min_conviction: float = 70.0
-    blowup_threshold: int = 60  # HYDRA blowup score to trigger blowup mode
+    # Entry criteria - VENOM AGGRESSIVE
+    min_volume_ratio: float = 1.2  # LOWERED from 1.5 - allow more entries
+    min_conviction: float = 62.0   # LOWERED from 70 - more aggressive
+    blowup_threshold: int = 50  # LOWERED from 60 - trigger blowup easier
 
-    # Scalp mode parameters
-    scalp_target_pct: float = 12.0
-    scalp_stop_pct: float = 7.0
+    # Scalp mode parameters - WIDER for 0DTE power hour
+    scalp_target_pct: float = 25.0  # UP from 12% - power hour can run!
+    scalp_stop_pct: float = 10.0   # UP from 7% - give room to breathe
     scalp_trail_tiers: List[Tuple[float, float]] = field(default_factory=lambda: [
         (5.0, 2.0),   # At +5%, lock +2%
         (8.0, 4.0),   # At +8%, lock +4%
@@ -91,10 +91,10 @@ class PowerHourConfig:
     # Wind-down parameters
     wind_down_trail_pct: float = 1.0  # Tighten to -1% from peak
 
-    # Limits
-    max_power_hour_trades: int = 5
-    max_power_hour_exposure: float = 3000.0
-    min_buying_power: float = 1000.0
+    # Limits - VENOM AGGRESSIVE
+    max_power_hour_trades: int = 8   # UP from 5 - more compounding
+    max_power_hour_exposure: float = 5000.0  # UP from $3k - use margin
+    min_buying_power: float = 500.0   # LOWERED from $1k - allow trading even when low
 
 
 class PowerHourProtocol:
@@ -372,6 +372,8 @@ class PowerHourProtocol:
     def _execute_scalp_entry(self, direction: str, signal_data: Dict) -> Optional[Dict]:
         """Execute a scalp mode entry."""
         try:
+            # NOTE: Risk governor check happens inside alpaca_executor.execute_scalp_entry()
+            # which calls can_trade() with all required parameters (positions, daily_pnl, etc.)
             ticker = "SPY"
             conviction = signal_data.get("conviction", 70)
 
@@ -427,6 +429,8 @@ class PowerHourProtocol:
     def _execute_blowup_entry(self, direction: str) -> Optional[Dict]:
         """Execute a blowup mode entry (straddle or directional)."""
         try:
+            # NOTE: Risk governor check happens inside alpaca_executor.execute_scalp_entry()
+            # and straddle_executor which call can_trade() with all required parameters
             from wsb_snake.execution.straddle_executor import StraddleExecutor
 
             ticker = "SPY"

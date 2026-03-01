@@ -322,6 +322,17 @@ except ImportError as e:
         pass
 
 # =============================================================================
+# VENOM: Telegram Webhook - Zero Message Loss
+# =============================================================================
+
+try:
+    from wsb_snake.api.telegram_webhook import router as telegram_router
+    app.include_router(telegram_router)
+    logger.info("Telegram webhook router loaded - /api/telegram/webhook")
+except ImportError as e:
+    logger.warning(f"Telegram webhook router not loaded: {e}")
+
+# =============================================================================
 # Additional Utility Endpoints
 # =============================================================================
 

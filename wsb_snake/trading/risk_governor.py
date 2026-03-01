@@ -70,12 +70,12 @@ class GovernorConfig:
     power_hour_target_pct: float = 0.10    # Power hour contributes 10%
     max_drawdown_from_peak_pct: float = 0.10  # If we drop 10% from daily high, half size
 
-    # Global position limits
-    max_concurrent_positions_global: int = 4  # Allow 4 positions (more action)
-    max_concurrent_positions_blowup: int = 2  # In blowup mode (size is 3x)
-    max_daily_exposure_pct: float = 0.80  # 80% of account can be deployed daily
-    max_total_exposure_pct: float = 0.40  # Max 40% at any one time
-    max_single_position_pct: float = 0.25  # Max 25% per position
+    # Global position limits - VENOM EXTREME
+    max_concurrent_positions_global: int = 5  # Allow 5 positions (MORE action)
+    max_concurrent_positions_blowup: int = 3  # In blowup mode (size is 3x)
+    max_daily_exposure_pct: float = 0.90  # 90% of account can be deployed daily (UP from 80%)
+    max_total_exposure_pct: float = 0.50  # Max 50% at any one time (UP from 40%)
+    max_single_position_pct: float = 0.35  # Max 35% per position (UP from 25%)
 
     # Per-engine position limits
     max_positions_scalper: int = 3  # More scalps = more compounding
@@ -96,30 +96,34 @@ class GovernorConfig:
     # Account cap: max % of buying power per trade
     max_pct_buying_power_per_trade: float = 0.20  # 20% (AGGRESSIVE)
 
-    # Consecutive loss cooldown - SHORTER for compounding
-    consecutive_loss_threshold: int = 4  # 4 losses triggers cooldown (was 3)
-    cooldown_hours: float = 2.0  # 2 hour pause (was 4)
+    # Consecutive loss cooldown - VENOM: DON'T STOP TRADING
+    consecutive_loss_threshold: int = 6  # 6 losses triggers cooldown (UP from 4 - stay in game)
+    cooldown_hours: float = 1.0  # 1 hour pause (DOWN from 2 - faster restart)
 
-    # WIN RATE PRESERVATION - Still important
-    min_daily_win_rate: float = 0.60  # 60% (lowered from 75% - let winners run)
-    min_trades_for_win_rate_check: int = 3  # Need 3 trades before enforcing
-    high_vol_exception_vix: float = 30.0  # VIX > 30 allows trading (raised)
-    preserve_profit_threshold_pct: float = 0.05  # Protect when up 5%+
+    # WIN RATE PRESERVATION - VENOM: Less restrictive
+    min_daily_win_rate: float = 0.50  # 50% (LOWERED from 60% - allow more action)
+    min_trades_for_win_rate_check: int = 5  # Need 5 trades before enforcing (UP from 3)
+    high_vol_exception_vix: float = 25.0  # VIX > 25 allows trading (LOWERED - trade more)
+    preserve_profit_threshold_pct: float = 0.08  # Protect when up 8%+ (UP from 5%)
 
-    # ========== VENOM COMPOUNDING ENHANCEMENTS ==========
-    # Conviction-based position sizing tiers (% of account)
-    conviction_tier_low: float = 65.0      # 65-75% conviction: 10% of account
-    conviction_tier_mid: float = 75.0      # 75-85% conviction: 15% of account
-    conviction_tier_high: float = 85.0     # 85%+ conviction: 20% of account
-    position_pct_low: float = 0.10         # 10% of account
-    position_pct_mid: float = 0.15         # 15% of account
-    position_pct_high: float = 0.20        # 20% of account
+    # ========== VENOM EXTREME COMPOUNDING ==========
+    # Conviction-based position sizing tiers (% of account) - AGGRESSIVE
+    conviction_tier_low: float = 60.0      # LOWERED: 60-72% conviction: 15% of account
+    conviction_tier_mid: float = 72.0      # LOWERED: 72-82% conviction: 22% of account
+    conviction_tier_high: float = 82.0     # LOWERED: 82%+ conviction: 35% of account
+    position_pct_low: float = 0.15         # 15% of account (UP from 12%)
+    position_pct_mid: float = 0.22         # 22% of account (UP from 18%)
+    position_pct_high: float = 0.35        # 35% of account (UP from 25%)
 
-    # COMPOUNDING MULTIPLIERS - Size up after wins, down after losses
-    win_streak_multiplier: float = 1.25    # +25% size after each win (up to 2x)
-    loss_streak_divisor: float = 0.50      # -50% size after loss
-    max_win_streak_multiplier: float = 2.0  # Cap at 2x
-    reinvest_profit_pct: float = 0.50      # Reinvest 50% of daily gains
+    # COMPOUNDING MULTIPLIERS - EXTREME: Size up FAST after wins
+    win_streak_multiplier: float = 1.75    # +75% size after each win (UP from 1.50)
+    loss_streak_divisor: float = 0.60      # -40% size after loss (less punishing)
+    max_win_streak_multiplier: float = 4.0  # Cap at 4x (UP from 3x) - FULL SEND
+    reinvest_profit_pct: float = 0.95      # Reinvest 95% of daily gains (UP from 85%)
+
+    # GEX REGIME MULTIPLIERS - VENOM EXTREME when dealers are short gamma
+    gex_negative_multiplier: float = 1.8   # 1.8x size when GEX negative (UP from 1.5)
+    gex_extreme_negative_multiplier: float = 2.5  # 2.5x size when GEX very negative (UP from 2.0)
 
     # Drawdown circuit breaker thresholds (PERCENTAGE)
     drawdown_half_size_threshold_pct: float = 0.10  # -10% daily -> half position size
@@ -128,6 +132,21 @@ class GovernorConfig:
 
     # Correlation guard
     max_correlation_threshold: float = 0.85  # Allow slightly more correlation for compounding
+
+    # ═══════════════════════════════════════════════════════════════
+    # VENOM: TIME-OF-DAY AGGRESSION MULTIPLIERS
+    # Different windows have different win rates and volatility patterns
+    # ═══════════════════════════════════════════════════════════════
+    # Opening Drive (9:30-10:00): 1.5x - High volatility, clear direction
+    tod_opening_drive_multiplier: float = 1.5
+    # Morning Lull (10:00-11:30): 0.8x - Low probability setups
+    tod_morning_lull_multiplier: float = 0.8
+    # Lunch Chop (11:30-14:00): 0.7x - Avoid choppy markets
+    tod_lunch_chop_multiplier: float = 0.7
+    # Afternoon Trend (14:00-15:00): 1.2x - Institutional flow
+    tod_afternoon_trend_multiplier: float = 1.2
+    # Power Hour (15:00-16:00): 1.8x - Maximum aggression, clear trends
+    tod_power_hour_multiplier: float = 1.8
 
     # ========== LEGACY FLAT DOLLAR FALLBACKS (for backwards compat) ==========
     # These are calculated from percentages at runtime based on account size
@@ -387,19 +406,22 @@ class RiskGovernor:
         conviction_pct: float,
         buying_power: float,
         daily_pnl: float = 0.0,
+        gex_regime: str = "unknown",
     ) -> float:
         """
         VENOM COMPOUNDING: Percentage-based position sizing with streak multipliers.
 
         Position size = account % based on conviction, multiplied by streak factor.
-        - After wins: size UP (1.25x per win, max 2x)
+        - After wins: size UP (1.5x per win, max 3x)
         - After losses: size DOWN (0.5x)
-        - Reinvest 50% of daily profits
+        - Reinvest 85% of daily profits
+        - GEX REGIME: Size UP when dealers are short gamma (amplified moves)
 
         Args:
             conviction_pct: Conviction score (0-100)
             buying_power: Current buying power
             daily_pnl: Current daily realized P/L
+            gex_regime: GEX regime ("negative", "extreme_negative", "positive", "neutral", "unknown")
 
         Returns:
             Maximum position size in dollars
@@ -438,19 +460,41 @@ class RiskGovernor:
             # Apply streak multiplier (SIZE UP AFTER WINS)
             streak_adjusted = base_size * self._current_streak_multiplier
 
+            # ═══════════════════════════════════════════════════════════════
+            # GEX REGIME MULTIPLIER - Trade bigger when dealers are short gamma
+            # Negative GEX = dealers short gamma = amplified moves = OPPORTUNITY
+            # ═══════════════════════════════════════════════════════════════
+            gex_multiplier = 1.0
+            gex_regime_lower = gex_regime.lower() if gex_regime else "unknown"
+
+            if gex_regime_lower in ("extreme_negative", "very_negative", "extreme-negative"):
+                gex_multiplier = self.config.gex_extreme_negative_multiplier  # 2.0x
+                log.info(f"GEX EXTREME NEGATIVE: {gex_multiplier:.1f}x size boost")
+            elif gex_regime_lower in ("negative", "neg"):
+                gex_multiplier = self.config.gex_negative_multiplier  # 1.5x
+                log.info(f"GEX NEGATIVE: {gex_multiplier:.1f}x size boost")
+
+            gex_adjusted = streak_adjusted * gex_multiplier
+
+            # ═══════════════════════════════════════════════════════════════
+            # TIME-OF-DAY MULTIPLIER - Power Hour gets 1.8x, Lunch gets 0.7x
+            # ═══════════════════════════════════════════════════════════════
+            tod_multiplier = self.get_time_of_day_multiplier()
+            tod_adjusted = gex_adjusted * tod_multiplier
+
             # Apply drawdown reduction if active
             if daily_pnl_pct <= -self.config.drawdown_half_size_threshold_pct:
-                streak_adjusted = streak_adjusted / 2
-                log.warning(f"DRAWDOWN PROTECTION: Position halved to ${streak_adjusted:.0f}")
+                tod_adjusted = tod_adjusted / 2
+                log.warning(f"DRAWDOWN PROTECTION: Position halved to ${tod_adjusted:.0f}")
 
             # Cap at max single position
             max_position = effective_account * self.config.max_single_position_pct
-            final_size = min(streak_adjusted, max_position)
+            final_size = min(tod_adjusted, max_position)
 
             log.info(
                 f"VENOM SIZE: {conviction_pct:.0f}% -> {tier} | "
-                f"Base: ${base_size:.0f} x {self._current_streak_multiplier:.2f}x streak = ${final_size:.0f} | "
-                f"Streak: {self._consecutive_wins}W / {self._consecutive_losses}L"
+                f"Base: ${base_size:.0f} x {self._current_streak_multiplier:.2f}x streak x {gex_multiplier:.1f}x GEX x {tod_multiplier:.1f}x TOD = ${final_size:.0f} | "
+                f"Streak: {self._consecutive_wins}W / {self._consecutive_losses}L | GEX: {gex_regime}"
             )
             return final_size
 
@@ -476,6 +520,64 @@ class RiskGovernor:
                 # Size down: 0.5x after loss
                 self._current_streak_multiplier = self.config.loss_streak_divisor
                 log.warning(f"📉 LOSS: Streak reset -> {self._current_streak_multiplier:.2f}x multiplier")
+
+    def get_time_of_day_multiplier(self) -> float:
+        """
+        VENOM: Get position size multiplier based on time of day.
+
+        Different market windows have different probabilities and volatility:
+        - Opening Drive (9:30-10:00 ET): 1.5x - High vol, clear direction
+        - Morning Lull (10:00-11:30 ET): 0.8x - Low probability
+        - Lunch Chop (11:30-14:00 ET): 0.7x - Avoid choppy markets
+        - Afternoon Trend (14:00-15:00 ET): 1.2x - Institutional flow
+        - Power Hour (15:00-16:00 ET): 1.8x - Maximum aggression
+
+        Returns multiplier (0.7 to 1.8)
+        """
+        try:
+            import pytz
+            from datetime import datetime
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            hour = now_et.hour
+            minute = now_et.minute
+            time_decimal = hour + minute / 60.0
+
+            # Pre-market or after-hours: no trading
+            if time_decimal < 9.5 or time_decimal >= 16.0:
+                return 0.5  # Minimal size outside market hours
+
+            # Opening Drive: 9:30-10:00 ET
+            if 9.5 <= time_decimal < 10.0:
+                multiplier = self.config.tod_opening_drive_multiplier
+                window = "OPENING_DRIVE"
+
+            # Morning Lull: 10:00-11:30 ET
+            elif 10.0 <= time_decimal < 11.5:
+                multiplier = self.config.tod_morning_lull_multiplier
+                window = "MORNING_LULL"
+
+            # Lunch Chop: 11:30-14:00 ET
+            elif 11.5 <= time_decimal < 14.0:
+                multiplier = self.config.tod_lunch_chop_multiplier
+                window = "LUNCH_CHOP"
+
+            # Afternoon Trend: 14:00-15:00 ET
+            elif 14.0 <= time_decimal < 15.0:
+                multiplier = self.config.tod_afternoon_trend_multiplier
+                window = "AFTERNOON_TREND"
+
+            # Power Hour: 15:00-16:00 ET
+            else:  # 15.0 <= time_decimal < 16.0
+                multiplier = self.config.tod_power_hour_multiplier
+                window = "POWER_HOUR"
+
+            log.debug(f"TIME_OF_DAY: {window} @ {now_et.strftime('%H:%M')} ET -> {multiplier:.1f}x")
+            return multiplier
+
+        except Exception as e:
+            log.debug(f"Time-of-day multiplier error: {e}")
+            return 1.0  # Default to no adjustment
 
     def sync_account_size(self, buying_power: float) -> None:
         """Sync the account size from Alpaca."""

@@ -217,8 +217,16 @@ def main():
 
     # Set up executor callback for coordinator to execute trades
     def coordinator_executor(ticker, direction, entry_price, target_price, stop_loss, confidence, expiry_preference, metadata):
-        """Execute trades through Alpaca executor."""
+        """Execute trades through Alpaca executor.
+
+        VENOM FIX: Properly extract gex_regime from metadata for position sizing multipliers.
+        """
         try:
+            # Extract GEX regime for VENOM position sizing multipliers
+            gex_regime = metadata.get("gex_regime", "unknown")
+            if not gex_regime or gex_regime == "":
+                gex_regime = metadata.get("gex", "unknown")  # Fallback key
+
             position = alpaca_executor.execute_scalp_entry(
                 underlying=ticker,
                 direction=direction,
@@ -226,7 +234,8 @@ def main():
                 target_price=target_price,
                 stop_loss=stop_loss,
                 confidence=confidence,
-                pattern=metadata.get("pattern", "COORDINATOR")
+                pattern=metadata.get("pattern", "COORDINATOR"),
+                gex_regime=gex_regime,  # VENOM FIX: Pass GEX regime for position sizing
             )
             return position.position_id if position else None
         except Exception as e:
@@ -273,6 +282,13 @@ def main():
     # This ensures the win rate preservation system has accurate data
     from wsb_snake.trading.risk_governor import get_risk_governor
     governor = get_risk_governor()
+
+    # VENOM FIX: Sync account size FIRST so percentage-based limits are calculated correctly
+    # Without this, all limits fall back to hardcoded defaults which are WRONG for the actual account
+    buying_power = float(account.get("buying_power", 5000))
+    governor.sync_account_size(buying_power)
+    log.info(f"VENOM: Risk governor synced to account size ${buying_power:.2f}")
+
     daily_stats = governor.sync_daily_stats_from_alpaca()
     if daily_stats.get("synced"):
         log.info(f"Daily stats synced: {daily_stats['wins']}W/{daily_stats['losses']}L ({daily_stats['win_rate']:.0%}) P/L: ${daily_stats['daily_pnl']:.2f}")
@@ -287,7 +303,27 @@ def main():
     log.info("Running historical training (6 weeks)...")
     training_summary = run_startup_training(weeks=6)
     log.info(f"Training complete: {training_summary.get('total_events', 0)} events analyzed")
-    
+
+    # VENOM: Run initial data ingestion to load ALL historical trades
+    # into Semantic Memory and Trade Graph for intelligent learning
+    log.info("=" * 50)
+    log.info("VENOM DATA INGESTION: Loading trade history...")
+    log.info("=" * 50)
+    try:
+        from wsb_snake.learning.data_ingestor import run_initial_ingestion, start_auto_ingestion
+        ingestion_stats = run_initial_ingestion()
+        log.info(f"Ingested {ingestion_stats['alpaca_trades']} trades from Alpaca")
+        log.info(f"Semantic Memory: {ingestion_stats['semantic_records']} records")
+        log.info(f"Trade Graph: {ingestion_stats['graph_records']} records")
+        if ingestion_stats['high_conviction_tagged'] > 0:
+            log.info(f"🔥 High conviction patterns: {ingestion_stats['high_conviction_tagged']}")
+
+        # Start continuous auto-ingestion every 15 minutes
+        start_auto_ingestion(interval_minutes=15)
+        log.info("Auto-ingestion started - learning system gets smarter automatically")
+    except Exception as e:
+        log.warning(f"Data ingestion failed: {e} - will retry on next cycle")
+
     # Send startup ping
     send_startup_ping()
     
@@ -307,6 +343,15 @@ def main():
     log.info("Starting Screenshot Learning System...")
     screenshot_system.start()
     log.info("Screenshot watcher active - learning from Google Drive")
+
+    # Telegram Screenshot Bot: Zero-friction mobile screenshot learning
+    log.info("Starting Telegram Screenshot Bot...")
+    try:
+        from wsb_snake.collectors.telegram_screenshot_bot import start_telegram_screenshot_bot
+        start_telegram_screenshot_bot()
+        log.info("📱 Telegram Screenshot Bot active - send screenshots to learn from WSB winners")
+    except Exception as e:
+        log.warning(f"Telegram Screenshot Bot failed to start: {e}")
 
     # Deep study: Run during off-market hours (every 30 min)
     schedule.every(30).minutes.do(run_idle_study)

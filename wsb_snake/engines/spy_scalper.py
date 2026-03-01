@@ -52,6 +52,8 @@ from wsb_snake.learning.specialist_swarm import get_specialist_swarm
 from wsb_snake.learning.trade_graph import get_trade_graph
 from wsb_snake.learning.trading_thesis import create_thesis_from_setup, TradingThesis
 from wsb_snake.learning.semantic_memory import get_semantic_memory
+# VENOM FIX: Wire the Dual Mode Engine for SCALP vs BLOWUP mode switching
+from wsb_snake.engines.dual_mode_engine import get_dual_mode_engine, is_blowup_mode, get_trade_params
 
 log = get_logger(__name__)
 
@@ -155,6 +157,8 @@ class ScalpSetup:
     target_pct: float = 0.12  # Dynamic target percentage (default 12%)
     max_hold_minutes: int = 15  # Dynamic max hold time
     contracts: int = 1  # Position size from Predator Prime
+    # VENOM: GEX regime for position sizing multipliers
+    gex_regime: str = "unknown"  # "negative", "extreme_negative", "positive", "neutral"
 
 
 class SPYScalper:
@@ -180,9 +184,9 @@ class SPYScalper:
     # - Only trade A+ setups (85%+ confidence)
     PREDATOR_MODE = True  # Enable apex predator behavior
     SNIPER_MODE = True  # Only call AI for the BEST setup per scan cycle
-    MIN_CONFIDENCE_FOR_AI = 65  # HYDRA institutional standard - analyze quality setups
-    MIN_CONFIDENCE_FOR_ALERT = 68  # HYDRA institutional standard (was 85)
-    MIN_SWEEP_PCT_FOR_FLOW = 3  # Was 8, too strict
+    MIN_CONFIDENCE_FOR_AI = 58  # VENOM: LOWERED from 65 - catch more GEX edge setups
+    MIN_CONFIDENCE_FOR_ALERT = 62  # VENOM: LOWERED from 68 - more aggressive entries
+    MIN_SWEEP_PCT_FOR_FLOW = 2  # VENOM: LOWERED from 3 - less restrictive flow filter
     REQUIRE_AI_CONFIRMATION = False  # Was True, blocking trades
     REQUIRE_PREDATOR_STRIKE = False  # Keep disabled - AI confirmation enough
     HIGH_CONFIDENCE_AUTO_EXECUTE = 90  # Only auto-execute at 90%+ (near perfect setup)
@@ -199,7 +203,7 @@ class SPYScalper:
         "THH", "RKLB", "ASTS", "NBIS", "PL", "LUNR", "ONDS", "SLS",
         "POET", "ENPH", "USAR", "PYPL"
     ]
-    MIN_CONFIDENCE_SMALL_CAP = 72  # HYDRA institutional standard for small caps
+    MIN_CONFIDENCE_SMALL_CAP = 65  # VENOM: LOWERED from 72 - catch more small cap plays
     SMALL_CAP_REQUIRE_CANDLESTICK = True  # Must have clear candlestick pattern
     SMALL_CAP_PREFER_EQUITY = True  # NEW: Prefer stock over options for small caps
     
@@ -234,7 +238,9 @@ class SPYScalper:
         # Pattern detection state
         self.active_setup: Optional[ScalpSetup] = None
         self.cooldown_until: Optional[datetime] = None
-        self.trade_cooldown_minutes = 20  # JAN 29 FIX: 20 min cooldown - stop overtrading!
+        self.trade_cooldown_minutes = 4  # VENOM AGGRESSIVE: 4 min (was 8 - still too slow)
+        self.win_cooldown_minutes = 1    # VENOM AGGRESSIVE: 1 min after WIN (momentum continuation!)
+        self.last_trade_was_win = False  # Track for momentum continuation
         
         # Statistics
         self.signals_today = 0
@@ -715,8 +721,10 @@ class SPYScalper:
             pattern_note = f" [Candlestick: {candlestick_pattern}]" if candlestick_pattern else ""
             log.info(f"🎯 APEX PREDATOR STRIKE on {ticker}: {best_setup.pattern.value} @ {final_confidence:.0f}% confidence{pattern_note}")
             self._send_entry_alert(best_setup, ticker)
-            # Set per-ticker cooldown
-            setattr(self, f"cooldown_{ticker}", datetime.utcnow() + timedelta(minutes=self.trade_cooldown_minutes))
+            # Set per-ticker cooldown - use shorter cooldown after wins for momentum continuation
+            cooldown_mins = self.win_cooldown_minutes if self.last_trade_was_win else self.trade_cooldown_minutes
+            setattr(self, f"cooldown_{ticker}", datetime.utcnow() + timedelta(minutes=cooldown_mins))
+            log.info(f"COOLDOWN: {ticker} for {cooldown_mins}min ({'WIN continuation' if self.last_trade_was_win else 'standard'})")
             self.signals_today += 1
         else:
             reason = []
@@ -1429,6 +1437,8 @@ class SPYScalper:
                     setup.target_pct = prime_verdict.target_pct
                     setup.max_hold_minutes = prime_verdict.max_hold_minutes
                     setup.contracts = prime_verdict.contracts
+                    # VENOM: Store GEX regime for position sizing multipliers
+                    setup.gex_regime = prime_verdict.hydra_gex_regime or "unknown"
                 else:
                     setup.notes += f" | PREDATOR_PRIME: {prime_verdict.action} ({prime_verdict.conviction:.0f}%)"
                     if prime_verdict.kill_reason:
@@ -1491,6 +1501,41 @@ class SPYScalper:
     def _send_entry_alert(self, setup: ScalpSetup, ticker: str = "SPY"):
         """Send entry alert to Telegram and add to stalking mode."""
 
+        # ========== VENOM FIX: DUAL MODE ENGINE INTEGRATION ==========
+        # Modify trade parameters based on current mode (SCALP vs BLOWUP)
+        try:
+            dual_mode = get_dual_mode_engine()
+            mode_params = dual_mode.get_trade_params()
+
+            if is_blowup_mode():
+                # In BLOWUP mode: widen targets, use larger size multiplier
+                log.warning(f"🔥 BLOWUP MODE ACTIVE - Adjusting parameters")
+
+                # Widen target/stop for blowup trades
+                old_target = setup.target_pct
+                old_stop = setup.stop_pct
+                setup.target_pct = mode_params['target_pct'] / 100.0  # Convert to decimal
+                setup.stop_pct = abs(mode_params['stop_pct']) / 100.0
+
+                # Apply blowup size multiplier
+                setup.contracts = max(1, int(setup.contracts * mode_params['size_multiplier']))
+
+                # Recalculate target_price and stop_loss based on new percentages
+                if setup.direction == "long":
+                    setup.target_price = setup.entry_price * (1 + setup.target_pct)
+                    setup.stop_loss = setup.entry_price * (1 - setup.stop_pct)
+                else:
+                    setup.target_price = setup.entry_price * (1 - setup.target_pct)
+                    setup.stop_loss = setup.entry_price * (1 + setup.stop_pct)
+
+                setup.notes += f" | BLOWUP_MODE: Target {old_target:.0%}→{setup.target_pct:.0%}, Size x{mode_params['size_multiplier']}"
+                log.info(f"BLOWUP PARAMS: Target={setup.target_pct:.0%}, Stop={setup.stop_pct:.0%}, Size={setup.contracts}")
+            else:
+                log.debug(f"SCALP MODE active - using standard parameters")
+        except Exception as e:
+            log.debug(f"Dual mode engine check failed: {e}")
+        # ========== END DUAL MODE INTEGRATION ==========
+
         # ========== VENOM: WIRE ALL IDLE COMPONENTS ==========
 
         # 1. TRADING THESIS: Build structured thesis for this trade
@@ -1514,19 +1559,25 @@ class SPYScalper:
         # 2. TRADE GRAPH: Query similar historical conditions
         try:
             trade_graph = get_trade_graph()
-            similar = trade_graph.find_similar_conditions(
-                ticker=ticker,
-                pattern=setup.pattern.value,
-                direction=setup.direction,
-                vwap_position="above" if setup.entry_price > setup.vwap else "below",
-                volume_ratio=setup.volume_ratio,
+            # VENOM FIX: find_similar_trades() takes conditions dict, returns List[Tuple[TradeNode, float]]
+            similar = trade_graph.find_similar_trades(
+                conditions={
+                    "ticker": ticker,
+                    "pattern": setup.pattern.value,
+                    "direction": setup.direction,
+                    "vwap_position": "above" if setup.entry_price > setup.vwap else "below",
+                    "volume_ratio": setup.volume_ratio,
+                },
+                top_k=10,
             )
             if similar:
-                avg_return = sum(t.get('pnl_pct', 0) for t in similar) / len(similar)
-                win_count = sum(1 for t in similar if t.get('pnl_pct', 0) > 0)
-                win_rate = win_count / len(similar) if similar else 0
+                # similar is List[Tuple[TradeNode, float]] - extract trade nodes
+                trade_nodes = [t[0] for t in similar]
+                avg_return = sum(t.pnl_percent for t in trade_nodes) / len(trade_nodes)
+                win_count = sum(1 for t in trade_nodes if t.pnl_dollars > 0)
+                win_rate = win_count / len(trade_nodes) if trade_nodes else 0
 
-                log.info(f"TRADE_GRAPH: {len(similar)} similar trades | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
+                log.info(f"TRADE_GRAPH: {len(trade_nodes)} similar trades | WR: {win_rate:.0%} | Avg: {avg_return:+.1f}%")
 
                 if avg_return < -5:
                     # Historical losers - reduce size
@@ -1545,35 +1596,42 @@ class SPYScalper:
         swarm_approved = True
         try:
             swarm = get_specialist_swarm()
-            swarm_result = swarm.evaluate(
+            # VENOM FIX: analyze() returns SwarmConsensus directly
+            swarm_consensus = swarm.analyze(
                 ticker=ticker,
-                direction=setup.direction,
-                pattern=setup.pattern.value,
-                entry_price=setup.entry_price,
-                confidence=setup.confidence,
-                thesis=thesis,
+                context={
+                    "direction": setup.direction,
+                    "pattern": setup.pattern.value,
+                    "price": setup.entry_price,
+                    "confidence": setup.confidence,
+                    "vwap": setup.vwap,
+                    "volume_ratio": setup.volume_ratio,
+                    "momentum": setup.momentum,
+                },
             )
 
-            if swarm_result:
-                consensus = swarm_result.consensus
+            if swarm_consensus:
+                # SwarmConsensus has: direction, confidence, unanimity, verdicts, final_recommendation
+                bull_votes = sum(1 for v in swarm_consensus.verdicts if v.direction == "long")
+                total_votes = len(swarm_consensus.verdicts)
                 log.info(
-                    f"SWARM: {consensus.action} | Bull: {consensus.bull_votes}/{consensus.total_votes} | "
-                    f"Bears: {[p.persona.value for p in swarm_result.analyses if p.direction == 'BEARISH'][:3]}"
+                    f"SWARM: {swarm_consensus.final_recommendation} | Bull: {bull_votes}/{total_votes} | "
+                    f"Confidence: {swarm_consensus.confidence:.0f}%"
                 )
 
-                if consensus.action == "ABORT":
+                if swarm_consensus.direction == "neutral" and swarm_consensus.confidence < 40:
                     swarm_approved = False
-                    setup.notes += f" | SWARM: ABORT ({consensus.bull_votes}/{consensus.total_votes})"
-                    log.warning(f"SWARM ABORT: Only {consensus.bull_votes}/{consensus.total_votes} bulls")
-                elif consensus.action == "REDUCE":
+                    setup.notes += f" | SWARM: ABORT ({bull_votes}/{total_votes})"
+                    log.warning(f"SWARM ABORT: Only {bull_votes}/{total_votes} bulls")
+                elif swarm_consensus.confidence < 60:
                     setup.contracts = max(1, int(setup.contracts * 0.5))
-                    setup.notes += f" | SWARM: REDUCE ({consensus.confidence_pct:.0f}%)"
+                    setup.notes += f" | SWARM: REDUCE ({swarm_consensus.confidence:.0f}%)"
                 else:
-                    setup.notes += f" | SWARM: GO ({consensus.confidence_pct:.0f}%)"
+                    setup.notes += f" | SWARM: GO ({swarm_consensus.confidence:.0f}%)"
 
-                # Log notable persona opinions
-                for analysis in swarm_result.analyses[:3]:
-                    log.info(f"  {analysis.persona.value}: {analysis.direction} - {analysis.reasoning[:50]}...")
+                # Log top verdicts
+                for verdict in swarm_consensus.verdicts[:3]:
+                    log.info(f"  {verdict.specialist}: {verdict.direction} - {verdict.reasoning[:50]}...")
         except Exception as e:
             log.debug(f"Specialist swarm failed: {e}")
 
@@ -1584,23 +1642,38 @@ class SPYScalper:
 
         # 4. SEMANTIC MEMORY: Query for similar past conditions
         try:
+            from wsb_snake.learning.semantic_memory import TradeConditions as SemanticConditions
             semantic = get_semantic_memory()
-            semantic_result = semantic.query_similar(
+            # VENOM FIX: find_similar_trades() takes TradeConditions, returns List[SimilarTrade]
+            semantic_conditions = SemanticConditions(
                 ticker=ticker,
-                pattern=setup.pattern.value,
-                direction=setup.direction,
-                hour=datetime.now().hour,
+                direction=setup.direction.upper(),
+                entry_price=setup.entry_price,
+                rsi=50.0,  # Default if not available
+                adx=25.0,
+                atr=1.0,
+                macd_signal="neutral",
+                volume_ratio=setup.volume_ratio,
+                regime="unknown",
+                vix=20.0,
+                gex_regime="unknown",
+                hydra_direction="NEUTRAL",
+                confluence_score=setup.confidence / 100.0,
+                stop_distance_pct=setup.stop_pct * 100 if setup.stop_pct else 7.0,
+                target_distance_pct=setup.target_pct * 100 if setup.target_pct else 12.0,
             )
-            if semantic_result and semantic_result.similar_trades:
-                best_match = semantic_result.similar_trades[0]
-                log.info(f"SEMANTIC: {len(semantic_result.similar_trades)} similar | Best: {best_match.similarity:.0%} match")
+            similar_trades = semantic.find_similar_trades(semantic_conditions, top_k=5)
+            if similar_trades:
+                best_match = similar_trades[0]
+                log.info(f"SEMANTIC: {len(similar_trades)} similar | Best: {best_match.similarity_score:.0%} match")
 
-                # Apply learned rules
-                for rule in semantic_result.applicable_rules[:2]:
-                    log.info(f"SEMANTIC RULE: {rule.rule} (confidence: {rule.confidence:.0%})")
-                    if "avoid" in rule.rule.lower() or "don't" in rule.rule.lower():
+                # Apply learned rules for these conditions
+                relevant_rules = semantic.get_relevant_rules(semantic_conditions)
+                for rule in relevant_rules[:2]:
+                    log.info(f"SEMANTIC RULE: {rule.pattern_description} (confidence: {rule.confidence:.0%})")
+                    if "avoid" in rule.pattern_description.lower() or "don't" in rule.pattern_description.lower():
                         setup.confidence -= 5
-                        setup.notes += f" | SEMANTIC: {rule.rule[:30]}..."
+                        setup.notes += f" | SEMANTIC: {rule.pattern_description[:30]}..."
         except Exception as e:
             log.debug(f"Semantic memory failed: {e}")
 
@@ -1781,10 +1854,11 @@ class SPYScalper:
                     target_price=setup.target_price,
                     stop_loss=setup.stop_loss,
                     confidence=total_confidence,
-                    pattern=setup.pattern.value
+                    pattern=setup.pattern.value,
+                    gex_regime=setup.gex_regime,  # VENOM: Pass GEX for position sizing
                 )
                 if alpaca_position:
-                    log.info(f"📈 Alpaca paper trade placed for {ticker}: {alpaca_position.option_symbol}")
+                    log.info(f"📈 Alpaca paper trade placed for {ticker}: {alpaca_position.option_symbol} | GEX: {setup.gex_regime}")
                 else:
                     log.warning(f"Alpaca paper trade not placed for {ticker} (max positions or error)")
             except Exception as e:
@@ -1835,6 +1909,19 @@ class SPYScalper:
             log.error(f"Error getting current price for {ticker}: {e}")
         return None
     
+    def record_trade_outcome(self, ticker: str, pnl_pct: float):
+        """
+        Record trade outcome for momentum continuation logic.
+
+        VENOM: After a win, use shorter cooldown to allow momentum re-entry.
+        Called by alpaca_executor when a trade closes.
+        """
+        self.last_trade_was_win = pnl_pct > 0
+        if self.last_trade_was_win:
+            log.info(f"WIN recorded for {ticker} ({pnl_pct:+.1f}%) - momentum continuation ENABLED")
+        else:
+            log.info(f"LOSS recorded for {ticker} ({pnl_pct:+.1f}%) - standard cooldown")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get scalper statistics."""
         return {
@@ -1847,6 +1934,7 @@ class SPYScalper:
             "last_vwap": self.last_vwap,
             "cooldown_active": self.cooldown_until and datetime.utcnow() < self.cooldown_until,
             "active_setup": self.active_setup.pattern.value if self.active_setup else None,
+            "last_trade_was_win": self.last_trade_was_win,
             "zero_greed_stats": zero_greed_exit.get_stats()
         }
     

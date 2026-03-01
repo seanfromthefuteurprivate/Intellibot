@@ -35,9 +35,13 @@ HYDRA_INTELLIGENCE_ENDPOINT = f"{HYDRA_BASE_URL}/api/predator"  # Full predator 
 HYDRA_INTELLIGENCE_FALLBACK = f"{HYDRA_BASE_URL}/api/intelligence"  # Fallback
 HYDRA_TRADE_RESULT_ENDPOINT = f"{HYDRA_BASE_URL}/api/trade-result"
 
-# Polling configuration
-POLL_INTERVAL_SECONDS = 60
+# Polling configuration - ADAPTIVE
+POLL_INTERVAL_CALM = 60       # 60s when calm
+POLL_INTERVAL_VOLATILE = 10   # 10s when volatile (VIX > 20 or near GEX flip)
+POLL_INTERVAL_SECONDS = 60    # Default (updated dynamically)
 STALE_DATA_THRESHOLD_SECONDS = 180  # 3 minutes
+GEX_FLIP_PROXIMITY_VOLATILE_THRESHOLD = 2.0  # Within 2% of flip = volatile
+VIX_VOLATILE_THRESHOLD = 20.0  # VIX > 20 = volatile
 
 
 @dataclass
@@ -184,14 +188,53 @@ class HydraBridge:
         logger.info("HYDRA_BRIDGE: Stopped")
 
     def _poll_loop(self):
-        """Background polling loop."""
+        """Background polling loop with ADAPTIVE frequency.
+
+        VENOM: Polls faster (10s) when volatile conditions detected:
+        - VIX > 20 (elevated volatility)
+        - Within 2% of GEX flip point (gamma exposure about to flip)
+
+        Polls slower (60s) when calm to conserve API quota.
+        """
         # Initial poll immediately
         self._fetch_intelligence()
 
         while self._running:
-            time.sleep(POLL_INTERVAL_SECONDS)
+            # ADAPTIVE POLLING: Check if conditions are volatile
+            poll_interval = self._get_adaptive_poll_interval()
+            time.sleep(poll_interval)
             if self._running:
                 self._fetch_intelligence()
+
+    def _get_adaptive_poll_interval(self) -> int:
+        """
+        Calculate adaptive poll interval based on market conditions.
+
+        Returns 10s (volatile) or 60s (calm) based on:
+        - VIX level > 20 = volatile
+        - GEX flip proximity < 2% = volatile
+        """
+        try:
+            # Check VIX
+            vix_volatile = self.intel.vix_level >= VIX_VOLATILE_THRESHOLD
+
+            # Check GEX flip proximity
+            gex_volatile = self.intel.gex_flip_distance_pct <= GEX_FLIP_PROXIMITY_VOLATILE_THRESHOLD
+
+            if vix_volatile or gex_volatile:
+                if self._poll_count % 10 == 0:  # Log every 10th poll
+                    reason = []
+                    if vix_volatile:
+                        reason.append(f"VIX={self.intel.vix_level:.1f}")
+                    if gex_volatile:
+                        reason.append(f"GEX_FLIP={self.intel.gex_flip_distance_pct:.1f}%")
+                    logger.info(f"HYDRA_BRIDGE: VOLATILE MODE ({', '.join(reason)}) - polling every {POLL_INTERVAL_VOLATILE}s")
+                return POLL_INTERVAL_VOLATILE
+            else:
+                return POLL_INTERVAL_CALM
+
+        except Exception:
+            return POLL_INTERVAL_CALM  # Default to calm if error
 
     def _fetch_intelligence(self):
         """Fetch latest intelligence from HYDRA."""

@@ -71,6 +71,9 @@ class AlpacaPosition:
     trimmed: bool = False  # True after partial exit at +50%
     signal_id: Optional[int] = None  # Links to signals table for learning
     pattern: str = ""  # Pattern that triggered this trade (for self-evolving learning)
+    pyramid_adds: int = 0  # VENOM: Count of pyramid additions to this position
+    original_qty: int = 0  # VENOM: Original quantity for pyramid calculations
+    original_confidence: float = 70.0  # VENOM: Original confidence for pyramid qualification
 
     def option_spec_line(self) -> str:
         """
@@ -158,10 +161,10 @@ class AlpacaExecutor:
     BASE_URL = LIVE_URL if LIVE_TRADING else PAPER_URL
     DATA_URL = "https://data.alpaca.markets"
     
-    # ========== RISK CONTROLS - JP MORGAN GRADE ==========
-    MAX_DAILY_EXPOSURE = 4000   # $4k max daily (margin-aware)
-    MAX_PER_TRADE = 1000        # $1k max per trade
-    MAX_CONCURRENT_POSITIONS = 3  # Max 3 positions (reduce correlation)
+    # ========== RISK CONTROLS - VENOM AGGRESSIVE ==========
+    MAX_DAILY_EXPOSURE = 6000   # $6k max daily (UP from $4k - use margin aggressively)
+    MAX_PER_TRADE = 1500        # $1.5k max per trade (UP from $1k)
+    MAX_CONCURRENT_POSITIONS = 5  # Max 5 positions (UP from 3 - more compounding)
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
     
@@ -183,22 +186,34 @@ class AlpacaExecutor:
     # 3. Quick rotations - capture volatility, move on
     # 4. Predator mode - strike fast, book profit, hunt again
     #
-    # ========== VENOM MODE: LET WINNERS RUN ==========
+    # ========== VENOM EXTREME: LET WINNERS RUN ==========
     # GEX flips can do 200-500% on 0DTE. No fixed targets. Trailing stop rides the wave.
-    _SCALP_TARGET_PCT_DEFAULT = 5.00   # +400% - effectively NO CAP (trail will exit)
-    _SCALP_STOP_PCT_DEFAULT = 0.88     # -12% initial stop (give room to breathe)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 45  # 45 MIN - let winners run
+    _SCALP_TARGET_PCT_DEFAULT = 6.00   # +500% - effectively NO CAP (trail will exit)
+    _SCALP_STOP_PCT_DEFAULT = 0.85     # -15% initial stop (WIDER from -12% - more room)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 50  # 50 MIN - let winners run LONGER
 
-    # VENOM TRAILING STOPS - Aggressive trailing to capture 200-500% moves
-    TRAIL_BREAKEVEN_TRIGGER = 0.10   # Move to breakeven at +10% profit
-    TRAIL_LOCK_PROFIT_TRIGGER = 0.25  # At +25% profit, trail at 15% below peak
-    TRAIL_LOCK_PROFIT_LEVEL = 0.15   # Lock 15% below peak when running
-    TRAIL_AGGRESSIVE_TRIGGER = 0.50   # At +50%, tighten trail to 10% below peak
-    TRAIL_AGGRESSIVE_LEVEL = 0.10    # 10% trail when up big
-    TRAIL_MOONSHOT_TRIGGER = 1.00    # At +100%, trail at 8% below peak
+    # ═══════════════════════════════════════════════════════════════
+    # VENOM EXTREME TRAILING - GEX FLIPS DO 200-500%+ ON 0DTE
+    # DON'T trail until BIG profits - let the move develop!
+    # ═══════════════════════════════════════════════════════════════
+    TRAIL_BREAKEVEN_TRIGGER = 0.40   # AGGRESSIVE: +40% before breakeven (was +20% - too early!)
+    TRAIL_LOCK_PROFIT_TRIGGER = 0.70  # AGGRESSIVE: +70% before trailing (was +35%)
+    TRAIL_LOCK_PROFIT_LEVEL = 0.15   # 15% trail below peak when running
+    TRAIL_AGGRESSIVE_TRIGGER = 1.00   # AGGRESSIVE: +100% before tightening (was +60%)
+    TRAIL_AGGRESSIVE_LEVEL = 0.10    # 10% trail when up 100%+
+    TRAIL_MOONSHOT_TRIGGER = 2.00    # MOONSHOT: +200% trail at 8% below peak (was +150%)
     TRAIL_MOONSHOT_LEVEL = 0.08      # 8% trail - ride it to the moon
-    TRAIL_TIME_TIGHTEN_MINUTES = 30  # After 30 min, trail to -5% from peak
-    TRAIL_TIME_TIGHTEN_PCT = 0.05    # -5% trailing stop after 30 min
+    TRAIL_TIME_TIGHTEN_MINUTES = 35  # After 35 min, start tightening (was 40)
+    TRAIL_TIME_TIGHTEN_PCT = 0.05    # -5% trailing stop after timeout
+
+    # ═══════════════════════════════════════════════════════════════
+    # VENOM: MOMENTUM PYRAMID - Add to winning positions
+    # When a position hits +30%, ADD contracts to ride the wave
+    # ═══════════════════════════════════════════════════════════════
+    PYRAMID_TRIGGER_PCT = 0.30       # +30% unrealized triggers pyramid
+    PYRAMID_ADD_PCT = 0.50           # Add 50% of original position size
+    PYRAMID_MAX_ADDS = 2             # Max 2 pyramid adds per position
+    PYRAMID_MIN_CONFIDENCE = 70      # Only pyramid if original confidence >= 70%
 
     # ========== LIMIT ORDER MODE - PRICE-MATCHED EXECUTION ==========
     # When USE_LIMIT_ORDERS=true, entry/exit orders use limit prices
@@ -838,6 +853,7 @@ No overnight risk. Fresh start tomorrow!
         strike_override: Optional[float] = None,
         option_symbol_override: Optional[str] = None,
         option_type_override: Optional[str] = None,  # 'call' or 'put' - overrides direction-based default
+        gex_regime: str = "unknown",  # VENOM: GEX regime for position sizing multiplier
     ) -> Optional[AlpacaPosition]:
         """
         Execute a scalp trade entry.
@@ -1076,43 +1092,62 @@ No overnight risk. Fresh start tomorrow!
         if spread_pct > 20:
             logger.warning(f"Wide spread {spread_pct:.1f}% on {option_symbol} - may be illiquid")
         
-        # Position size: risk governor (confidence + vol) or executor fallback
+        # Position size: VENOM compounding with GEX regime multipliers
         buying_power = self.get_buying_power()
         governor = get_risk_governor()
         volatility_factor = self._get_current_volatility_factor(underlying)
 
-        # Use Kelly sizing when we have win probability data
+        # VENOM SIZING: Percentage-based with streak multipliers and GEX boost
         try:
-            historical_win_rate = governor.get_win_rate()
-            if historical_win_rate > 0.4:  # Only use Kelly if we have enough data
-                qty = governor.compute_kelly_position_size(
-                    engine=engine,
-                    win_probability=min(confidence / 100, historical_win_rate),
-                    avg_win_pct=0.06,  # +6% target
-                    avg_loss_pct=0.10,  # -10% stop
-                    option_price=option_price,
-                    buying_power=buying_power if buying_power > 0 else None,
-                    volatility_factor=volatility_factor,
-                )
-                logger.info(f"Kelly sizing: {qty} contracts (win_rate={historical_win_rate:.1%})")
-            else:
-                # Fall back to confidence-based sizing
-                qty = governor.compute_position_size(
-                    engine=engine,
-                    confidence_pct=confidence,
-                    option_price=option_price,
-                    buying_power=buying_power if buying_power > 0 else None,
-                    volatility_factor=volatility_factor,
-                )
-        except Exception as e:
-            logger.warning(f"Kelly sizing failed, using confidence-based: {e}")
-            qty = governor.compute_position_size(
-                engine=engine,
-                confidence_pct=confidence,
-                option_price=option_price,
-                buying_power=buying_power if buying_power > 0 else None,
-                volatility_factor=volatility_factor,
+            # Get daily P&L for drawdown checks
+            daily_pnl = governor._daily_pnl_realized
+
+            # VENOM position sizing returns MAX PREMIUM in dollars
+            max_premium = governor.compute_venom_position_size(
+                conviction_pct=confidence,
+                buying_power=buying_power if buying_power > 0 else 5000.0,
+                daily_pnl=daily_pnl,
+                gex_regime=gex_regime,
             )
+
+            if max_premium > 0:
+                contract_cost = option_price * 100
+                qty = int(max_premium / contract_cost)
+                logger.info(
+                    f"VENOM sizing: ${max_premium:.0f} max / ${contract_cost:.0f} per = {qty} contracts | "
+                    f"GEX: {gex_regime} | Confidence: {confidence:.0f}%"
+                )
+            else:
+                qty = 0
+                logger.warning(f"VENOM sizing returned $0 - circuit breaker or low conviction")
+
+        except Exception as e:
+            logger.warning(f"VENOM sizing failed, falling back to Kelly: {e}")
+            # Fallback to Kelly sizing
+            try:
+                historical_win_rate = governor.get_win_rate()
+                if historical_win_rate > 0.4:
+                    qty = governor.compute_kelly_position_size(
+                        engine=engine,
+                        win_probability=min(confidence / 100, historical_win_rate),
+                        avg_win_pct=0.06,
+                        avg_loss_pct=0.10,
+                        option_price=option_price,
+                        buying_power=buying_power if buying_power > 0 else None,
+                        volatility_factor=volatility_factor,
+                    )
+                else:
+                    qty = governor.compute_position_size(
+                        engine=engine,
+                        confidence_pct=confidence,
+                        option_price=option_price,
+                        buying_power=buying_power if buying_power > 0 else None,
+                        volatility_factor=volatility_factor,
+                    )
+            except Exception as e2:
+                logger.warning(f"Kelly fallback also failed: {e2}")
+                qty = self.calculate_position_size(option_price)
+
         if qty <= 0:
             qty = self.calculate_position_size(option_price)
         estimated_cost = qty * option_price * 100  # Total cost in dollars
@@ -1355,6 +1390,14 @@ Reason: {reason}
         except Exception as e:
             logger.debug(f"Introspection record failed: {e}")
 
+        # VENOM: MOMENTUM CONTINUATION - Notify scalper of outcome for faster re-entry after wins
+        try:
+            from wsb_snake.engines.spy_scalper import get_spy_scalper
+            scalper = get_spy_scalper()
+            scalper.record_trade_outcome(position.symbol, position.pnl_pct)
+        except Exception as e:
+            logger.debug(f"Scalper momentum notification failed: {e}")
+
         # GATE 15: DEBATE - Record outcome to track bull/bear accuracy
         try:
             debate = get_debate_engine()
@@ -1390,22 +1433,54 @@ Reason: {reason}
         # VENOM: SEMANTIC MEMORY AUTO-REFLECTION
         # Learn from this trade outcome to improve future decisions
         try:
-            from wsb_snake.learning.semantic_memory import get_semantic_memory
-            semantic = get_semantic_memory()
-            semantic.record_trade(
-                ticker=position.symbol,
-                pattern=position.pattern if position.pattern else position.engine,
-                direction="long" if position.trade_type == "CALLS" else "short",
-                entry_price=position.entry_price,
-                exit_price=current_price,
-                pnl_pct=position.pnl_pct,
-                hold_minutes=hold_minutes,
-                exit_reason=reason,
-                hour=position.entry_time.hour if position.entry_time else datetime.now().hour,
+            from wsb_snake.learning.semantic_memory import (
+                get_semantic_memory,
+                TradeOutcome,
+                TradeConditions,
             )
-            # Trigger auto-reflection to learn rules
-            semantic.auto_reflect()
-            logger.debug(f"SEMANTIC_MEMORY: Recorded and reflected on {position.symbol}")
+            semantic = get_semantic_memory()
+
+            # Build TradeConditions from available data
+            conditions = TradeConditions(
+                ticker=position.symbol,
+                direction="LONG" if position.trade_type == "CALLS" else "SHORT",
+                entry_price=position.entry_price,
+                rsi=50.0,  # Default if not tracked
+                adx=25.0,
+                atr=1.0,
+                macd_signal="neutral",
+                volume_ratio=1.0,
+                regime="unknown",
+                vix=20.0,
+                gex_regime="unknown",
+                hydra_direction="NEUTRAL",
+                confluence_score=position.conviction if hasattr(position, 'conviction') else 0.7,
+                stop_distance_pct=abs(position.stop_loss - position.entry_price) / position.entry_price * 100 if position.entry_price > 0 else 5.0,
+                target_distance_pct=abs(position.target_price - position.entry_price) / position.entry_price * 100 if position.entry_price > 0 else 10.0,
+            )
+
+            # Build TradeOutcome
+            import hashlib
+            trade_id = hashlib.md5(f"{position.symbol}_{position.entry_time}".encode()).hexdigest()[:12]
+
+            outcome = TradeOutcome(
+                trade_id=trade_id,
+                conditions=conditions,
+                entry_reasoning=f"Pattern: {position.pattern or position.engine}",
+                pnl_dollars=position.pnl,
+                pnl_percent=position.pnl_pct,
+                duration_minutes=hold_minutes,
+                max_adverse_excursion_pct=min(0, position.pnl_pct),  # Approximate
+                max_favorable_excursion_pct=max(0, position.pnl_pct),  # Approximate
+                exit_reason=reason,
+                exit_price=current_price,
+                entry_time=position.entry_time or datetime.now(),
+                exit_time=position.exit_time or datetime.now(),
+                lessons_learned=f"Exit via {reason} after {hold_minutes}min",
+            )
+
+            semantic.record_trade(outcome)
+            logger.debug(f"SEMANTIC_MEMORY: Recorded {position.symbol} outcome")
         except Exception as e:
             logger.debug(f"Semantic memory reflection skipped: {e}")
 
@@ -1413,17 +1488,32 @@ Reason: {reason}
         try:
             from wsb_snake.learning.trade_graph import get_trade_graph
             trade_graph = get_trade_graph()
+
+            # Build conditions dict for the trade graph
+            graph_conditions = {
+                "rsi": 50.0,
+                "adx": 25.0,
+                "vix": 20.0,
+                "regime": "unknown",
+                "gex_regime": "unknown",
+                "hydra_direction": "NEUTRAL",
+                "flow_bias": "NEUTRAL",
+                "volume_ratio": 1.0,
+            }
+
             trade_graph.record_trade(
                 ticker=position.symbol,
-                pattern=position.pattern if position.pattern else position.engine,
                 direction="long" if position.trade_type == "CALLS" else "short",
                 entry_price=position.entry_price,
                 exit_price=current_price,
-                pnl_pct=position.pnl_pct,
-                hold_minutes=hold_minutes,
-                exit_reason=reason,
-                entry_time=position.entry_time,
-                exit_time=position.exit_time,
+                entry_time=position.entry_time or datetime.now(),
+                exit_time=position.exit_time or datetime.now(),
+                pnl_dollars=position.pnl,
+                pattern=position.pattern if position.pattern else position.engine,
+                entry_reasoning=f"Pattern: {position.pattern or position.engine}",
+                exit_reasoning=reason,
+                conditions=graph_conditions,
+                metadata={"engine": position.engine, "hold_minutes": hold_minutes},
             )
             logger.debug(f"TRADE_GRAPH: Recorded {position.symbol} trade")
         except Exception as e:
@@ -1579,6 +1669,100 @@ Max Hold: {self.SCALP_MAX_HOLD_MINUTES} minutes
 Reason: Order was {order_status}
 """)
     
+    def execute_pyramid_add(self, position: AlpacaPosition, current_price: float) -> bool:
+        """
+        VENOM: MOMENTUM PYRAMID - Add to winning position.
+
+        When position hits +30% unrealized, add 50% of original size to ride the momentum.
+        Max 2 pyramid adds per position. Only for high-confidence entries.
+
+        Returns True if pyramid was executed.
+        """
+        # Check if pyramiding is allowed
+        if position.pyramid_adds >= self.PYRAMID_MAX_ADDS:
+            return False
+
+        if position.original_confidence < self.PYRAMID_MIN_CONFIDENCE:
+            logger.debug(f"PYRAMID SKIP: {position.option_symbol} confidence {position.original_confidence:.0f}% < {self.PYRAMID_MIN_CONFIDENCE}%")
+            return False
+
+        # Calculate add quantity (50% of original)
+        original_qty = position.original_qty if position.original_qty > 0 else position.qty
+        add_qty = max(1, int(original_qty * self.PYRAMID_ADD_PCT))
+
+        # Calculate cost and check limits
+        contract_cost = current_price * 100 * add_qty
+        remaining_exposure = self.MAX_DAILY_EXPOSURE - self.daily_exposure_used
+
+        if contract_cost > remaining_exposure:
+            logger.warning(f"PYRAMID SKIP: Cost ${contract_cost:.0f} > remaining exposure ${remaining_exposure:.0f}")
+            return False
+
+        if contract_cost > self.MAX_PER_TRADE:
+            add_qty = int(self.MAX_PER_TRADE / (current_price * 100))
+            if add_qty <= 0:
+                return False
+            contract_cost = current_price * 100 * add_qty
+
+        # Execute pyramid buy
+        try:
+            # Use limit order slightly above current ask for faster fill
+            limit_price = round(current_price * 1.02, 2) if self.USE_LIMIT_ORDERS else None
+            order_type = "limit" if self.USE_LIMIT_ORDERS else "market"
+
+            order_data = {
+                "symbol": position.option_symbol,
+                "qty": str(add_qty),
+                "side": "buy",
+                "type": order_type,
+                "time_in_force": "day",
+            }
+            if limit_price:
+                order_data["limit_price"] = str(limit_price)
+
+            resp = requests.post(
+                f"{self.BASE_URL}/v2/orders",
+                headers=self.headers,
+                json=order_data,
+                timeout=10,
+            )
+
+            if resp.status_code >= 400:
+                logger.warning(f"PYRAMID FAILED: {position.option_symbol} - {resp.status_code} {resp.text}")
+                return False
+
+            # Update position
+            position.qty += add_qty
+            position.pyramid_adds += 1
+            self.daily_exposure_used += contract_cost
+
+            # Calculate current profit
+            profit_pct = (current_price - position.entry_price) / position.entry_price * 100
+
+            pyramid_spec = position.option_spec_line()
+            logger.warning(
+                f"🔺 PYRAMID ADD #{position.pyramid_adds}: {position.option_symbol} | "
+                f"+{add_qty} contracts @ ${current_price:.2f} | "
+                f"Total: {position.qty} contracts | Profit: +{profit_pct:.0f}%"
+            )
+
+            # Send notification
+            from wsb_snake.notifications.telegram_channels import send_signal
+            send_signal(
+                f"🔺 **MOMENTUM PYRAMID #{position.pyramid_adds}**\n\n"
+                f"**Option:** {pyramid_spec}\n"
+                f"Added: +{add_qty} contracts @ ${current_price:.2f}\n"
+                f"Total Position: {position.qty} contracts\n"
+                f"Current Profit: +{profit_pct:.0f}%\n\n"
+                f"_Riding the momentum!_"
+            )
+
+            return True
+
+        except Exception as e:
+            logger.error(f"PYRAMID ERROR: {position.option_symbol} - {e}")
+            return False
+
     def execute_partial_exit(self, position: AlpacaPosition, fraction: float, current_price: float) -> bool:
         """Trim-and-hold: close fraction of position (e.g. 0.5 = half). Returns True if done."""
         sell_qty = max(1, int(position.qty * fraction))
@@ -1664,6 +1848,15 @@ Reason: Order was {order_status}
 
                 # Calculate current profit percentage
                 profit_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else 0
+
+                # ========== VENOM: MOMENTUM PYRAMID - ADD TO WINNERS ==========
+                # At +30% unrealized, add to the position to ride momentum
+                if profit_pct >= self.PYRAMID_TRIGGER_PCT:
+                    if position.pyramid_adds < self.PYRAMID_MAX_ADDS:
+                        # Set original_qty on first pyramid
+                        if position.original_qty == 0:
+                            position.original_qty = position.qty
+                        self.execute_pyramid_add(position, current_price)
 
                 # Track peak price for trailing (store as attribute)
                 if not hasattr(position, '_peak_price') or current_price > getattr(position, '_peak_price', 0):
