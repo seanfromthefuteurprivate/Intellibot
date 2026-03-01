@@ -171,7 +171,7 @@ def load_learned_trades():
 
         cursor.execute("""
             SELECT * FROM learned_trades
-            WHERE detected_pattern IS NOT NULL
+            WHERE pattern IS NOT NULL
             ORDER BY profit_loss_pct DESC
         """)
 
@@ -231,7 +231,7 @@ def calculate_semantic_match(
             score += 20
 
         # Pattern-specific boosts
-        pattern = trade.get("detected_pattern", "")
+        pattern = trade.get("pattern", "")
 
         if pattern == "LOTTO_TICKET":
             if entry_price < 0.50:
