@@ -283,9 +283,13 @@ def main():
     from wsb_snake.trading.risk_governor import get_risk_governor
     governor = get_risk_governor()
 
+    # Fetch account FIRST so we have buying power for risk governor
+    account = alpaca_executor.get_account()
+    buying_power = float(account.get("buying_power", 5000))
+    log.info(f"Alpaca Paper Trading active - Buying Power: ${buying_power:,.2f}")
+
     # VENOM FIX: Sync account size FIRST so percentage-based limits are calculated correctly
     # Without this, all limits fall back to hardcoded defaults which are WRONG for the actual account
-    buying_power = float(account.get("buying_power", 5000))
     governor.sync_account_size(buying_power)
     log.info(f"VENOM: Risk governor synced to account size ${buying_power:.2f}")
 
@@ -294,10 +298,6 @@ def main():
         log.info(f"Daily stats synced: {daily_stats['wins']}W/{daily_stats['losses']}L ({daily_stats['win_rate']:.0%}) P/L: ${daily_stats['daily_pnl']:.2f}")
     else:
         log.warning(f"Daily stats sync failed: {daily_stats.get('error', 'unknown')}")
-
-    account = alpaca_executor.get_account()
-    buying_power = float(account.get("buying_power", 0))
-    log.info(f"Alpaca Paper Trading active - Buying Power: ${buying_power:,.2f}")
     
     # Run historical training to calibrate engine weights
     log.info("Running historical training (6 weeks)...")
