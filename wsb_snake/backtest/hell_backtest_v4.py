@@ -171,7 +171,7 @@ def load_learned_trades():
 
         cursor.execute("""
             SELECT * FROM learned_trades
-            WHERE pattern IS NOT NULL
+            WHERE detected_pattern IS NOT NULL
             ORDER BY profit_loss_pct DESC
         """)
 
@@ -231,7 +231,7 @@ def calculate_semantic_match(
             score += 20
 
         # Pattern-specific boosts
-        pattern = trade.get("pattern", "")
+        pattern = trade.get("detected_pattern", "")
 
         if pattern == "LOTTO_TICKET":
             if entry_price < 0.50:
@@ -890,6 +890,7 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
     daily_pnl = 0
     consecutive_losses = 0
     berserker_count = 0
+    circuit_breaker_hit = False
 
     # Pre-fetch options
     prefetched: Dict[str, List[Dict]] = {}
@@ -1004,6 +1005,14 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
             continue
 
         if len(positions) >= 2:
+            continue
+
+        # CIRCUIT BREAKER: 2 consecutive losses = STOP trading for day
+        # Prevents revenge trading into chop (saved Jan 30, Feb 10, Feb 13)
+        if consecutive_losses >= 2:
+            if not circuit_breaker_hit:
+                circuit_breaker_hit = True
+                print(f"  ⛔ CIRCUIT BREAKER: 2 consecutive losses - NO MORE TRADES TODAY")
             continue
 
         signal = detect_signal(spy_bars, i, day_open)
@@ -1177,6 +1186,8 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
     print(f"\n  DAY SUMMARY:")
     print(f"    Trades: {result.num_trades} | Wins: {result.wins} | Win Rate: {result.win_rate:.0f}%")
     print(f"    🔥 BERSERKER trades: {berserker_count}")
+    if circuit_breaker_hit:
+        print(f"    ⛔ CIRCUIT BREAKER ENGAGED - Prevented revenge trades")
     print(f"    Avg Winner: {result.avg_winner:+.0f}% | Avg Loser: {result.avg_loser:+.0f}%")
     print(f"    Largest: ${result.largest_trade:+,.0f}")
     print(f"    Account: ${result.start_account:,.0f} → ${result.end_account:,.0f} ({((result.end_account/result.start_account)-1)*100:+.1f}%)")
