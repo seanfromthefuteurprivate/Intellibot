@@ -53,28 +53,28 @@ logger = get_logger(__name__)
 
 @dataclass
 class BerserkerConfig:
-    """Configuration for BERSERKER mode - VENOM AGGRESSIVE COMPOUNDING."""
-    # Entry conditions - RELAXED for more opportunities
-    gex_flip_proximity_threshold: float = 0.5  # % from flip point (WIDENED from 0.3 to catch more)
-    min_hydra_confidence: float = 45.0  # LOWERED from 50 for more action
-    max_vix: float = 30.0  # RAISED from 25 - trade in higher vol
+    """Configuration for BERSERKER mode - SWARM CONSENSUS (7/12 personas said reduce aggression)."""
+    # Entry conditions - TIGHTENED for quality over quantity
+    gex_flip_proximity_threshold: float = 0.3  # % from flip point (BACK to 0.3 - higher quality)
+    min_hydra_confidence: float = 60.0  # RAISED to 60 for quality signals
+    max_vix: float = 25.0  # BACK to 25 - avoid high vol chaos
     require_flow_confirmation: bool = True
 
-    # Position sizing - AGGRESSIVE
-    position_multiplier: float = 3.0  # 3x normal size
-    max_position_value: float = 5000.0  # $5k max per BERSERKER trade (UP from $3k)
+    # Position sizing - DISCIPLINED (SWARM CONSENSUS: no 3x, use 1.5x max)
+    position_multiplier: float = 1.5  # DOWN from 3x to 1.5x (SWARM CONSENSUS)
+    max_position_value: float = 2000.0  # $2k max per BERSERKER trade (DOWN from $5k)
 
-    # Exit rules - LET WINNERS RUN
-    target_pct: float = 150.0   # +150% target (UP from 50% - GEX flips run!)
-    stop_pct: float = -12.0    # -12% stop (WIDER from -15% - give room to breathe)
-    max_hold_minutes: int = 45  # 45 min max (UP from 30 - let it run)
+    # Exit rules - BALANCED
+    target_pct: float = 100.0   # +100% target (DOWN from 150%)
+    stop_pct: float = -15.0    # -15% stop (TIGHTER - cut losses fast)
+    max_hold_minutes: int = 30  # 30 min max (DOWN - don't overstay)
 
-    # Limits - MORE AGGRESSIVE
-    max_daily_trades: int = 6  # UP from 3 - more compounding opportunities
+    # Limits - DISCIPLINED
+    max_daily_trades: int = 3  # DOWN from 6 to 3 (SWARM CONSENSUS)
 
-    # Timing - FASTER ROTATIONS
-    scan_interval_seconds: int = 20  # FASTER from 30s
-    cooldown_minutes: int = 8  # SHORTER from 15 min
+    # Timing - PATIENT
+    scan_interval_seconds: int = 30  # BACK to 30s
+    cooldown_minutes: int = 20  # UP from 8 to 20 (SWARM CONSENSUS: more patience)
 
 
 @dataclass

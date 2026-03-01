@@ -70,12 +70,13 @@ class GovernorConfig:
     power_hour_target_pct: float = 0.10    # Power hour contributes 10%
     max_drawdown_from_peak_pct: float = 0.10  # If we drop 10% from daily high, half size
 
-    # Global position limits - VENOM EXTREME
-    max_concurrent_positions_global: int = 5  # Allow 5 positions (MORE action)
+    # Global position limits - SWARM CONSENSUS (10/12 personas agreed)
+    # Reduced from VENOM EXTREME to disciplined aggression
+    max_concurrent_positions_global: int = 5  # Allow 5 positions
     max_concurrent_positions_blowup: int = 3  # In blowup mode (size is 3x)
-    max_daily_exposure_pct: float = 0.90  # 90% of account can be deployed daily (UP from 80%)
-    max_total_exposure_pct: float = 0.50  # Max 50% at any one time (UP from 40%)
-    max_single_position_pct: float = 0.35  # Max 35% per position (UP from 25%)
+    max_daily_exposure_pct: float = 0.60  # 60% of account can be deployed daily (DOWN from 90%)
+    max_total_exposure_pct: float = 0.30  # Max 30% at any one time (DOWN from 50%)
+    max_single_position_pct: float = 0.05  # Max 5% per position (DOWN from 35% - SWARM CONSENSUS)
 
     # Per-engine position limits
     max_positions_scalper: int = 3  # More scalps = more compounding
@@ -88,13 +89,14 @@ class GovernorConfig:
     max_exposure_per_sector_pct: float = 0.40  # Max 40% per sector
 
     # Position sizing: max premium per trade by engine (% of buying power)
-    max_premium_scalper_pct: float = 0.20   # 20% max for 0DTE
-    max_premium_momentum_pct: float = 0.15  # 15% for momentum
-    max_premium_macro_pct: float = 0.25     # 25% for LEAPS
-    max_premium_vol_sell_pct: float = 0.15  # 15% for vol selling
+    # SWARM CONSENSUS: 2-5% per trade, scale on wins (10/12 agreed)
+    max_premium_scalper_pct: float = 0.05   # 5% max for 0DTE (DOWN from 20%)
+    max_premium_momentum_pct: float = 0.04  # 4% for momentum (DOWN from 15%)
+    max_premium_macro_pct: float = 0.05     # 5% for LEAPS (DOWN from 25%)
+    max_premium_vol_sell_pct: float = 0.03  # 3% for vol selling (DOWN from 15%)
 
     # Account cap: max % of buying power per trade
-    max_pct_buying_power_per_trade: float = 0.20  # 20% (AGGRESSIVE)
+    max_pct_buying_power_per_trade: float = 0.05  # 5% (DOWN from 20% - SWARM CONSENSUS)
 
     # Consecutive loss cooldown - VENOM: DON'T STOP TRADING
     consecutive_loss_threshold: int = 6  # 6 losses triggers cooldown (UP from 4 - stay in game)

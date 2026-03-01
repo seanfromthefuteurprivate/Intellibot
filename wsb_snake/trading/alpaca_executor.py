@@ -870,6 +870,17 @@ No overnight risk. Fresh start tomorrow!
         self._reset_daily_count_if_needed()
         logger.debug(f"EXECUTOR: daily count reset done")
 
+        # SWARM CONSENSUS (9/12): Check macro conditions before trading
+        try:
+            from wsb_snake.learning.macro_filter import get_macro_filter
+            macro = get_macro_filter()
+            macro_ok, macro_reason, macro_mult = macro.should_trade()
+            if macro_mult < 1.0:
+                confidence = confidence * macro_mult
+                logger.info(f"MACRO_FILTER: {macro_reason} - confidence adjusted to {confidence:.0f}")
+        except Exception as e:
+            logger.debug(f"Macro filter check failed: {e}")
+
         governor = get_risk_governor()
         logger.debug(f"EXECUTOR: got risk governor")
 
