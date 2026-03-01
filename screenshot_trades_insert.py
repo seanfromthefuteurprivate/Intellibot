@@ -1,232 +1,241 @@
 #!/usr/bin/env python3
 """
 Insert extracted screenshot trades into learned_trades database.
-Extracted from zip file: New Folder With Items 3.zip (53 screenshots)
+Schema verified from: sqlite3 wsb_snake.db ".schema learned_trades"
+
+COLUMNS (in order):
+id, ticker, trade_type, strike, expiry, direction, entry_price, exit_price,
+quantity, profit_loss_dollars, profit_loss_pct, platform, trade_date, is_0dte,
+notes, raw_text, confidence, source, created_at, telegram_chat_id, telegram_msg_id,
+catalyst, pattern
 """
 
 import sqlite3
-from datetime import datetime
+import sys
 
-# Major closed trades extracted from screenshots
+# Major closed trades extracted from screenshots - MATCHING EXACT SCHEMA
 SCREENSHOT_TRADES = [
     # QQQ $800 -> $49K legendary trade (IMG_0307, IMG_0507)
     {
-        "ticker": "QQQ", "strike": 615, "option_type": "CALL", "expiry": "2026-01-21",
-        "entry_price": 0.08, "exit_price": 5.03, "quantity": 100,
-        "entry_time": "2026-01-21 13:31:00", "exit_time": "2026-01-21 14:50:00",
-        "pnl_dollars": 49500.00, "pnl_percent": 6187.5, "source": "screenshot_thinkorswim",
-        "notes": "0DTE scalp, $800 to $49K in 79 minutes"
+        "ticker": "QQQ", "trade_type": "CALL", "strike": 615.0, "expiry": "2026-01-21",
+        "direction": "long", "entry_price": 0.08, "exit_price": 5.03, "quantity": 100,
+        "profit_loss_dollars": 49500.0, "profit_loss_pct": 6187.5, "platform": "thinkorswim",
+        "trade_date": "2026-01-21", "is_0dte": 1, "notes": "0DTE scalp $800 to $49K in 79 minutes",
+        "confidence": 1.0, "source": "screenshot", "pattern": "LOTTO_TICKET"
     },
     # USAR calls +$72K (IMG_0355)
     {
-        "ticker": "USAR", "strike": None, "option_type": "CALL", "expiry": "2026-01-26",
-        "entry_price": 0.86, "exit_price": 6.868, "quantity": 125,
-        "entry_time": "2026-01-24 10:00:00", "exit_time": "2026-01-26 10:00:00",
-        "pnl_dollars": 72249.11, "pnl_percent": 698.6, "source": "screenshot_wsb",
-        "notes": "WSB YOLO play, 700%+ gains"
+        "ticker": "USAR", "trade_type": "CALL", "strike": None, "expiry": "2026-01-26",
+        "direction": "long", "entry_price": 0.86, "exit_price": 6.868, "quantity": 125,
+        "profit_loss_dollars": 72249.11, "profit_loss_pct": 698.6, "platform": "WSB",
+        "trade_date": "2026-01-26", "is_0dte": 0, "notes": "WSB YOLO play 700%+ gains",
+        "confidence": 0.9, "source": "screenshot", "pattern": "LOTTO_TICKET"
     },
     # SLV $100 Call massive winner (IMG_0363, IMG_0364)
     {
-        "ticker": "SLV", "strike": 100, "option_type": "CALL", "expiry": "2026-01-28",
-        "entry_price": 0.61, "exit_price": 8.11, "quantity": 60,
-        "entry_time": "2026-01-23 09:00:00", "exit_time": "2026-01-26 10:00:00",
-        "pnl_dollars": 44919.15, "pnl_percent": 1229.5, "source": "screenshot_etrade",
-        "notes": "Silver breakout play, 3-day hold"
+        "ticker": "SLV", "trade_type": "CALL", "strike": 100.0, "expiry": "2026-01-28",
+        "direction": "long", "entry_price": 0.61, "exit_price": 8.11, "quantity": 60,
+        "profit_loss_dollars": 44919.15, "profit_loss_pct": 1229.5, "platform": "E-Trade",
+        "trade_date": "2026-01-26", "is_0dte": 0, "notes": "Silver breakout play 3-day hold",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # SLV $40 Call LEAPS (IMG_0404)
     {
-        "ticker": "SLV", "strike": 40, "option_type": "CALL", "expiry": "2028-01-21",
-        "entry_price": 13.00, "exit_price": 56.92, "quantity": 1,
-        "entry_time": "2025-10-01 10:00:00", "exit_time": "2026-01-12 08:44:00",
-        "pnl_dollars": 4392.46, "pnl_percent": 337.89, "source": "screenshot_robinhood",
-        "notes": "LEAPS swing trade on silver"
+        "ticker": "SLV", "trade_type": "CALL", "strike": 40.0, "expiry": "2028-01-21",
+        "direction": "long", "entry_price": 13.0, "exit_price": 56.92, "quantity": 1,
+        "profit_loss_dollars": 4392.46, "profit_loss_pct": 337.89, "platform": "Robinhood",
+        "trade_date": "2026-01-12", "is_0dte": 0, "notes": "LEAPS swing trade on silver",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # GLD $515 Call (IMG_0417)
     {
-        "ticker": "GLD", "strike": 515, "option_type": "CALL", "expiry": "2026-01-30",
-        "entry_price": 5.48, "exit_price": None, "quantity": None,
-        "entry_time": "2026-01-28 09:00:00", "exit_time": "2026-01-29 10:00:00",
-        "pnl_dollars": 10600.00, "pnl_percent": None, "source": "screenshot_moomoo",
-        "notes": "~11k in a day on gold calls"
+        "ticker": "GLD", "trade_type": "CALL", "strike": 515.0, "expiry": "2026-01-30",
+        "direction": "long", "entry_price": 5.48, "exit_price": None, "quantity": None,
+        "profit_loss_dollars": 10600.0, "profit_loss_pct": None, "platform": "moomoo",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "~11k in a day on gold calls",
+        "confidence": 0.9, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # IAU (Gold) Calls batch 1 (IMG_0427)
     {
-        "ticker": "IAU", "strike": 91, "option_type": "CALL", "expiry": "2027-01-15",
-        "entry_price": 2.55, "exit_price": 19.89, "quantity": 4,
-        "entry_time": "2025-10-07 10:00:00", "exit_time": "2026-01-29 10:00:00",
-        "pnl_dollars": 6938.63, "pnl_percent": 681.0, "source": "screenshot_etrade",
-        "notes": "Gold LEAPS swing"
+        "ticker": "IAU", "trade_type": "CALL", "strike": 91.0, "expiry": "2027-01-15",
+        "direction": "long", "entry_price": 2.55, "exit_price": 19.89, "quantity": 4,
+        "profit_loss_dollars": 6938.63, "profit_loss_pct": 681.0, "platform": "E-Trade",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "Gold LEAPS swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # IAU Calls batch 2 (IMG_0427)
     {
-        "ticker": "IAU", "strike": 91, "option_type": "CALL", "expiry": "2027-01-15",
-        "entry_price": 2.55, "exit_price": 17.24, "quantity": 2,
-        "entry_time": "2025-10-07 10:00:00", "exit_time": "2026-01-28 10:00:00",
-        "pnl_dollars": 2939.31, "pnl_percent": 577.0, "source": "screenshot_etrade",
-        "notes": "Gold LEAPS swing"
+        "ticker": "IAU", "trade_type": "CALL", "strike": 91.0, "expiry": "2027-01-15",
+        "direction": "long", "entry_price": 2.55, "exit_price": 17.24, "quantity": 2,
+        "profit_loss_dollars": 2939.31, "profit_loss_pct": 577.0, "platform": "E-Trade",
+        "trade_date": "2026-01-28", "is_0dte": 0, "notes": "Gold LEAPS swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # IAU Calls batch 3 (IMG_0427)
     {
-        "ticker": "IAU", "strike": 91, "option_type": "CALL", "expiry": "2027-01-15",
-        "entry_price": 2.55, "exit_price": 16.94, "quantity": 2,
-        "entry_time": "2025-10-07 10:00:00", "exit_time": "2026-01-28 10:00:00",
-        "pnl_dollars": 2879.31, "pnl_percent": 565.0, "source": "screenshot_etrade",
-        "notes": "Gold LEAPS swing"
+        "ticker": "IAU", "trade_type": "CALL", "strike": 91.0, "expiry": "2027-01-15",
+        "direction": "long", "entry_price": 2.55, "exit_price": 16.94, "quantity": 2,
+        "profit_loss_dollars": 2879.31, "profit_loss_pct": 565.0, "platform": "E-Trade",
+        "trade_date": "2026-01-28", "is_0dte": 0, "notes": "Gold LEAPS swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # MSFT $430 Put earnings play (IMG_0420)
     {
-        "ticker": "MSFT", "strike": 430, "option_type": "PUT", "expiry": "2026-01-30",
-        "entry_price": 1.10, "exit_price": 4.00, "quantity": 9,
-        "entry_time": "2026-01-29 09:30:00", "exit_time": "2026-01-29 16:00:00",
-        "pnl_dollars": 2610.00, "pnl_percent": 263.64, "source": "screenshot_robinhood",
-        "notes": "MSFT earnings play, sold too early"
+        "ticker": "MSFT", "trade_type": "PUT", "strike": 430.0, "expiry": "2026-01-30",
+        "direction": "long", "entry_price": 1.10, "exit_price": 4.0, "quantity": 9,
+        "profit_loss_dollars": 2610.0, "profit_loss_pct": 263.64, "platform": "Robinhood",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "MSFT earnings play sold too early",
+        "confidence": 1.0, "source": "screenshot", "pattern": "EARNINGS_PLAY"
     },
     # QQQ $625 Put 0DTE monster (IMG_0487)
     {
-        "ticker": "QQQ", "strike": 625, "option_type": "PUT", "expiry": "2026-02-03",
-        "entry_price": 0.87, "exit_price": 7.88, "quantity": 65,
-        "entry_time": "2026-02-03 09:30:00", "exit_time": "2026-02-03 10:24:00",
-        "pnl_dollars": 45547.00, "pnl_percent": 805.7, "source": "screenshot_robinhood",
-        "notes": "0DTE put on selloff day, 65 contracts"
+        "ticker": "QQQ", "trade_type": "PUT", "strike": 625.0, "expiry": "2026-02-03",
+        "direction": "long", "entry_price": 0.87, "exit_price": 7.88, "quantity": 65,
+        "profit_loss_dollars": 45547.0, "profit_loss_pct": 805.7, "platform": "Robinhood",
+        "trade_date": "2026-02-03", "is_0dte": 1, "notes": "0DTE put on selloff day 65 contracts",
+        "confidence": 1.0, "source": "screenshot", "pattern": "REVERSAL_PUT"
     },
     # SLV $86 Put (IMG_0488)
     {
-        "ticker": "SLV", "strike": 86, "option_type": "PUT", "expiry": "2026-04-17",
-        "entry_price": 12.32, "exit_price": 18.40, "quantity": 2,
-        "entry_time": "2026-01-20 10:00:00", "exit_time": "2026-01-30 12:47:00",
-        "pnl_dollars": 1215.00, "pnl_percent": 49.30, "source": "screenshot_robinhood",
-        "notes": "Silver put swing"
+        "ticker": "SLV", "trade_type": "PUT", "strike": 86.0, "expiry": "2026-04-17",
+        "direction": "long", "entry_price": 12.32, "exit_price": 18.4, "quantity": 2,
+        "profit_loss_dollars": 1215.0, "profit_loss_pct": 49.3, "platform": "Robinhood",
+        "trade_date": "2026-01-30", "is_0dte": 0, "notes": "Silver put swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # NAVI $10 Put (IMG_0489)
     {
-        "ticker": "NAVI", "strike": 10, "option_type": "PUT", "expiry": "2026-04-17",
-        "entry_price": 0.4324, "exit_price": 0.80, "quantity": 507,
-        "entry_time": "2026-01-15 10:00:00", "exit_time": "2026-01-30 06:54:00",
-        "pnl_dollars": 18641.00, "pnl_percent": 85.05, "source": "screenshot_robinhood",
-        "notes": "507 contract put play"
+        "ticker": "NAVI", "trade_type": "PUT", "strike": 10.0, "expiry": "2026-04-17",
+        "direction": "long", "entry_price": 0.4324, "exit_price": 0.8, "quantity": 507,
+        "profit_loss_dollars": 18641.0, "profit_loss_pct": 85.05, "platform": "Robinhood",
+        "trade_date": "2026-01-30", "is_0dte": 0, "notes": "507 contract put play",
+        "confidence": 1.0, "source": "screenshot", "pattern": "HIGH_VOLUME_CONVICTION"
     },
     # SNDK $620 Call (IMG_0490)
     {
-        "ticker": "SNDK", "strike": 620, "option_type": "CALL", "expiry": "2026-01-30",
-        "entry_price": 6.00, "exit_price": 50.00, "quantity": 1,
-        "entry_time": "2026-01-29 10:00:00", "exit_time": "2026-01-30 10:00:00",
-        "pnl_dollars": 4400.00, "pnl_percent": 733.34, "source": "screenshot_robinhood",
-        "notes": "733% return single contract"
+        "ticker": "SNDK", "trade_type": "CALL", "strike": 620.0, "expiry": "2026-01-30",
+        "direction": "long", "entry_price": 6.0, "exit_price": 50.0, "quantity": 1,
+        "profit_loss_dollars": 4400.0, "profit_loss_pct": 733.34, "platform": "Robinhood",
+        "trade_date": "2026-01-30", "is_0dte": 0, "notes": "733% return single contract",
+        "confidence": 1.0, "source": "screenshot", "pattern": "LOTTO_TICKET"
     },
     # SLV $74.5 Put (IMG_0501)
     {
-        "ticker": "SLV", "strike": 74.5, "option_type": "PUT", "expiry": "2026-01-30",
-        "entry_price": 0.50, "exit_price": 4.95, "quantity": 20,
-        "entry_time": "2026-01-28 10:00:00", "exit_time": "2026-01-30 10:26:00",
-        "pnl_dollars": 9880.00, "pnl_percent": 890.0, "source": "screenshot_robinhood",
-        "notes": "Silver put scalp"
+        "ticker": "SLV", "trade_type": "PUT", "strike": 74.5, "expiry": "2026-01-30",
+        "direction": "long", "entry_price": 0.5, "exit_price": 4.95, "quantity": 20,
+        "profit_loss_dollars": 9880.0, "profit_loss_pct": 890.0, "platform": "Robinhood",
+        "trade_date": "2026-01-30", "is_0dte": 0, "notes": "Silver put scalp",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
     # MSTR $143 Put (IMG_0502)
     {
-        "ticker": "MSTR", "strike": 143, "option_type": "PUT", "expiry": "2026-02-06",
-        "entry_price": 4.05, "exit_price": 6.10, "quantity": 13,
-        "entry_time": "2026-01-30 10:00:00", "exit_time": "2026-02-02 13:32:00",
-        "pnl_dollars": 2665.00, "pnl_percent": 50.6, "source": "screenshot_robinhood",
-        "notes": "MSTR put swing"
+        "ticker": "MSTR", "trade_type": "PUT", "strike": 143.0, "expiry": "2026-02-06",
+        "direction": "long", "entry_price": 4.05, "exit_price": 6.1, "quantity": 13,
+        "profit_loss_dollars": 2665.0, "profit_loss_pct": 50.6, "platform": "Robinhood",
+        "trade_date": "2026-02-02", "is_0dte": 0, "notes": "MSTR put swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": None
     },
     # UNG $12.5 Call assignment (IMG_0503)
     {
-        "ticker": "UNG", "strike": 12.5, "option_type": "CALL", "expiry": "2026-01-21",
-        "entry_price": 10.82, "exit_price": 13.55, "quantity": 60,
-        "entry_time": "2025-12-01 10:00:00", "exit_time": "2026-01-21 16:00:00",
-        "pnl_dollars": 16395.00, "pnl_percent": 25.26, "source": "screenshot_robinhood",
-        "notes": "Natural gas call assignment, 6000 shares"
+        "ticker": "UNG", "trade_type": "CALL", "strike": 12.5, "expiry": "2026-01-21",
+        "direction": "long", "entry_price": 10.82, "exit_price": 13.55, "quantity": 60,
+        "profit_loss_dollars": 16395.0, "profit_loss_pct": 25.26, "platform": "Robinhood",
+        "trade_date": "2026-01-21", "is_0dte": 0, "notes": "Natural gas call assignment 6000 shares",
+        "confidence": 1.0, "source": "screenshot", "pattern": None
     },
     # UNG $15 Put (IMG_0504)
     {
-        "ticker": "UNG", "strike": 15, "option_type": "PUT", "expiry": "2026-02-20",
-        "entry_price": 0.78, "exit_price": 2.07, "quantity": 60,
-        "entry_time": "2026-01-20 10:00:00", "exit_time": "2026-02-02 10:00:00",
-        "pnl_dollars": 7740.00, "pnl_percent": 165.39, "source": "screenshot_robinhood",
-        "notes": "Natural gas put swing"
+        "ticker": "UNG", "trade_type": "PUT", "strike": 15.0, "expiry": "2026-02-20",
+        "direction": "long", "entry_price": 0.78, "exit_price": 2.07, "quantity": 60,
+        "profit_loss_dollars": 7740.0, "profit_loss_pct": 165.39, "platform": "Robinhood",
+        "trade_date": "2026-02-02", "is_0dte": 0, "notes": "Natural gas put swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": None
     },
     # SPY 692 Put 0DTE (IMG_0419)
     {
-        "ticker": "SPY", "strike": 692, "option_type": "PUT", "expiry": "2026-01-29",
-        "entry_price": 1.78, "exit_price": 2.92, "quantity": 40,
-        "entry_time": "2026-01-29 09:30:00", "exit_time": "2026-01-29 10:30:00",
-        "pnl_dollars": 6759.14, "pnl_percent": 64.0, "source": "screenshot_wsb",
-        "notes": "SPY 0DTE put scalp"
+        "ticker": "SPY", "trade_type": "PUT", "strike": 692.0, "expiry": "2026-01-29",
+        "direction": "long", "entry_price": 1.78, "exit_price": 2.92, "quantity": 40,
+        "profit_loss_dollars": 6759.14, "profit_loss_pct": 64.0, "platform": "WSB",
+        "trade_date": "2026-01-29", "is_0dte": 1, "notes": "SPY 0DTE put scalp",
+        "confidence": 0.9, "source": "screenshot", "pattern": "REVERSAL_PUT"
     },
-    # GLD 450C closed trades (IMG_0424)
+    # GLD 450C closed trades (IMG_0424) - batch 1
     {
-        "ticker": "GLD", "strike": 450, "option_type": "CALL", "expiry": "2026-06-30",
-        "entry_price": 20.00, "exit_price": 64.50, "quantity": 2,
-        "entry_time": "2025-11-01 10:00:00", "exit_time": "2026-01-29 10:00:00",
-        "pnl_dollars": 8900.00, "pnl_percent": 222.5, "source": "screenshot_thinkorswim",
-        "notes": "Gold LEAPS swing"
+        "ticker": "GLD", "trade_type": "CALL", "strike": 450.0, "expiry": "2026-06-30",
+        "direction": "long", "entry_price": 20.0, "exit_price": 64.5, "quantity": 2,
+        "profit_loss_dollars": 8900.0, "profit_loss_pct": 222.5, "platform": "thinkorswim",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "Gold LEAPS swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
+    # GLD 450C closed trades (IMG_0424) - batch 2
     {
-        "ticker": "GLD", "strike": 450, "option_type": "CALL", "expiry": "2026-06-30",
-        "entry_price": 20.00, "exit_price": 69.69, "quantity": 3,
-        "entry_time": "2025-11-01 10:00:00", "exit_time": "2026-01-29 10:00:00",
-        "pnl_dollars": 14907.00, "pnl_percent": 248.5, "source": "screenshot_thinkorswim",
-        "notes": "Gold LEAPS swing"
+        "ticker": "GLD", "trade_type": "CALL", "strike": 450.0, "expiry": "2026-06-30",
+        "direction": "long", "entry_price": 20.0, "exit_price": 69.69, "quantity": 3,
+        "profit_loss_dollars": 14907.0, "profit_loss_pct": 248.5, "platform": "thinkorswim",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "Gold LEAPS swing",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
+    },
+    # GLD 475C (IMG_0412)
+    {
+        "ticker": "GLD", "trade_type": "CALL", "strike": 475.0, "expiry": "2026-03-31",
+        "direction": "long", "entry_price": 10.0, "exit_price": 38.925, "quantity": 15,
+        "profit_loss_dollars": 43377.59, "profit_loss_pct": 289.0, "platform": "thinkorswim",
+        "trade_date": "2026-01-29", "is_0dte": 0, "notes": "WSB post 15k to 58k",
+        "confidence": 1.0, "source": "screenshot", "pattern": "PRECIOUS_METALS_MOMENTUM"
     },
 ]
 
+
 def insert_trades(db_path: str):
-    """Insert screenshot trades into learned_trades table."""
+    """Insert screenshot trades into learned_trades table using EXACT schema."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Check if table exists
-    cursor.execute("""
-        SELECT name FROM sqlite_master
-        WHERE type='table' AND name='learned_trades'
-    """)
-    if not cursor.fetchone():
-        # Create table if not exists
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS learned_trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL,
-                strike REAL,
-                option_type TEXT,
-                expiry TEXT,
-                entry_price REAL,
-                exit_price REAL,
-                quantity INTEGER,
-                entry_time TEXT,
-                exit_time TEXT,
-                pnl_dollars REAL,
-                pnl_percent REAL,
-                source TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
     inserted = 0
+    skipped = 0
+
     for trade in SCREENSHOT_TRADES:
-        # Check for duplicates
+        # Check for duplicates by ticker + strike + trade_date + profit_loss_dollars
         cursor.execute("""
             SELECT id FROM learned_trades
-            WHERE ticker = ? AND strike = ? AND entry_time = ? AND pnl_dollars = ?
-        """, (trade["ticker"], trade.get("strike"), trade["entry_time"], trade["pnl_dollars"]))
+            WHERE ticker = ? AND strike = ? AND trade_date = ? AND profit_loss_dollars = ?
+        """, (trade["ticker"], trade.get("strike"), trade["trade_date"], trade["profit_loss_dollars"]))
 
         if cursor.fetchone():
-            print(f"Skipping duplicate: {trade['ticker']} {trade.get('strike')} {trade['entry_time']}")
+            print(f"SKIP duplicate: {trade['ticker']} {trade.get('strike')} {trade['trade_date']}")
+            skipped += 1
             continue
 
+        # INSERT using EXACT column names from schema
         cursor.execute("""
             INSERT INTO learned_trades
-            (ticker, strike, option_type, expiry, entry_price, exit_price,
-             quantity, entry_time, exit_time, pnl_dollars, pnl_percent, source, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (ticker, trade_type, strike, expiry, direction, entry_price, exit_price,
+             quantity, profit_loss_dollars, profit_loss_pct, platform, trade_date,
+             is_0dte, notes, raw_text, confidence, source, catalyst, pattern)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            trade["ticker"], trade.get("strike"), trade["option_type"], trade.get("expiry"),
-            trade["entry_price"], trade.get("exit_price"), trade.get("quantity"),
-            trade["entry_time"], trade.get("exit_time"), trade["pnl_dollars"],
-            trade.get("pnl_percent"), trade["source"], trade.get("notes")
+            trade["ticker"],
+            trade["trade_type"],
+            trade.get("strike"),
+            trade.get("expiry"),
+            trade["direction"],
+            trade["entry_price"],
+            trade.get("exit_price"),
+            trade.get("quantity"),
+            trade["profit_loss_dollars"],
+            trade.get("profit_loss_pct"),
+            trade["platform"],
+            trade["trade_date"],
+            trade["is_0dte"],
+            trade.get("notes"),
+            None,  # raw_text
+            trade.get("confidence", 0.9),
+            trade["source"],
+            None,  # catalyst
+            trade.get("pattern")
         ))
         inserted += 1
-        print(f"Inserted: {trade['ticker']} ${trade.get('strike')} {trade['option_type']} -> ${trade['pnl_dollars']:,.2f}")
+        print(f"INSERT: {trade['ticker']} ${trade.get('strike')} {trade['trade_type']} -> ${trade['profit_loss_dollars']:,.2f}")
 
     conn.commit()
 
@@ -234,23 +243,29 @@ def insert_trades(db_path: str):
     cursor.execute("SELECT COUNT(*) FROM learned_trades")
     total = cursor.fetchone()[0]
 
-    cursor.execute("SELECT SUM(pnl_dollars) FROM learned_trades WHERE pnl_dollars > 0")
+    cursor.execute("SELECT SUM(profit_loss_dollars) FROM learned_trades WHERE profit_loss_dollars > 0")
     total_profit = cursor.fetchone()[0] or 0
 
-    cursor.execute("SELECT SUM(pnl_dollars) FROM learned_trades WHERE pnl_dollars < 0")
+    cursor.execute("SELECT SUM(profit_loss_dollars) FROM learned_trades WHERE profit_loss_dollars < 0")
     total_loss = cursor.fetchone()[0] or 0
 
-    print(f"\n=== SUMMARY ===")
-    print(f"Inserted: {inserted} new trades")
-    print(f"Total trades in DB: {total}")
-    print(f"Total profits: ${total_profit:,.2f}")
-    print(f"Total losses: ${total_loss:,.2f}")
-    print(f"Net P&L: ${total_profit + total_loss:,.2f}")
+    cursor.execute("SELECT COUNT(DISTINCT pattern) FROM learned_trades WHERE pattern IS NOT NULL")
+    pattern_count = cursor.fetchone()[0]
+
+    print(f"\n{'='*50}")
+    print(f"INSERTED: {inserted} new trades")
+    print(f"SKIPPED: {skipped} duplicates")
+    print(f"TOTAL IN DB: {total}")
+    print(f"TOTAL PROFITS: ${total_profit:,.2f}")
+    print(f"TOTAL LOSSES: ${total_loss:,.2f}")
+    print(f"NET P&L: ${total_profit + total_loss:,.2f}")
+    print(f"UNIQUE PATTERNS: {pattern_count}")
+    print(f"{'='*50}")
 
     conn.close()
     return inserted
 
+
 if __name__ == "__main__":
-    import sys
     db_path = sys.argv[1] if len(sys.argv) > 1 else "wsb_snake_data/wsb_snake.db"
     insert_trades(db_path)
