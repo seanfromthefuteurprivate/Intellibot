@@ -1,0 +1,15 @@
+[Unit]
+Description=WSB Snake Telegram Screenshot Poller
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/ubuntu/wsb-snake
+EnvironmentFile=/home/ubuntu/wsb-snake/.env
+ExecStart=/home/ubuntu/wsb-snake/venv/bin/python /home/ubuntu/wsb-snake/wsb_snake/collectors/telegram_poller.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
