@@ -33,12 +33,13 @@ INITIAL_ACCOUNT = 5000.0
 MIN_ACCOUNT_FLOOR = 500.0
 
 # Pattern-specific configurations
+# SIZING PHILOSOPHY: Lottos = SMALL bets, many shots. Reversals = BIG bets, high win rate.
 PATTERN_CONFIG = {
     "LOTTO_TICKET": {
         "otm_range": (3, 5),       # 3-5 points OTM
         "price_range": (0.10, 0.50),  # Cheap options
-        "max_sizing": 0.50,        # Up to 50% on BERSERKER
-        "stop_loss": -0.60,        # Wide stop (binary outcomes)
+        "max_sizing": 0.12,        # SMALL - 10-15% max (risk small, win huge)
+        "stop_loss": -0.70,        # Wide stop - binary outcomes, let them breathe
         "trail_trigger": 3.00,     # Don't trail until +300%
         "trail_pct": 0.30,         # Wide trail
         "max_hold_minutes": 90,
@@ -46,7 +47,7 @@ PATTERN_CONFIG = {
     "REVERSAL_PUT": {
         "otm_range": (1, 2),
         "price_range": (0.30, 1.50),
-        "max_sizing": 0.35,
+        "max_sizing": 0.35,        # BIG - these are BERSERKER trades (50%+ win rate)
         "stop_loss": -0.35,
         "trail_trigger": 1.00,
         "trail_pct": 0.15,
@@ -55,7 +56,7 @@ PATTERN_CONFIG = {
     "MOMENTUM_CALL": {
         "otm_range": (1, 3),
         "price_range": (0.30, 1.50),
-        "max_sizing": 0.30,
+        "max_sizing": 0.30,        # 30% - 45% win rate, 100-200% winners
         "stop_loss": -0.40,
         "trail_trigger": 0.75,
         "trail_pct": 0.20,
@@ -73,7 +74,7 @@ PATTERN_CONFIG = {
     "DEFAULT": {
         "otm_range": (2, 3),
         "price_range": (0.20, 1.00),
-        "max_sizing": 0.20,
+        "max_sizing": 0.15,        # Conservative default
         "stop_loss": -0.40,
         "trail_trigger": 1.00,
         "trail_pct": 0.20,
