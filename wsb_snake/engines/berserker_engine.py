@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
 from wsb_snake.utils.logger import get_logger
-from wsb_snake.utils.time_utils import is_market_open
+from wsb_snake.utils.session_regime import is_market_open
 from wsb_snake.learning.gex_calculator import (
     get_gex_calculator,
     GEXResult,
