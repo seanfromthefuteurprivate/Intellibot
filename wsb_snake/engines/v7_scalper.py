@@ -239,29 +239,68 @@ def run_v7_scan() -> Optional[Dict]:
 
     # Check circuit breaker
     if _circuit_breaker_active:
-        logger.debug("V7: Circuit breaker active, skipping scan")
+        logger.info("V7_SCAN: CIRCUIT_BREAKER_ACTIVE - skipping")
         return None
 
     # Check market hours
     et_now = get_et_now()
     if et_now.hour < 9 or (et_now.hour == 9 and et_now.minute < 35):
+        logger.info(f"V7_SCAN: PRE_MARKET {et_now.strftime('%H:%M')} ET - skipping")
         return None
     if et_now.hour >= 16:
+        logger.info(f"V7_SCAN: AFTER_HOURS {et_now.strftime('%H:%M')} ET - skipping")
         return None
 
     # Get SPY minute bars
     try:
         bars = polygon_enhanced.get_intraday_bars("SPY", timespan="minute", multiplier=1, limit=60)
         if not bars or len(bars) < 15:
-            logger.debug(f"V7: Insufficient bars ({len(bars) if bars else 0})")
+            logger.info(f"V7_SCAN: INSUFFICIENT_BARS count={len(bars) if bars else 0}")
             return None
     except Exception as e:
-        logger.warning(f"V7: Failed to get SPY bars: {e}")
+        logger.warning(f"V7_SCAN: BARS_FAILED error={e}")
         return None
+
+    # Calculate metrics for logging BEFORE signal detection
+    recent = bars[-11:] if len(bars) >= 11 else bars
+    current_price = recent[-1].get("close") or recent[-1].get("c") or 0
+    start_price = recent[0].get("close") or recent[0].get("c") or 1
+    momentum = (current_price - start_price) / start_price if start_price else 0
+
+    volumes = [b.get("volume") or b.get("v") or 0 for b in recent[:-1]]
+    avg_vol = sum(volumes) / len(volumes) if volumes else 1
+    current_vol = recent[-1].get("volume") or recent[-1].get("v") or 0
+    vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1
+
+    ma30 = calculate_ma(bars, 30)
+    ma_aligned = "N/A"
+    if ma30:
+        if momentum > 0:
+            ma_aligned = "YES" if current_price > ma30 else "NO(below)"
+        else:
+            ma_aligned = "YES" if current_price < ma30 else "NO(above)"
+
+    # LOG EVERY SCAN - this is the key diagnostic line
+    logger.info(
+        f"V7_SCAN: SPY=${current_price:.2f} mom={momentum*100:+.3f}% vol={vol_ratio:.2f}x "
+        f"ma30={'$'+f'{ma30:.2f}' if ma30 else 'N/A'} aligned={ma_aligned} "
+        f"bars={len(bars)} thresh=[mom>0.2% vol>1.3x]"
+    )
 
     # Detect signal
     signal = detect_signal_v7(bars)
     if not signal:
+        # Log why no signal
+        reason = []
+        if abs(momentum) < 0.002:
+            reason.append(f"mom={momentum*100:.3f}%<0.2%")
+        if vol_ratio < 1.3:
+            reason.append(f"vol={vol_ratio:.2f}x<1.3x")
+        if ma30 and momentum > 0 and current_price < ma30:
+            reason.append("price<MA30")
+        if ma30 and momentum < 0 and current_price > ma30:
+            reason.append("price>MA30")
+        logger.info(f"V7_SCAN: NO_SIGNAL reason=[{', '.join(reason) if reason else 'confidence<62'}]")
         return None
 
     logger.info(
@@ -281,7 +320,8 @@ def run_v7_scan() -> Optional[Dict]:
 
     # FIX 2: Minimum entry price check
     if option_price < MIN_ENTRY_PRICE:
-        logger.info(f"V7: BLOCKED - option ${option_price:.2f} < ${MIN_ENTRY_PRICE:.2f} minimum")
+        logger.info(f"V7_BLOCKED: price=${option_price:.2f} < min=${MIN_ENTRY_PRICE:.2f} strike={signal.strike} dir={signal.direction}")
+        _signals_blocked += 1
         return None
 
     # Get option symbol
@@ -319,7 +359,7 @@ def run_v7_scan() -> Optional[Dict]:
         )
 
         if position:
-            logger.info(f"V7: EXECUTED - {position.option_symbol} qty={position.qty}")
+            logger.info(f"V7_ENTRY: {signal.direction} strike={signal.strike} qty={position.qty} price=${option_price:.2f} conv={signal.conviction}")
             send_alert(
                 f"🎯 **V7 ENTRY**\n"
                 f"SPY {signal.direction} ${signal.strike}\n"

@@ -612,6 +612,10 @@ class JobsDayCPL:
 
         # Collect all candidates first
         for ticker in self.watchlist:
+            # V7 OWNS SPY 0DTE - CPL does NOT touch it
+            if ticker.upper() == "SPY" and self.event_date == get_todays_expiry_date():
+                logger.info(f"CPL_BLOCKED: SPY 0DTE now handled by V7 engine")
+                continue
             price = _get_spot_price(ticker)
             if not price or price <= 0:
                 logger.debug(f"CPL: no price for {ticker}, skip")
