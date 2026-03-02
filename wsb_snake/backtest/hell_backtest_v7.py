@@ -127,6 +127,18 @@ def calculate_ma(bars: List[Dict], idx: int, period: int) -> Optional[float]:
     if idx < period: return None
     return sum(b["c"] for b in bars[idx-period+1:idx+1]) / period
 
+def get_raw_signal(bars: List[Dict], idx: int) -> Optional[str]:
+    """Get raw direction signal without confirmation - for tracking."""
+    if idx < 10: return None
+    recent = bars[max(0, idx-10):idx+1]
+    if len(recent) < 10: return None
+    momentum = (recent[-1]["c"] - recent[0]["c"]) / recent[0]["c"]
+    avg_vol = sum(b["v"] for b in recent[:-1]) / (len(recent) - 1) if len(recent) > 1 else 1
+    vol_spike = recent[-1]["v"] / avg_vol if avg_vol > 0 else 1
+    if momentum > 0.002 and vol_spike > 1.3: return "CALL"
+    elif momentum < -0.002 and vol_spike > 1.3: return "PUT"
+    return None
+
 def detect_signal_v7(bars: List[Dict], idx: int, last_signal: Dict) -> Optional[Tuple[str, float, float, str]]:
     if idx < 10: return None
     current_bar = bars[idx]
@@ -157,11 +169,11 @@ def detect_signal_v7(bars: List[Dict], idx: int, last_signal: Dict) -> Optional[
 
     if not direction or confidence < 62: return None
 
-    # 2-min confirmation
+    # 2-min confirmation - check if PREVIOUS signal was same direction
     if last_signal.get("direction") == direction and last_signal.get("time"):
         time_diff = (bar_time - last_signal["time"]).total_seconds()
-        if not (30 <= time_diff <= 180): return None
-    else: return None
+        if not (30 <= time_diff <= 180): return None  # Not confirmed yet
+    else: return None  # No previous signal or different direction
 
     # Conviction check
     conviction = "DEFAULT"
@@ -273,19 +285,18 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
         current_exposure = sum(p.position_cost for p in positions) / account if account > 0 else 0
 
-        # Update last_signal for confirmation tracking
-        recent = spy_bars[max(0, i-10):i+1]
-        if len(recent) >= 10:
-            momentum = (recent[-1]["c"] - recent[0]["c"]) / recent[0]["c"]
-            avg_vol = sum(b["v"] for b in recent[:-1]) / (len(recent) - 1) if len(recent) > 1 else 1
-            vol_spike = recent[-1]["v"] / avg_vol if avg_vol > 0 else 1
-            raw_dir = "CALL" if momentum > 0.002 and vol_spike > 1.3 else ("PUT" if momentum < -0.002 and vol_spike > 1.3 else None)
-            if raw_dir: last_signal = {"direction": raw_dir, "time": bar_time}
-
+        # FIRST: Check for confirmed signal using PREVIOUS last_signal
+        signal = None
         if len(positions) < MAX_POSITIONS and current_exposure < MAX_TOTAL_EXPOSURE:
             signal = detect_signal_v7(spy_bars, i, last_signal)
-            if signal:
-                direction, confidence, strike, conviction = signal
+
+        # THEN: Update last_signal with current raw signal (for NEXT iteration)
+        raw_dir = get_raw_signal(spy_bars, i)
+        if raw_dir:
+            last_signal = {"direction": raw_dir, "time": bar_time}
+
+        if signal:
+            direction, confidence, strike, conviction = signal
                 option_ticker = build_option_ticker(strike, expiry, direction)
 
                 option_bars = prefetched.get(option_ticker) or fetch_option_bars(option_ticker, date)
