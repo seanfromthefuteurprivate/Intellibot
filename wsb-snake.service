@@ -10,8 +10,13 @@ WorkingDirectory=/root/wsb-snake
 Environment="PATH=/root/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/root/wsb-snake/.env
 ExecStart=/root/wsb-snake/venv/bin/python -m wsb_snake.main
+
+# Restart policy with limits to prevent infinite loops
 Restart=on-failure
 RestartSec=30
+StartLimitBurst=5
+StartLimitIntervalSec=300
+# ^^ Max 5 restarts in 5 minutes, then systemd will STOP trying
 
 # Logging
 StandardOutput=journal

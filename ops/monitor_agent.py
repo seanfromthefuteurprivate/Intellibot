@@ -24,6 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from wsb_snake.notifications.telegram_bot import send_alert
 from wsb_snake.utils.logger import get_logger
 
+# Import resilience components
+sys.path.insert(0, str(Path(__file__).parent))
+from circuit_breaker import CircuitBreaker
+from dead_mans_switch import DeadMansSwitch
+
 logger = get_logger("ops.monitor")
 
 # Config
@@ -193,36 +198,54 @@ def alpaca_request(endpoint: str) -> Optional[Dict]:
 
 
 def check_service_alive(state: Dict) -> Dict:
-    """TIER 1 CHECK 1: Service alive."""
+    """TIER 1 CHECK 1: Service alive with circuit breaker protection."""
     status = get_service_status()
 
-    if status != "active":
+    # CRITICAL FIX: Only treat "inactive", "failed", "dead" as down
+    # Do NOT restart during transient states like "activating", "deactivating", "reloading"
+    DOWN_STATES = {"inactive", "failed", "dead"}
+
+    if status in DOWN_STATES:
         state["crash_count"] = state.get("crash_count", 0) + 1
         state["last_crash"] = datetime.now().isoformat()
-
-        # Check cooldown
-        cooldown_until = state.get("restart_cooldown_until")
-        if cooldown_until:
-            cooldown_time = datetime.fromisoformat(cooldown_until)
-            if datetime.now() < cooldown_time:
-                logger.warning(f"Service down but in cooldown until {cooldown_until}")
-                return state
-
         crash_count = state["crash_count"]
-        send_alert(f"🔴 SERVICE DOWN #{crash_count} today. Restarting...")
-        logger.warning(f"Service down (crash #{crash_count}). Attempting restart.")
 
-        if restart_service():
+        # CIRCUIT BREAKER: Check if we should even attempt restart
+        circuit_breaker = CircuitBreaker(max_restarts=3, time_window_minutes=5, cooldown_minutes=30)
+        can_restart, cb_message = circuit_breaker.can_restart(reason=f"status={status}")
+
+        if not can_restart:
+            # Circuit breaker OPEN - STOP restarting and alert for manual intervention
+            alert_msg = (
+                f"🛑 CIRCUIT BREAKER OPEN\n"
+                f"{cb_message}\n\n"
+                f"Service crashed {crash_count} times today.\n"
+                f"🚨 MANUAL INTERVENTION REQUIRED - System will NOT auto-restart.\n\n"
+                f"To reset: ssh root@157.245.240.99 'python3 /root/wsb-snake/ops/circuit_breaker.py reset'"
+            )
+            send_alert(alert_msg)
+            logger.critical(f"Circuit breaker prevented restart: {cb_message}")
+            return state
+
+        # Circuit breaker allows restart
+        logger.warning(f"Service down (crash #{crash_count}, status={status}). {cb_message}. Attempting restart.")
+        send_alert(f"🔴 SERVICE DOWN (status={status}) #{crash_count} today. {cb_message}. Restarting...")
+
+        # Attempt restart
+        success = restart_service()
+        circuit_breaker.record_restart(reason=f"status={status}", success=success)
+
+        if success:
             send_alert("✅ Service restarted successfully.")
-            # Set cooldown
-            state["restart_cooldown_until"] = (
-                datetime.now() + timedelta(seconds=RESTART_COOLDOWN_SECONDS)
-            ).isoformat()
         else:
-            send_alert("❌ Service restart FAILED. Manual intervention required.")
+            send_alert("❌ Service restart FAILED. Circuit breaker tracking failure.")
 
         if crash_count >= MAX_CRASHES_BEFORE_UNSTABLE:
             send_alert(f"🛑 UNSTABLE: {crash_count} crashes today. System needs attention.")
+
+    elif status not in {"active", "activating", "deactivating", "reloading"}:
+        # Log unexpected states but don't restart
+        logger.warning(f"Unexpected service status: {status}")
 
     return state
 
@@ -460,12 +483,27 @@ def check_disk_space(state: Dict) -> Dict:
     return state
 
 
+def check_dead_mans_switch(state: Dict) -> Dict:
+    """TIER 1 CHECK 5: Business logic health via trading activity."""
+    dead_mans_switch = DeadMansSwitch(silence_threshold_minutes=30)
+    is_alive, message = dead_mans_switch.check()
+
+    if not is_alive:
+        # Alert but DON'T auto-restart - could be market conditions
+        send_alert(f"⚠️ DEAD MAN'S SWITCH: {message}")
+        logger.warning(f"Trading activity silent: {message}")
+        state["dead_mans_switch_alert"] = datetime.now().isoformat()
+
+    return state
+
+
 def run_tier1_checks(state: Dict) -> Dict:
     """Run TIER 1 checks (every 10 seconds)."""
     state = check_service_alive(state)
     state = check_v7_heartbeat(state)
     state = check_memory(state)
     state = check_error_rate(state)
+    state = check_dead_mans_switch(state)
     return state
 
 
