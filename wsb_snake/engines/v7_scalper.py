@@ -151,8 +151,12 @@ def detect_signal_v7(bars: List[Dict]) -> Optional[V7Signal]:
     direction = None
     confidence = 0
 
-    # V7 signal: momentum > 0.2% + volume spike 1.3x + MA alignment
-    if momentum > 0.002 and vol_spike > 1.3:
+    # V7 signal: momentum + volume spike + MA alignment
+    # Afternoon thresholds are lower (passed via globals set in run_v7_scan)
+    mom_thresh = getattr(detect_signal_v7, 'mom_threshold', 0.002)
+    vol_thresh = getattr(detect_signal_v7, 'vol_threshold', 1.3)
+
+    if momentum > mom_thresh and vol_spike > vol_thresh:
         # MA alignment check for CALL (don't buy calls below MA30)
         if ma30 and current_price < ma30:
             logger.debug(f"V7: CALL rejected - price {current_price:.2f} < MA30 {ma30:.2f}")
@@ -161,7 +165,7 @@ def detect_signal_v7(bars: List[Dict]) -> Optional[V7Signal]:
         confidence = min(90, 50 + momentum * 2000 + vol_spike * 10 + bar_range * 500)
         strike = round(current_price) + OTM_OFFSET
 
-    elif momentum < -0.002 and vol_spike > 1.3:
+    elif momentum < -mom_thresh and vol_spike > vol_thresh:
         # MA alignment check for PUT (don't buy puts above MA30)
         if ma30 and current_price > ma30:
             logger.debug(f"V7: PUT rejected - price {current_price:.2f} > MA30 {ma30:.2f}")
@@ -229,7 +233,7 @@ def get_option_symbol(ticker: str, strike: float, option_type: str, expiry: str)
 
 def run_v7_scan() -> Optional[Dict]:
     """
-    Run V7 signal scan on SPY.
+    Run V7 signal scan on SPY and QQQ.
     Returns trade details if signal found and executed, None otherwise.
     """
     global _signals_blocked
@@ -251,14 +255,40 @@ def run_v7_scan() -> Optional[Dict]:
         logger.info(f"V7_SCAN: AFTER_HOURS {et_now.strftime('%H:%M')} ET - skipping")
         return None
 
-    # Get SPY minute bars
+    # Time-based thresholds: afternoon has lower volume naturally
+    if et_now.hour >= 12:
+        session = "AFTERNOON"
+        mom_threshold = 0.0015  # 0.15%
+        vol_threshold = 1.0
+    else:
+        session = "MORNING"
+        mom_threshold = 0.002   # 0.2%
+        vol_threshold = 1.3
+
+    # Set thresholds for detect_signal_v7 to use
+    detect_signal_v7.mom_threshold = mom_threshold
+    detect_signal_v7.vol_threshold = vol_threshold
+
+    # Scan both SPY and QQQ
+    for ticker in ["SPY", "QQQ"]:
+        result = _scan_ticker(ticker, et_now, session, mom_threshold, vol_threshold)
+        if result:
+            return result  # Return first successful trade
+
+    return None
+
+
+def _scan_ticker(ticker: str, et_now, session: str, mom_threshold: float, vol_threshold: float) -> Optional[Dict]:
+    """Scan a single ticker for V7 signals."""
+    global _signals_blocked
+
     try:
-        bars = polygon_enhanced.get_intraday_bars("SPY", timespan="minute", multiplier=1, limit=60)
+        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=1, limit=60)
         if not bars or len(bars) < 15:
-            logger.info(f"V7_SCAN: INSUFFICIENT_BARS count={len(bars) if bars else 0}")
+            logger.info(f"V7_SCAN: {ticker} INSUFFICIENT_BARS count={len(bars) if bars else 0}")
             return None
     except Exception as e:
-        logger.warning(f"V7_SCAN: BARS_FAILED error={e}")
+        logger.warning(f"V7_SCAN: {ticker} BARS_FAILED error={e}")
         return None
 
     # Calculate metrics for logging BEFORE signal detection
@@ -280,11 +310,11 @@ def run_v7_scan() -> Optional[Dict]:
         else:
             ma_aligned = "YES" if current_price < ma30 else "NO(above)"
 
-    # LOG EVERY SCAN - this is the key diagnostic line
+    # LOG EVERY SCAN
     logger.info(
-        f"V7_SCAN: SPY=${current_price:.2f} mom={momentum*100:+.3f}% vol={vol_ratio:.2f}x "
+        f"V7_SCAN: {ticker}=${current_price:.2f} mom={momentum*100:+.3f}% vol={vol_ratio:.2f}x "
         f"ma30={'$'+f'{ma30:.2f}' if ma30 else 'N/A'} aligned={ma_aligned} "
-        f"bars={len(bars)} thresh=[mom>0.2% vol>1.3x]"
+        f"session={session} thresh=[mom>{mom_threshold*100:.2f}% vol>{vol_threshold}x]"
     )
 
     # Detect signal
@@ -292,19 +322,19 @@ def run_v7_scan() -> Optional[Dict]:
     if not signal:
         # Log why no signal
         reason = []
-        if abs(momentum) < 0.002:
-            reason.append(f"mom={momentum*100:.3f}%<0.2%")
-        if vol_ratio < 1.3:
-            reason.append(f"vol={vol_ratio:.2f}x<1.3x")
+        if abs(momentum) < mom_threshold:
+            reason.append(f"mom={momentum*100:.3f}%<{mom_threshold*100:.2f}%")
+        if vol_ratio < vol_threshold:
+            reason.append(f"vol={vol_ratio:.2f}x<{vol_threshold}x")
         if ma30 and momentum > 0 and current_price < ma30:
             reason.append("price<MA30")
         if ma30 and momentum < 0 and current_price > ma30:
             reason.append("price>MA30")
-        logger.info(f"V7_SCAN: NO_SIGNAL reason=[{', '.join(reason) if reason else 'confidence<62'}]")
+        logger.info(f"V7_SCAN: {ticker} NO_SIGNAL reason=[{', '.join(reason) if reason else 'confidence<62'}]")
         return None
 
     logger.info(
-        f"V7: Signal detected - {signal.direction} @ ${signal.strike} | "
+        f"V7: {ticker} Signal detected - {signal.direction} @ ${signal.strike} | "
         f"Conf: {signal.confidence:.0f}% | Mom: {signal.momentum*100:.2f}% | "
         f"Vol: {signal.vol_spike:.1f}x | Conv: {signal.conviction}"
     )
@@ -313,9 +343,9 @@ def run_v7_scan() -> Optional[Dict]:
     expiry = et_now.strftime("%Y-%m-%d")
 
     # Get option price
-    option_price = get_option_price("SPY", signal.strike, signal.direction, expiry)
+    option_price = get_option_price(ticker, signal.strike, signal.direction, expiry)
     if not option_price:
-        logger.warning(f"V7: No option price for SPY {signal.direction} ${signal.strike}")
+        logger.warning(f"V7: No option price for {ticker} {signal.direction} ${signal.strike}")
         return None
 
     # FIX 2: Minimum entry price check
@@ -325,9 +355,9 @@ def run_v7_scan() -> Optional[Dict]:
         return None
 
     # Get option symbol
-    option_symbol = get_option_symbol("SPY", signal.strike, signal.direction, expiry)
+    option_symbol = get_option_symbol(ticker, signal.strike, signal.direction, expiry)
     if not option_symbol:
-        logger.warning(f"V7: No option symbol for SPY {signal.direction} ${signal.strike}")
+        logger.warning(f"V7: No option symbol for {ticker} {signal.direction} ${signal.strike}")
         return None
 
     # FIX 3: Conviction-based sizing
@@ -345,13 +375,13 @@ def run_v7_scan() -> Optional[Dict]:
 
     try:
         position = alpaca_executor.execute_scalp_entry(
-            underlying="SPY",
+            underlying=ticker,
             direction="long",  # Always long options (buying calls or puts)
             entry_price=option_price,
             target_price=target_price,
             stop_loss=stop_loss,
             confidence=signal.confidence,
-            pattern=f"V7_{signal.direction}_{signal.conviction}",
+            pattern=f"V7_{ticker}_{signal.direction}_{signal.conviction}",
             engine=TradingEngine.SCALPER,
             strike_override=signal.strike,
             option_symbol_override=option_symbol,
@@ -359,16 +389,17 @@ def run_v7_scan() -> Optional[Dict]:
         )
 
         if position:
-            logger.info(f"V7_ENTRY: {signal.direction} strike={signal.strike} qty={position.qty} price=${option_price:.2f} conv={signal.conviction}")
+            logger.info(f"V7_ENTRY: {ticker} {signal.direction} strike={signal.strike} qty={position.qty} price=${option_price:.2f} conv={signal.conviction}")
             send_alert(
                 f"🎯 **V7 ENTRY**\n"
-                f"SPY {signal.direction} ${signal.strike}\n"
+                f"{ticker} {signal.direction} ${signal.strike}\n"
                 f"Entry: ${option_price:.2f}\n"
                 f"Confidence: {signal.confidence:.0f}%\n"
                 f"Conviction: {signal.conviction}\n"
                 f"Mom: {signal.momentum*100:+.2f}% | Vol: {signal.vol_spike:.1f}x"
             )
             return {
+                "ticker": ticker,
                 "symbol": option_symbol,
                 "direction": signal.direction,
                 "strike": signal.strike,
