@@ -2,7 +2,7 @@
 V7 LIVE SCALPER: Backtest-validated signal detection for SPY 0DTE.
 V2 CORE: momentum + volume + MA alignment = ENTER IMMEDIATELY
 FIX 1: Circuit breaker (2 consecutive losses = stop)
-FIX 2: $0.50 minimum entry (no lotto/reversal)
+FIX 2: $0.15 minimum entry (allows cheap options CPL would enter)
 FIX 3: Conviction sizing (15% default, 25% high)
 """
 
@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 # V7 Parameters (from backtest)
 OTM_OFFSET = 2
-MIN_ENTRY_PRICE = 0.20
+MIN_ENTRY_PRICE = 0.15
 DEFAULT_SIZE_PCT = 0.15
 HIGH_CONVICTION_SIZE_PCT = 0.25
 MAX_TOTAL_EXPOSURE = 0.40
@@ -334,9 +334,9 @@ def _scan_ticker(ticker: str, et_now, session: str, mom_threshold: float, vol_th
         return None
 
     logger.info(
-        f"V7: {ticker} Signal detected - {signal.direction} @ ${signal.strike} | "
+        f"V7_SIGNAL_FOUND: {ticker} {signal.direction} strike=${signal.strike} | "
         f"Conf: {signal.confidence:.0f}% | Mom: {signal.momentum*100:.2f}% | "
-        f"Vol: {signal.vol_spike:.1f}x | Conv: {signal.conviction}"
+        f"Vol: {signal.vol_spike:.1f}x | Conv: {signal.conviction} — checking entry conditions"
     )
 
     # Get today's expiry
@@ -345,19 +345,21 @@ def _scan_ticker(ticker: str, et_now, session: str, mom_threshold: float, vol_th
     # Get option price
     option_price = get_option_price(ticker, signal.strike, signal.direction, expiry)
     if not option_price:
-        logger.warning(f"V7: No option price for {ticker} {signal.direction} ${signal.strike}")
+        logger.warning(f"V7_REJECTED: {ticker} {signal.direction} ${signal.strike} reason=NO_OPTION_PRICE (chain lookup failed)")
         return None
+
+    logger.info(f"V7_SIGNAL_FOUND: {ticker} option_price=${option_price:.2f} for {signal.direction} ${signal.strike}")
 
     # FIX 2: Minimum entry price check
     if option_price < MIN_ENTRY_PRICE:
-        logger.info(f"V7_BLOCKED: price=${option_price:.2f} < min=${MIN_ENTRY_PRICE:.2f} strike={signal.strike} dir={signal.direction}")
+        logger.info(f"V7_REJECTED: {ticker} {signal.direction} ${signal.strike} reason=PRICE_TOO_LOW (${option_price:.2f} < ${MIN_ENTRY_PRICE:.2f})")
         _signals_blocked += 1
         return None
 
     # Get option symbol
     option_symbol = get_option_symbol(ticker, signal.strike, signal.direction, expiry)
     if not option_symbol:
-        logger.warning(f"V7: No option symbol for {ticker} {signal.direction} ${signal.strike}")
+        logger.warning(f"V7_REJECTED: {ticker} {signal.direction} ${signal.strike} reason=NO_OPTION_SYMBOL")
         return None
 
     # FIX 3: Conviction-based sizing
@@ -410,11 +412,11 @@ def _scan_ticker(ticker: str, et_now, session: str, mom_threshold: float, vol_th
                 "confidence": signal.confidence,
             }
         else:
-            logger.warning("V7: Trade skipped by Alpaca (position limits or risk)")
+            logger.warning(f"V7_REJECTED: {ticker} {signal.direction} ${signal.strike} reason=ALPACA_SKIPPED (position limits or risk governor)")
             return None
 
     except Exception as e:
-        logger.error(f"V7: Execution failed - {e}")
+        logger.error(f"V7_REJECTED: {ticker} {signal.direction} ${signal.strike} reason=EXECUTION_ERROR ({e})")
         return None
 
 
