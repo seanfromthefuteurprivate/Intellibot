@@ -1,0 +1,17 @@
+[Unit]
+Description=WSB Snake Monitor Agent
+After=network.target wsb-snake.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/wsb-snake
+EnvironmentFile=/root/wsb-snake/.env
+ExecStart=/usr/bin/python3 /root/wsb-snake/ops/monitor_agent.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
