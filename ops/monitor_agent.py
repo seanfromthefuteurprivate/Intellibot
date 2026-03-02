@@ -281,11 +281,30 @@ def check_memory(state: Dict) -> Dict:
     history = [h for h in history if h["time"] > cutoff]
     state["memory_history"] = history
 
+    # Alert deduplication: only alert once per hour for each type
+    now = datetime.now()
+    last_mem_alert = state.get("last_memory_alert")
+    last_leak_alert = state.get("last_leak_alert")
+
+    def can_alert(last_alert_key: str) -> bool:
+        last = state.get(last_alert_key)
+        if not last:
+            return True
+        try:
+            last_time = datetime.fromisoformat(last)
+            return (now - last_time).total_seconds() > 3600  # 1 hour
+        except:
+            return True
+
     if memory_mb > MEMORY_CRITICAL_MB:
-        send_alert(f"🔴 MEMORY CRITICAL: {memory_mb:.0f}MB. Restarting to prevent OOM.")
+        if can_alert("last_memory_critical_alert"):
+            send_alert(f"🔴 MEMORY CRITICAL: {memory_mb:.0f}MB. Restarting to prevent OOM.")
+            state["last_memory_critical_alert"] = now.isoformat()
         restart_service()
     elif memory_mb > MEMORY_WARN_MB:
-        send_alert(f"⚠️ MEMORY: wsb-snake using {memory_mb:.0f}MB")
+        if can_alert("last_memory_warn_alert"):
+            send_alert(f"⚠️ MEMORY: wsb-snake using {memory_mb:.0f}MB")
+            state["last_memory_warn_alert"] = now.isoformat()
 
     # Check for leak (growing 50MB+ per hour)
     if len(history) >= 10:
@@ -293,7 +312,9 @@ def check_memory(state: Dict) -> Dict:
         last_mb = history[-1]["mb"]
         growth = last_mb - first_mb
         if growth > 50:
-            send_alert(f"⚠️ MEMORY LEAK: Growing {growth:.0f}MB/hr")
+            if can_alert("last_leak_alert"):
+                send_alert(f"⚠️ MEMORY LEAK: Growing {growth:.0f}MB/hr")
+                state["last_leak_alert"] = now.isoformat()
 
     return state
 

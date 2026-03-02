@@ -597,14 +597,17 @@ class JobsDayCPL:
         When untruncated_tails: sequential only (max 1 open), target=1 when flat, cooldown=0.
         When high_hitters_batch=N: emit top N 20X/4X BUYs to Telegram only (no position tracking).
         """
-        global _call_number_counter, _direction_lock
+        global _call_number_counter, _direction_lock, _sent_calls, _cooldown_tracker
 
-        # Daily reset of direction lock
+        # Daily reset of direction lock and memory-leak-prone structures
         today = datetime.now().strftime("%Y-%m-%d")
         if _direction_lock.get("_last_reset") != today:
             _direction_lock.clear()
             _direction_lock["_last_reset"] = today
-            logger.info(f"CPL_DIRECTION_LOCK: Reset for {today}")
+            # FIX: Clear _sent_calls and _cooldown_tracker daily to prevent memory leak
+            _sent_calls.clear()
+            _cooldown_tracker.clear()
+            logger.info(f"CPL_DIRECTION_LOCK: Reset for {today} (also cleared _sent_calls, _cooldown_tracker)")
 
         # Always refresh to today's date on each run (handles overnight/multi-day runs)
         self.event_date = get_todays_expiry_date()
@@ -933,8 +936,10 @@ class JobsDayCPL:
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
                                 # Lock direction for this ticker for rest of day
-                                _direction_lock[ticker] = direction
-                                logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {direction} for rest of day")
+                                # FIX: Use call.side (CALL/PUT), not direction (long/short)
+                                option_direction = call.side.upper()  # "CALL" or "PUT"
+                                _direction_lock[ticker] = option_direction
+                                logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {option_direction} for rest of day")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
