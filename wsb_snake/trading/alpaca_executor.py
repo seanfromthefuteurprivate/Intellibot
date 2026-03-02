@@ -816,6 +816,10 @@ No overnight risk. Fresh start tomorrow!
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.HTTPError as e:
+            # FIX: Handle 404 - position already closed (manually or by another process)
+            if e.response is not None and e.response.status_code == 404:
+                logger.info(f"POSITION_GONE: {option_symbol} already closed (404). Removing from tracking.")
+                return {"already_closed": True, "symbol": option_symbol}
             logger.error(f"Failed to close position {option_symbol}: {e.response.text if e.response else e}")
             send_alpaca_status(f"⚠️ Failed to close {option_symbol}: {str(e)[:100]}")
             return None
@@ -1318,7 +1322,16 @@ Reason: {reason}
         # Execute close on Alpaca (runs in parallel with alert)
         # Pass current_price for limit order mode
         result = self.close_position(position.option_symbol, limit_price=current_price)
-        
+
+        # Handle 404 - position already closed externally (manual close, etc.)
+        if result and result.get("already_closed"):
+            logger.info(f"EXTERNAL_CLOSE: {position.option_symbol} was closed outside system. Marking as closed.")
+            position.exit_price = current_price
+            position.exit_time = datetime.now()
+            position.status = PositionStatus.CLOSED
+            position.exit_reason = "EXTERNAL_CLOSE (404)"
+            return position
+
         # Only mark closed if close was successful
         if result is None:
             logger.warning(f"Exit order may have failed for {position.option_symbol}")

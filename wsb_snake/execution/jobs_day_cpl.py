@@ -594,6 +594,10 @@ class JobsDayCPL:
         When untruncated_tails: sequential only (max 1 open), target=1 when flat, cooldown=0.
         When high_hitters_batch=N: emit top N 20X/4X BUYs to Telegram only (no position tracking).
         """
+        # CPL KILLED - V7 is the only live engine
+        logger.warning("CPL_KILLED: ALL new entries permanently disabled. V7 only.")
+        return []
+
         global _call_number_counter
 
         # Always refresh to today's date on each run (handles overnight/multi-day runs)

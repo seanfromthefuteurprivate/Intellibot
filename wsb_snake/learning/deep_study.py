@@ -101,7 +101,46 @@ class DeepStudyEngine:
         self.finnhub_api_key = os.environ.get("FINNHUB_API_KEY", "")
 
         self._et = pytz.timezone('US/Eastern')
+
+        # Migrate: Add market_conditions column if missing (fixes crash)
+        self._ensure_schema()
         logger.info("DeepStudyEngine initialized")
+
+    def _ensure_schema(self):
+        """Add missing columns to learned_trades table."""
+        columns_to_add = [
+            ("market_conditions", "TEXT"),
+            ("detected_pattern", "TEXT"),
+            ("setup_description", "TEXT"),
+            ("confidence_score", "REAL"),
+        ]
+
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            # Get existing columns using PRAGMA
+            cursor.execute("PRAGMA table_info(learned_trades)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+
+            # Add missing columns individually
+            added = []
+            for col_name, col_type in columns_to_add:
+                if col_name not in existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE learned_trades ADD COLUMN {col_name} {col_type}")
+                        added.append(col_name)
+                    except Exception as e:
+                        logger.warning(f"Could not add column {col_name}: {e}")
+
+            if added:
+                conn.commit()
+                logger.info(f"SCHEMA_FIX: Added columns to learned_trades: {added}")
+
+        except Exception as e:
+            # Table may not exist yet - that's OK, it will be created elsewhere
+            logger.debug(f"Schema check skipped: {e}")
 
     def is_study_time(self) -> bool:
         """Check if it's off-market hours (good time for deep study)."""
