@@ -81,7 +81,7 @@ TARGET_BUY_CALLS = 10
 
 # FIX 3: Liquidity gates — relaxed so we get 5–10 HIGH hitters (SPY/QQQ ATM often > $2.50)
 LIQUIDITY_MAX_SPREAD_PCT = 0.15  # 15% of mid (slightly relaxed)
-LIQUIDITY_MIN_MID = 0.05         # allow cheaper OTM
+LIQUIDITY_MIN_MID = 0.30         # block sub-$0.30 lottos (IWM $0.17 lost $350)
 LIQUIDITY_MAX_MID = 6.00         # allow ATM on indices (was 2.50, rejected most)
 
 # FIX 4: Cooldown config — 0 in untruncated so we get next BUY fast (5–10 round-trips per day)
@@ -607,7 +607,7 @@ class JobsDayCPL:
             # FIX: Clear _sent_calls and _cooldown_tracker daily to prevent memory leak
             _sent_calls.clear()
             _cooldown_tracker.clear()
-            logger.info(f"CPL_DIRECTION_LOCK: Reset for {today} (also cleared _sent_calls, _cooldown_tracker)")
+            logger.info(f"CPL_DIRECTION_COOLDOWN: Daily reset for {today} (cleared direction locks, _sent_calls, _cooldown_tracker)")
 
         # Always refresh to today's date on each run (handles overnight/multi-day runs)
         self.event_date = get_todays_expiry_date()
@@ -787,10 +787,18 @@ class JobsDayCPL:
                 ticker = (call.underlying or "").upper()
                 direction = call.side.upper()  # "CALL" or "PUT"
 
-                # DIRECTION LOCK: Once a direction is chosen for a ticker, block the opposite
-                if ticker in _direction_lock and _direction_lock[ticker] != direction:
-                    logger.warning(f"CPL_DIRECTION_LOCK: {ticker} locked to {_direction_lock[ticker]}. Blocking {direction}.")
-                    continue
+                # DIRECTION COOLDOWN: Block opposite direction for 30 minutes after entry
+                if ticker in _direction_lock and isinstance(_direction_lock[ticker], dict):
+                    lock_info = _direction_lock[ticker]
+                    locked_side = lock_info.get("side", "")
+                    lock_time = lock_info.get("time")
+                    if locked_side and lock_time and locked_side != direction:
+                        elapsed_min = (datetime.now(timezone.utc) - lock_time).total_seconds() / 60
+                        if elapsed_min < 30:
+                            logger.warning(f"CPL_DIRECTION_COOLDOWN: {ticker} locked to {locked_side} ({elapsed_min:.0f}min ago). Blocking {direction}. Unlocks in {30 - elapsed_min:.0f}min.")
+                            continue
+                        else:
+                            logger.info(f"CPL_DIRECTION_UNLOCK: {ticker} cooldown expired ({elapsed_min:.0f}min). Allowing {direction}.")
 
                 # Diversity: skip when untruncated (single best setup). Power hour: allow 3 per ticker.
                 max_per_underlying = 3 if CPL_POWER_HOUR else MAX_CALLS_PER_UNDERLYING
@@ -935,11 +943,9 @@ class JobsDayCPL:
                             if alpaca_pos:
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
-                                # Lock direction for this ticker for rest of day
-                                # FIX: Use call.side (CALL/PUT), not direction (long/short)
-                                option_direction = call.side.upper()  # "CALL" or "PUT"
-                                _direction_lock[ticker] = option_direction
-                                logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {option_direction} for rest of day")
+                                # Lock direction: 30-minute cooldown, not full day
+                                _direction_lock[ticker] = {"side": call.side.upper(), "time": datetime.now(timezone.utc)}
+                                logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {call.side.upper()} for 30min cooldown")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
