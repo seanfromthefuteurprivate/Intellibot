@@ -692,6 +692,29 @@ No overnight risk. Fresh start tomorrow!
         Place an option order on Alpaca paper trading.
         """
         try:
+            # SNIPER MODE: DAILY P&L KILL SWITCH
+            from zoneinfo import ZoneInfo
+            DAILY_PROFIT_TARGET = 2500
+            DAILY_MAX_LOSS = -500
+            try:
+                acct_resp = requests.get(f"{self.BASE_URL}/v2/account", headers=self.headers, timeout=5)
+                if acct_resp.status_code == 200:
+                    acct = acct_resp.json()
+                    daily_pnl = float(acct.get("portfolio_value", 0)) - float(acct.get("last_equity", 0))
+                    if daily_pnl >= DAILY_PROFIT_TARGET:
+                        logger.info(f"SNIPER_KILL_SWITCH: +${daily_pnl:,.2f} >= +${DAILY_PROFIT_TARGET}. DONE.")
+                        from wsb_snake.notifications.telegram_bot import send_alert
+                        send_alert(f"SNIPER MODE: TARGET HIT +${daily_pnl:,.2f}. ALL TRADING HALTED.")
+                        return None
+                    if daily_pnl <= DAILY_MAX_LOSS:
+                        logger.info(f"SNIPER_KILL_SWITCH: ${daily_pnl:,.2f} <= ${DAILY_MAX_LOSS}. HALT.")
+                        from wsb_snake.notifications.telegram_bot import send_alert
+                        send_alert(f"SNIPER MODE: LOSS LIMIT ${daily_pnl:,.2f}. ALL TRADING HALTED.")
+                        return None
+                    logger.info(f"SNIPER_PNL_CHECK: ${daily_pnl:+,.2f} (target: +${DAILY_PROFIT_TARGET} | floor: ${DAILY_MAX_LOSS})")
+            except Exception as e:
+                logger.warning(f"SNIPER_PNL_CHECK failed: {e}")
+
             option_symbol = self.format_option_symbol(
                 underlying,
                 expiry,

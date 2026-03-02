@@ -77,7 +77,13 @@ CPL_WATCHLIST = [
 ]
 
 # FIX 1: Target forcing function
-TARGET_BUY_CALLS = 10
+TARGET_BUY_CALLS = 3
+
+# SNIPER MODE CONFIG
+SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
+MAX_OPEN_POSITIONS = 1              # One shot at a time
+DAILY_PROFIT_TARGET = 2500          # +$2,500 = halt
+DAILY_MAX_LOSS = -500               # -$500 = halt
 
 # FIX 3: Liquidity gates — relaxed so we get 5–10 HIGH hitters (SPY/QQQ ATM often > $2.50)
 LIQUIDITY_MAX_SPREAD_PCT = 0.15  # 15% of mid (slightly relaxed)
@@ -613,6 +619,59 @@ class JobsDayCPL:
         self.event_date = get_todays_expiry_date()
         logger.debug(f"CPL scanning for expiry: {self.event_date}")
 
+        # SNIPER MODE: Session, Position, and P&L checks
+        import os
+        import requests as req
+        from zoneinfo import ZoneInfo
+
+        # Session halt at 1:00 PM ET (proper DST handling)
+        et_now = datetime.now(ZoneInfo("America/New_York"))
+        if et_now.hour >= 13:
+            logger.info(f"CPL_SESSION_HALT: No trading after 1:00 PM ET (current: {et_now.hour}:{et_now.minute:02d} ET)")
+            return []
+
+        # Max 1 position check
+        try:
+            pos_resp = req.get(
+                f"{os.environ.get('ALPACA_BASE_URL', '')}/v2/positions",
+                headers={
+                    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+                    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET_KEY", "")
+                },
+                timeout=5
+            )
+            if pos_resp.status_code == 200:
+                positions = pos_resp.json()
+                if len(positions) >= MAX_OPEN_POSITIONS:
+                    logger.info(f"SNIPER_POSITION_CAP: {len(positions)}/{MAX_OPEN_POSITIONS} open. Waiting for exit.")
+                    sell_calls = _check_exits_and_emit_sells(broadcast, dry_run, untruncated_tails)
+                    return sell_calls
+        except Exception as e:
+            logger.warning(f"Position cap check failed: {e}")
+
+        # Daily P&L check (belt + suspenders)
+        try:
+            acct_resp = req.get(
+                f"{os.environ.get('ALPACA_BASE_URL', '')}/v2/account",
+                headers={
+                    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+                    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET_KEY", "")
+                },
+                timeout=5
+            )
+            if acct_resp.status_code == 200:
+                acct = acct_resp.json()
+                daily_pnl = float(acct.get("portfolio_value", 0)) - float(acct.get("last_equity", 0))
+                if daily_pnl >= DAILY_PROFIT_TARGET:
+                    logger.info(f"CPL_SNIPER_HALT: +{daily_pnl:,.2f} target hit. No more scans.")
+                    return []
+                if daily_pnl <= DAILY_MAX_LOSS:
+                    logger.info(f"CPL_SNIPER_HALT: {daily_pnl:,.2f} loss limit. No more scans.")
+                    return []
+                logger.info(f"CPL_SNIPER_PNL: {daily_pnl:+,.2f} (target: +{DAILY_PROFIT_TARGET} | floor: {DAILY_MAX_LOSS})")
+        except Exception as e:
+            logger.warning(f"CPL daily P&L check failed: {e}")
+
         untruncated_tails = untruncated_tails or UNTRUNCATED_TAILS
         generated: List[JobsDayCall] = []
         candidates: List[JobsDayCall] = []
@@ -787,15 +846,15 @@ class JobsDayCPL:
                 ticker = (call.underlying or "").upper()
                 direction = call.side.upper()  # "CALL" or "PUT"
 
-                # DIRECTION COOLDOWN: Block opposite direction for 30 minutes after entry
+                # DIRECTION COOLDOWN: Block opposite direction for 10 minutes after entry
                 if ticker in _direction_lock and isinstance(_direction_lock[ticker], dict):
                     lock_info = _direction_lock[ticker]
                     locked_side = lock_info.get("side", "")
                     lock_time = lock_info.get("time")
                     if locked_side and lock_time and locked_side != direction:
                         elapsed_min = (datetime.now(timezone.utc) - lock_time).total_seconds() / 60
-                        if elapsed_min < 30:
-                            logger.warning(f"CPL_DIRECTION_COOLDOWN: {ticker} locked to {locked_side} ({elapsed_min:.0f}min ago). Blocking {direction}. Unlocks in {30 - elapsed_min:.0f}min.")
+                        if elapsed_min < 10:
+                            logger.warning(f"CPL_DIRECTION_COOLDOWN: {ticker} locked to {locked_side} ({elapsed_min:.0f}min ago). Blocking {direction}. Unlocks in {10 - elapsed_min:.0f}min.")
                             continue
                         else:
                             logger.info(f"CPL_DIRECTION_UNLOCK: {ticker} cooldown expired ({elapsed_min:.0f}min). Allowing {direction}.")

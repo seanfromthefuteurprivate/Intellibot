@@ -232,6 +232,9 @@ def get_option_symbol(ticker: str, strike: float, option_type: str, expiry: str)
 
 
 def run_v7_scan() -> Optional[Dict]:
+    # SNIPER MODE: V7 disabled — CPL is the only engine
+    logger.info("V7_DISABLED: SNIPER MODE active. Only CPL trades.")
+    return None
     """
     Run V7 signal scan on SPY and QQQ.
     Returns trade details if signal found and executed, None otherwise.
