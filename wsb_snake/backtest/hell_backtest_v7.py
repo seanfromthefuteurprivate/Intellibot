@@ -297,34 +297,34 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
 
         if signal:
             direction, confidence, strike, conviction = signal
-                option_ticker = build_option_ticker(strike, expiry, direction)
+            option_ticker = build_option_ticker(strike, expiry, direction)
 
-                option_bars = prefetched.get(option_ticker) or fetch_option_bars(option_ticker, date)
-                if option_bars and option_ticker not in prefetched: prefetched[option_ticker] = option_bars
+            option_bars = prefetched.get(option_ticker) or fetch_option_bars(option_ticker, date)
+            if option_bars and option_ticker not in prefetched: prefetched[option_ticker] = option_bars
 
-                real_entry = get_option_price_at_time(option_bars, bar_ts) if option_bars else None
-                if real_entry: option_price = real_entry * (1 + SLIPPAGE_PCT)
-                else:
-                    dist = abs(strike - spy_price)
-                    option_price = (2.00 if dist <= 0 else 0.75 if dist <= 1 else 0.30 if dist <= 2 else 0.15) * (1 + SLIPPAGE_PCT)
+            real_entry = get_option_price_at_time(option_bars, bar_ts) if option_bars else None
+            if real_entry: option_price = real_entry * (1 + SLIPPAGE_PCT)
+            else:
+                dist = abs(strike - spy_price)
+                option_price = (2.00 if dist <= 0 else 0.75 if dist <= 1 else 0.30 if dist <= 2 else 0.15) * (1 + SLIPPAGE_PCT)
 
-                if option_price < MIN_ENTRY_PRICE:
-                    print(f"  [{bar_time.strftime('%H:%M')}] BLOCKED: ${option_price:.2f} < $0.50")
-                    continue
+            if option_price < MIN_ENTRY_PRICE:
+                print(f"  [{bar_time.strftime('%H:%M')}] BLOCKED: ${option_price:.2f} < $0.50")
+                continue
 
-                size_pct = HIGH_CONVICTION_SIZE_PCT if conviction == "HIGH" else DEFAULT_SIZE_PCT
-                size_pct = min(size_pct, MAX_TOTAL_EXPOSURE - current_exposure)
-                if size_pct < 0.05: continue
+            size_pct = HIGH_CONVICTION_SIZE_PCT if conviction == "HIGH" else DEFAULT_SIZE_PCT
+            size_pct = min(size_pct, MAX_TOTAL_EXPOSURE - current_exposure)
+            if size_pct < 0.05: continue
 
-                ratio = account / INITIAL_ACCOUNT
-                mult = 0.5 if ratio < 0.5 else 0.75 if ratio < 0.8 else 1.5 if ratio > 2.0 else 1.25 if ratio > 1.5 else 1.0
+            ratio = account / INITIAL_ACCOUNT
+            mult = 0.5 if ratio < 0.5 else 0.75 if ratio < 0.8 else 1.5 if ratio > 2.0 else 1.25 if ratio > 1.5 else 1.0
 
-                contracts = max(1, int(account * size_pct * mult / (option_price * 100)))
-                actual_cost = contracts * option_price * 100
+            contracts = max(1, int(account * size_pct * mult / (option_price * 100)))
+            actual_cost = contracts * option_price * 100
 
-                pos = SimPosition(bar_time, bar_ts, spy_price, direction, strike, expiry, option_ticker, contracts, option_price, actual_cost, option_price, 0, contracts, conviction)
-                positions.append(pos)
-                print(f"  [{bar_time.strftime('%H:%M')}] ENTRY {direction} ${strike}: {contracts}x @ ${option_price:.2f} [{conviction}]")
+            pos = SimPosition(bar_time, bar_ts, spy_price, direction, strike, expiry, option_ticker, contracts, option_price, actual_cost, option_price, 0, contracts, conviction)
+            positions.append(pos)
+            print(f"  [{bar_time.strftime('%H:%M')}] ENTRY {direction} ${strike}: {contracts}x @ ${option_price:.2f} [{conviction}]")
 
         # Pyramiding
         if circuit_breaker_fired or account < MIN_ACCOUNT_FLOOR: continue
