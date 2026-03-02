@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-BACKTEST FROM HELL v7: V2 CORE + V3 SIGNALS + 3 FIXES
-V7 = V2 base + V3 signal (MA alignment + 2-min confirmation) + 3 targeted fixes
+BACKTEST FROM HELL v7: V2 CORE + 3 FIXES
+V7 = V2 base + MA alignment + 3 fixes (circuit breaker, $0.50 min, conviction sizing)
+NO confirmation delay - enter immediately on momentum + volume + MA alignment
 """
 import os, requests, time
 from datetime import datetime
@@ -129,19 +130,8 @@ def calculate_ma(bars: List[Dict], idx: int, period: int) -> Optional[float]:
     if idx < period: return None
     return sum(b["c"] for b in bars[idx-period+1:idx+1]) / period
 
-def get_raw_signal(bars: List[Dict], idx: int) -> Optional[str]:
-    """Get raw direction signal without confirmation - for tracking."""
-    if idx < 10: return None
-    recent = bars[max(0, idx-10):idx+1]
-    if len(recent) < 10: return None
-    momentum = (recent[-1]["c"] - recent[0]["c"]) / recent[0]["c"]
-    avg_vol = sum(b["v"] for b in recent[:-1]) / (len(recent) - 1) if len(recent) > 1 else 1
-    vol_spike = recent[-1]["v"] / avg_vol if avg_vol > 0 else 1
-    if momentum > 0.002 and vol_spike > 1.3: return "CALL"
-    elif momentum < -0.002 and vol_spike > 1.3: return "PUT"
-    return None
-
-def detect_signal_v7(bars: List[Dict], idx: int, last_signal: Dict) -> Optional[Tuple[str, float, float, str]]:
+def detect_signal_v7(bars: List[Dict], idx: int) -> Optional[Tuple[str, float, float, str]]:
+    """V2 signal: momentum + volume + MA alignment. NO confirmation delay."""
     if idx < 10: return None
     current_bar = bars[idx]
     bar_time = datetime.fromisoformat(current_bar["t"].replace("Z", "+00:00"))
@@ -160,24 +150,19 @@ def detect_signal_v7(bars: List[Dict], idx: int, last_signal: Dict) -> Optional[
     ma9, ma20, ma30, ma50 = calculate_ma(bars, idx, 9), calculate_ma(bars, idx, 20), calculate_ma(bars, idx, 30), calculate_ma(bars, idx, 50)
     direction, confidence = None, 0
 
+    # V2 signal: momentum > 0.2% + volume spike 1.3x + MA alignment = ENTER IMMEDIATELY
     if momentum > 0.002 and vol_spike > 1.3:
-        if ma30 and current_price < ma30: return None
+        if ma30 and current_price < ma30: return None  # MA alignment check
         direction, confidence = "CALL", min(90, 50 + momentum * 2000 + vol_spike * 10 + bar_range * 500)
         strike = round(current_price) + OTM_OFFSET
     elif momentum < -0.002 and vol_spike > 1.3:
-        if ma30 and current_price > ma30: return None
+        if ma30 and current_price > ma30: return None  # MA alignment check
         direction, confidence = "PUT", min(90, 50 + abs(momentum) * 2000 + vol_spike * 10 + bar_range * 500)
         strike = round(current_price) - OTM_OFFSET
 
     if not direction or confidence < 62: return None
 
-    # 2-min confirmation - check if PREVIOUS signal was same direction
-    if last_signal.get("direction") == direction and last_signal.get("time"):
-        time_diff = (bar_time - last_signal["time"]).total_seconds()
-        if not (30 <= time_diff <= 180): return None  # Not confirmed yet
-    else: return None  # No previous signal or different direction
-
-    # Conviction check
+    # Conviction check for sizing
     conviction = "DEFAULT"
     if ma9 and ma20 and ma50:
         ma_aligned = (current_price > ma9 > ma20 > ma50) if direction == "CALL" else (current_price < ma9 < ma20 < ma50)
@@ -218,7 +203,6 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
     expiry, account, peak_account, max_drawdown = date, start_account, start_account, 0
     positions, completed_trades, prefetched = [], [], {}
     consecutive_losses, circuit_breaker_fired, signals_blocked = 0, False, 0
-    last_signal = {"direction": None, "time": None}
 
     spy_mid = (max(b["h"] for b in spy_bars) + min(b["l"] for b in spy_bars)) / 2
     for strike in range(int(spy_mid) - 5, int(spy_mid) + 6):
@@ -271,31 +255,19 @@ def run_day_simulation(date: str, start_account: float) -> DayResult:
                 if dd > max_drawdown: max_drawdown = dd
 
         if circuit_breaker_fired:
-            # Track blocked signals
-            recent = spy_bars[max(0, i-10):i+1]
-            if len(recent) >= 10:
-                momentum = (recent[-1]["c"] - recent[0]["c"]) / recent[0]["c"]
-                avg_vol = sum(b["v"] for b in recent[:-1]) / (len(recent) - 1) if len(recent) > 1 else 1
-                vol_spike = recent[-1]["v"] / avg_vol if avg_vol > 0 else 1
-                raw_dir = "CALL" if momentum > 0.002 and vol_spike > 1.3 else ("PUT" if momentum < -0.002 and vol_spike > 1.3 else None)
-                if raw_dir:
-                    if last_signal.get("direction") == raw_dir: signals_blocked += 1
-                    last_signal = {"direction": raw_dir, "time": bar_time}
+            # Count blocked signals (any valid signal after CB fires)
+            signal = detect_signal_v7(spy_bars, i)
+            if signal: signals_blocked += 1
             continue
 
         if account < MIN_ACCOUNT_FLOOR: continue
 
         current_exposure = sum(p.position_cost for p in positions) / account if account > 0 else 0
 
-        # FIRST: Check for confirmed signal using PREVIOUS last_signal
+        # Check for signal - ENTER IMMEDIATELY on raw signal (no confirmation)
         signal = None
         if len(positions) < MAX_POSITIONS and current_exposure < MAX_TOTAL_EXPOSURE:
-            signal = detect_signal_v7(spy_bars, i, last_signal)
-
-        # THEN: Update last_signal with current raw signal (for NEXT iteration)
-        raw_dir = get_raw_signal(spy_bars, i)
-        if raw_dir:
-            last_signal = {"direction": raw_dir, "time": bar_time}
+            signal = detect_signal_v7(spy_bars, i)
 
         if signal:
             direction, confidence, strike, conviction = signal
