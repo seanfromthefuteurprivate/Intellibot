@@ -41,6 +41,9 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+# Direction lock: one direction per ticker per day (prevents CALL+PUT whipsaw)
+_direction_lock = {}  # {ticker: "CALL" or "PUT", "_last_reset": "YYYY-MM-DD"}
+
 
 def get_todays_expiry_date() -> str:
     """
@@ -594,11 +597,14 @@ class JobsDayCPL:
         When untruncated_tails: sequential only (max 1 open), target=1 when flat, cooldown=0.
         When high_hitters_batch=N: emit top N 20X/4X BUYs to Telegram only (no position tracking).
         """
-        # CPL KILLED - V7 is the only live engine
-        logger.warning("CPL_KILLED: ALL new entries permanently disabled. V7 only.")
-        return []
+        global _call_number_counter, _direction_lock
 
-        global _call_number_counter
+        # Daily reset of direction lock
+        today = datetime.now().strftime("%Y-%m-%d")
+        if _direction_lock.get("_last_reset") != today:
+            _direction_lock.clear()
+            _direction_lock["_last_reset"] = today
+            logger.info(f"CPL_DIRECTION_LOCK: Reset for {today}")
 
         # Always refresh to today's date on each run (handles overnight/multi-day runs)
         self.event_date = get_todays_expiry_date()
@@ -776,6 +782,13 @@ class JobsDayCPL:
                     break
 
                 ticker = (call.underlying or "").upper()
+                direction = call.side.upper()  # "CALL" or "PUT"
+
+                # DIRECTION LOCK: Once a direction is chosen for a ticker, block the opposite
+                if ticker in _direction_lock and _direction_lock[ticker] != direction:
+                    logger.warning(f"CPL_DIRECTION_LOCK: {ticker} locked to {_direction_lock[ticker]}. Blocking {direction}.")
+                    continue
+
                 # Diversity: skip when untruncated (single best setup). Power hour: allow 3 per ticker.
                 max_per_underlying = 3 if CPL_POWER_HOUR else MAX_CALLS_PER_UNDERLYING
                 if not untruncated_tails and DIVERSITY_MODE == "PROOF":
@@ -919,6 +932,9 @@ class JobsDayCPL:
                             if alpaca_pos:
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
+                                # Lock direction for this ticker for rest of day
+                                _direction_lock[ticker] = direction
+                                logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {direction} for rest of day")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
