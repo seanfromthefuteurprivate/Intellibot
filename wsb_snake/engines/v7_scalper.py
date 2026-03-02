@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 # V7 Parameters (from backtest)
 OTM_OFFSET = 2
-MIN_ENTRY_PRICE = 0.50
+MIN_ENTRY_PRICE = 0.20
 DEFAULT_SIZE_PCT = 0.15
 HIGH_CONVICTION_SIZE_PCT = 0.25
 MAX_TOTAL_EXPOSURE = 0.40
