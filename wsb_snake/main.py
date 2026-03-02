@@ -47,6 +47,7 @@ from wsb_snake.utils.pid_lock import acquire_lock
 from wsb_snake.coordination.strategy_coordinator import get_strategy_coordinator
 from wsb_snake.engines.berserker_engine import get_berserker_engine
 from wsb_snake.learning.self_evolving_memory import get_self_evolving_engine
+from wsb_snake.engines.v7_scalper import run_v7_scan, get_v7_status
 
 
 def send_startup_ping():
@@ -378,6 +379,19 @@ def main():
             log.debug(f"CPL scan skipped: {e}")
     schedule.every(60).seconds.do(run_cpl_scanner)
     log.info("CPL Scanner scheduled (every 60s during market hours)")
+
+    # V7 LIVE SCALPER: Backtest-validated signal detection
+    def run_v7_scanner():
+        if not should_scan_for_signals():
+            return
+        try:
+            result = run_v7_scan()
+            if result:
+                log.info(f"V7 Scanner: {result['direction']} ${result['strike']} executed")
+        except Exception as e:
+            log.debug(f"V7 scan skipped: {e}")
+    schedule.every(30).seconds.do(run_v7_scanner)
+    log.info("V7 LIVE SCALPER scheduled (every 30s during market hours)")
 
     # Jobs report tracker: refresh NFP Feb 11 playbook every 30 min until Wed 5 PM ET
     schedule.every(30).minutes.do(run_jobs_report_tracker_once)
