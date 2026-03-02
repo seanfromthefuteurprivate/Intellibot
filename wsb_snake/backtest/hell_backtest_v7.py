@@ -98,7 +98,8 @@ def fetch_option_bars(option_ticker: str, date: str) -> List[Dict]:
             bars = r.json().get("results", [])
             OPTION_BARS_CACHE[cache_key] = bars
             return bars
-    except: pass
+    except Exception:
+        pass
     return []
 
 def get_option_price_at_time(option_bars: List[Dict], target_ts: int, use_bid: bool = False) -> Optional[float]:
@@ -120,7 +121,8 @@ def fetch_spy_minute_bars(date: str) -> List[Dict]:
     try:
         r = requests.get(url, headers=headers, params=params, timeout=10)
         if r.status_code == 200: return r.json().get("bars", [])
-    except: pass
+    except Exception:
+        pass
     return []
 
 def calculate_ma(bars: List[Dict], idx: int, period: int) -> Optional[float]:
