@@ -45,6 +45,50 @@ logger = get_logger(__name__)
 # Direction lock: one direction per ticker per day (prevents CALL+PUT whipsaw)
 _direction_lock = {}  # {ticker: "CALL" or "PUT", "_last_reset": "YYYY-MM-DD"}
 
+# Opening Range Breakout: Track 9:30-9:35 AM high/low for SPY/QQQ
+# Format: {"SPY": {"high": 585.50, "low": 584.20, "date": "2026-03-04"}, ...}
+_opening_range = {}
+
+
+def _update_opening_range():
+    """
+    Fetch and store the 9:30-9:35 AM 5-min bar high/low for SPY and QQQ.
+    Called once per day after 9:35 AM ET.
+    """
+    global _opening_range
+    from zoneinfo import ZoneInfo
+    et_now = datetime.now(ZoneInfo("America/New_York"))
+    today = et_now.strftime("%Y-%m-%d")
+
+    # Only update once per day, and only after 9:35 AM
+    if et_now.hour < 9 or (et_now.hour == 9 and et_now.minute < 35):
+        return
+
+    for ticker in ["SPY", "QQQ"]:
+        # Skip if already captured today
+        if ticker in _opening_range and _opening_range[ticker].get("date") == today:
+            continue
+
+        try:
+            # Fetch the first 5-min bar of the day (9:30-9:35)
+            bars = polygon_enhanced.get_intraday_bars(
+                ticker, timespan="minute", multiplier=5, limit=1,
+                from_time=f"{today}T09:30:00", to_time=f"{today}T09:35:00"
+            )
+            if bars and len(bars) > 0:
+                bar = bars[0]
+                high = bar.get('high') or bar.get('h')
+                low = bar.get('low') or bar.get('l')
+                if high and low:
+                    _opening_range[ticker] = {
+                        "high": float(high),
+                        "low": float(low),
+                        "date": today
+                    }
+                    logger.info(f"OPENING_RANGE_SET: {ticker} high={high:.2f} low={low:.2f}")
+        except Exception as e:
+            logger.debug(f"Opening range fetch failed for {ticker}: {e}")
+
 
 def get_todays_expiry_date() -> str:
     """
@@ -342,33 +386,41 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
 def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
     """
     ╔══════════════════════════════════════════════════════════════════════════════╗
-    ║                           BEAST MODE V3.0                                     ║
-    ║                    9-SIGNAL CONVICTION STACKING SYSTEM                        ║
+    ║                           BEAST MODE V4.0                                     ║
+    ║                   13-SIGNAL CONVICTION STACKING SYSTEM                        ║
     ╚══════════════════════════════════════════════════════════════════════════════╝
 
-    CONVICTION SIGNALS (each adds +1):
+    CONVICTION SIGNALS (each adds +1, some can add -1 penalty):
     ┌────────────────────────────────────────────────────────────────────────────┐
-    │ 1. HYDRA direction aligned                                                  │
-    │ 2. Sweep direction aligned (flow_sweep_direction)                          │
-    │ 3. Near dark pool level (dp_support for CALL, dp_resistance for PUT)       │
-    │ 4. Volume ratio > 1.5x                                                      │
-    │ 5. GEX regime favorable (NEGATIVE = trending)                              │
-    │ 6. Momentum accelerating (price change > 0.3%)                             │
-    │ 7. Whale premium present ($500K+ in direction)                             │
-    │ 8. Charm flow favorable (afternoon theta alignment)                        │
-    │ 9. Time window optimal (power hour / morning momentum)                     │
+    │ 1.  HYDRA direction aligned                                                 │
+    │ 2.  Sweep direction aligned (flow_sweep_direction)                         │
+    │ 3.  Near dark pool level (dp_support for CALL, dp_resistance for PUT)      │
+    │ 4.  Volume ratio > 1.5x                                                     │
+    │ 5.  GEX regime favorable (NEGATIVE = trending)                             │
+    │ 6.  Momentum ACCELERATING (candle SIZE increasing, not just direction)     │
+    │ 7.  Whale premium present ($500K+ in direction)                            │
+    │ 8.  Charm flow favorable (afternoon theta alignment)                       │
+    │ 9.  Time window optimal (power hour / morning momentum)                    │
+    │ 10. Predator Vision (AI pattern recognition)                               │
+    │ 11. Opening Range Breakout (SPY/QQQ > OR high = CALL, < OR low = PUT)     │
+    │ 12. Pre-market Bias (+1 if confirms, -1 if conflicts)                      │
+    │ 13. GEX proximity favorable (near positive GEX for CALL, negative for PUT) │
     └────────────────────────────────────────────────────────────────────────────┘
 
-    MINIMUM conviction = 4 to trade
-    4-5 = base position size (confidence 55-69)
-    6-7 = 1.5x position size (confidence 70-84)
-    8-9 = FULL SEND max $2,500 (confidence 85-95)
+    MINIMUM conviction = 5 to trade (out of 13)
+    5-7  = base position size (confidence 55-69)
+    8-10 = 1.5x position size (confidence 70-84)
+    11-13 = FULL SEND max $2,500 (confidence 85-95)
 
     HARD GATES (instant reject, no conviction points):
+    - Polygon API unhealthy
     - HYDRA disconnected/stale
+    - Direction conflict
     - Blowup > 70%
     - GEX flip < 1%
+    - Regime CHOPPY/UNKNOWN
     - Data unavailable
+    - Strong momentum against
 
     Returns: (is_valid, confidence_score, reason)
     """
@@ -469,7 +521,7 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         return False, 0, f"HARD_GATE_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
 
     # ════════════════════════════════════════════════════════════════════════════
-    # CONVICTION STACKING - 9 Signals, need 4+ to trade
+    # CONVICTION STACKING - 13 Signals, need 5+ to trade
     # ════════════════════════════════════════════════════════════════════════════
 
     conviction = 0
@@ -545,17 +597,29 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         conviction_details.append(f"✗ GEX({hydra.gex_regime})")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 6: Momentum Accelerating (+1) - >0.3% in direction
+    # SIGNAL 6: Momentum ACCELERATING (+1) - Candles getting BIGGER
     # ══════════════════════════════════════════════════════════════════════════
-    momentum_strong = (
-        (side_upper == "CALL" and price_change_pct > 0.3) or
-        (side_upper == "PUT" and price_change_pct < -0.3)
-    )
-    if momentum_strong:
+    # Get last 3 candle sizes: abs(close - open) for each
+    # Accelerating = each candle bigger than the previous
+    candle_sizes = []
+    for b in bars[:3]:
+        o = b.get('open') or b.get('o') or 0
+        c = b.get('close') or b.get('c') or 0
+        candle_sizes.append(abs(c - o))
+
+    # Check acceleration: each candle bigger than previous (most recent first)
+    accelerating = False
+    if len(candle_sizes) >= 3:
+        # bars[0] is most recent, bars[1] is second most recent, etc.
+        # Accelerating means: size[0] > size[1] > size[2]
+        if candle_sizes[0] > candle_sizes[1] > candle_sizes[2] and candle_sizes[2] > 0:
+            accelerating = True
+
+    if accelerating:
         conviction += 1
-        conviction_details.append(f"✓ MOM({price_change_pct:+.2f}%)")
+        conviction_details.append(f"✓ ACCEL({candle_sizes[0]:.2f}>{candle_sizes[1]:.2f}>{candle_sizes[2]:.2f})")
     else:
-        conviction_details.append(f"✗ MOM({price_change_pct:+.2f}%)")
+        conviction_details.append(f"✗ ACCEL(flat)")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SIGNAL 7: Whale Premium Present (+1) - $500K+ in direction
@@ -663,32 +727,120 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         logger.debug(f"Predator Stack unavailable: {e}")
         conviction_details.append("- PREDATOR(n/a)")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 11: Opening Range Breakout (+1) - SPY/QQQ only
+    # ══════════════════════════════════════════════════════════════════════════
+    or_breakout = False
+    if ticker in ["SPY", "QQQ"] and ticker in _opening_range:
+        or_data = _opening_range[ticker]
+        or_high = or_data.get("high", 0)
+        or_low = or_data.get("low", 0)
+        or_date = or_data.get("date", "")
+
+        # Only use if captured today
+        today_str = et_now.strftime("%Y-%m-%d")
+        if or_date == today_str and or_high > 0 and or_low > 0:
+            if side_upper == "CALL" and spot > or_high:
+                or_breakout = True
+                conviction += 1
+                conviction_details.append(f"✓ OR_BRK(>{or_high:.2f})")
+            elif side_upper == "PUT" and spot < or_low:
+                or_breakout = True
+                conviction += 1
+                conviction_details.append(f"✓ OR_BRK(<{or_low:.2f})")
+            else:
+                conviction_details.append(f"✗ OR_BRK({or_low:.2f}-{or_high:.2f})")
+        else:
+            conviction_details.append("- OR_BRK(stale)")
+    else:
+        conviction_details.append("- OR_BRK(n/a)")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 12: Pre-market Bias (+1 if confirms, -1 if conflicts)
+    # ══════════════════════════════════════════════════════════════════════════
+    premarket_bias = None
+    try:
+        with open("/tmp/premarket_bias.txt", "r") as f:
+            premarket_bias = f.read().strip().upper()
+    except Exception:
+        pass
+
+    if premarket_bias in ["BULLISH", "BEARISH", "NEUTRAL"]:
+        if side_upper == "CALL" and premarket_bias == "BULLISH":
+            conviction += 1
+            conviction_details.append("✓ PM_BIAS(BULL)")
+        elif side_upper == "PUT" and premarket_bias == "BEARISH":
+            conviction += 1
+            conviction_details.append("✓ PM_BIAS(BEAR)")
+        elif side_upper == "CALL" and premarket_bias == "BEARISH":
+            conviction -= 1  # PENALTY
+            conviction_details.append("✗ PM_BIAS(BEAR,-1)")
+        elif side_upper == "PUT" and premarket_bias == "BULLISH":
+            conviction -= 1  # PENALTY
+            conviction_details.append("✗ PM_BIAS(BULL,-1)")
+        else:
+            conviction_details.append(f"- PM_BIAS({premarket_bias})")
+    else:
+        conviction_details.append("- PM_BIAS(n/a)")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 13: GEX Proximity Favorable (+1)
+    # For CALLS: price near positive GEX level (support)
+    # For PUTS: price near negative GEX level (resistance)
+    # ══════════════════════════════════════════════════════════════════════════
+    gex_proximity_favorable = False
+    gex_flip_point = hydra.gex_flip_point or 0
+
+    if gex_flip_point > 0:
+        # NEGATIVE GEX regime: price below flip point favors momentum
+        # POSITIVE GEX regime: price above flip point = mean reversion
+        if hydra.gex_regime == "NEGATIVE":
+            # In NEGATIVE GEX, we want price BELOW flip point (trending)
+            if spot < gex_flip_point:
+                # Good for momentum trades - both calls and puts can work
+                # But CALLs after bounce, PUTs in breakdown
+                if side_upper == "CALL" and price_change_pct > 0:
+                    gex_proximity_favorable = True
+                if side_upper == "PUT" and price_change_pct < 0:
+                    gex_proximity_favorable = True
+        else:
+            # In POSITIVE GEX, we want price ABOVE flip point (stable)
+            if spot > gex_flip_point:
+                # Good for mean reversion - fades work better
+                gex_proximity_favorable = True
+
+    if gex_proximity_favorable:
+        conviction += 1
+        conviction_details.append(f"✓ GEX_PROX({hydra.gex_regime}@{gex_flip_point:.0f})")
+    else:
+        conviction_details.append(f"✗ GEX_PROX({hydra.gex_regime})")
+
     # ════════════════════════════════════════════════════════════════════════════
     # CONVICTION VERDICT
     # ════════════════════════════════════════════════════════════════════════════
 
-    MIN_CONVICTION = 4
+    MIN_CONVICTION = 5  # Updated for 13-signal system
     conviction_str = " | ".join(conviction_details)
 
     if conviction < MIN_CONVICTION:
         logger.info(
-            f"BEAST_REJECT: {ticker} {side_upper} CONVICTION {conviction}/9 < {MIN_CONVICTION} | {conviction_str}"
+            f"BEAST_REJECT: {ticker} {side_upper} CONVICTION {conviction}/13 < {MIN_CONVICTION} | {conviction_str}"
         )
-        return False, 0, f"CONVICTION_LOW: {conviction}/9 (need {MIN_CONVICTION}+) | {conviction_str}"
+        return False, 0, f"CONVICTION_LOW: {conviction}/13 (need {MIN_CONVICTION}+) | {conviction_str}"
 
     # ════════════════════════════════════════════════════════════════════════════
-    # POSITION SIZING via Confidence Score
+    # POSITION SIZING via Confidence Score (Beast Mode V4)
     # ════════════════════════════════════════════════════════════════════════════
-    # 4-5 conviction = 55-69 confidence = base size
-    # 6-7 conviction = 70-84 confidence = 1.5x size
-    # 8-9 conviction = 85-95 confidence = FULL SEND
+    # 5-7  conviction = 55-69 confidence = base size
+    # 8-10 conviction = 70-84 confidence = 1.5x size
+    # 11-13 conviction = 85-95 confidence = FULL SEND
 
-    if conviction <= 5:
-        confidence = 55 + (conviction - 4) * 7  # 55-62
-    elif conviction <= 7:
-        confidence = 70 + (conviction - 6) * 7  # 70-77
+    if conviction <= 7:
+        confidence = 55 + (conviction - 5) * 5  # 55-65
+    elif conviction <= 10:
+        confidence = 70 + (conviction - 8) * 5  # 70-80
     else:
-        confidence = 85 + (conviction - 8) * 5  # 85-90
+        confidence = 85 + (conviction - 11) * 5  # 85-95
 
     # Boost for aggressive flow
     if hydra.flow_bias in ["AGGRESSIVELY_BULLISH", "AGGRESSIVELY_BEARISH"]:
@@ -699,7 +851,7 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         confidence = max(55, confidence - 10)
 
     reason = (
-        f"BEAST_APPROVED: {ticker} {side_upper} CONVICTION={conviction}/9 | "
+        f"BEAST_APPROVED: {ticker} {side_upper} CONVICTION={conviction}/13 | "
         f"HYDRA={hydra.direction} GEX={hydra.gex_regime} regime={hydra.regime} | "
         f"{conviction_str}"
     )
@@ -960,6 +1112,9 @@ class JobsDayCPL:
         # Always refresh to today's date on each run (handles overnight/multi-day runs)
         self.event_date = get_todays_expiry_date()
         logger.debug(f"CPL scanning for expiry: {self.event_date}")
+
+        # Update Opening Range for SPY/QQQ (after 9:35 AM)
+        _update_opening_range()
 
         # HYDRA INTELLIGENCE STATUS
         try:
