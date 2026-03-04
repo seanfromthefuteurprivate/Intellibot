@@ -84,6 +84,10 @@ SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
 DAILY_PROFIT_TARGET = 2500          # +$2,500 = halt
 DAILY_MAX_LOSS = -500               # -$500 = halt
+SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents API lag race)
+
+# Local tracking to prevent API lag race condition (mutable dict for nested scope)
+_sniper_state = {"last_trade_time": None}
 
 # FIX 3: Liquidity gates — relaxed so we get 5–10 HIGH hitters (SPY/QQQ ATM often > $2.50)
 LIQUIDITY_MAX_SPREAD_PCT = 0.15  # 15% of mid (slightly relaxed)
@@ -623,12 +627,20 @@ class JobsDayCPL:
         import os
         import requests as req
         from zoneinfo import ZoneInfo
-
+        
         # Session halt at 1:00 PM ET (proper DST handling)
         et_now = datetime.now(ZoneInfo("America/New_York"))
         if et_now.hour >= 13:
             logger.info(f"CPL_SESSION_HALT: No trading after 1:00 PM ET (current: {et_now.hour}:{et_now.minute:02d} ET)")
             return []
+
+        # SNIPER COOLDOWN: Prevent API lag race condition (March 3 bug)
+        if _sniper_state["last_trade_time"] is not None:
+            elapsed = (datetime.now(timezone.utc) - _sniper_state["last_trade_time"]).total_seconds()
+            if elapsed < SNIPER_COOLDOWN_SECONDS:
+                remaining = int(SNIPER_COOLDOWN_SECONDS - elapsed)
+                logger.info(f"SNIPER_COOLDOWN: {remaining}s remaining. No new trades until cooldown expires.")
+                return []
 
         # Max 1 position check
         try:
@@ -816,7 +828,9 @@ class JobsDayCPL:
                                 option_type_override=call.side.lower(),
                             )
                             if alpaca_pos:
+                                _sniper_state["last_trade_time"] = datetime.now(timezone.utc)
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
+                                logger.info(f"SNIPER_COOLDOWN_SET: {SNIPER_COOLDOWN_SECONDS}s cooldown started")
                                 send_alert(f"✅ **ALPACA EXECUTED** HIGH HITTER #{_call_number_counter}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
@@ -1000,7 +1014,9 @@ class JobsDayCPL:
                                 option_type_override=call.side.lower(),  # "call" or "put" from CPL
                             )
                             if alpaca_pos:
+                                _sniper_state["last_trade_time"] = datetime.now(timezone.utc)
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
+                                logger.info(f"SNIPER_COOLDOWN_SET: {SNIPER_COOLDOWN_SECONDS}s cooldown started")
                                 send_alert(f"✅ **ALPACA EXECUTED** CPL #{call_number}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
                                 # Lock direction: 30-minute cooldown, not full day
                                 _direction_lock[ticker] = {"side": call.side.upper(), "time": datetime.now(timezone.utc)}
