@@ -1,56 +1,36 @@
-# CPL V2 DEPLOYMENT SUMMARY - 2026-03-04
+# READ THIS FIRST AFTER COMPACTION
 
-## STATUS: READY FOR DEPLOYMENT
+You are continuing BEAST MODE deployment for WSB-Snake.
 
-### What Was Fixed
+Read /home/ubuntu/wsb-snake/ops/HANDOFF.md for full state.
 
-| Issue | Status | Line Numbers |
-|-------|--------|--------------|
-| HYDRA direction gate | IMPLEMENTED | 387-398 |
-| HYDRA regime gate | IMPLEMENTED | 400-415 |
-| Blowup probability gate | IMPLEMENTED | 417-422 |
-| GEX flip proximity gate | IMPLEMENTED | 424-427 |
-| Volume confirmation gate | IMPLEMENTED | 429-477 |
-| Data failure = REJECT | IMPLEMENTED | All gates return False, 0 on failure |
-| SPY block removed | IMPLEMENTED | 866-869 (commented out) |
-| Session halt at 1 PM | VERIFIED | Line 800 |
-| Position sizing | VERIFIED | Lines 84-87 |
+## IMMEDIATE NEXT STEPS:
+1. Add Signal 10 (Predator Vision) to _check_entry_quality
+2. Remove IWM from watchlist (line ~75 in jobs_day_cpl.py)
+3. Update kill switch to $10K/-$750 (lines 86-87)
+4. Git commit + push + pull to EC2
+5. Restart wsb-snake service
+6. Run simulated scan showing all gates
 
-### Key Changes
+## CURRENT STATE:
+- Beast Mode V3.0 with 9 conviction signals LOCAL (not on EC2 yet)
+- Session halt REMOVED
+- SPY block REMOVED
+- HYDRA integration COMPLETE
+- Compiles clean
 
-1. **`_check_entry_quality()` rewritten** (lines 342-523)
-   - 7 hard gates: ALL must pass or trade is rejected
-   - No more `return True, 50, "insufficient_data"` defaults
-   - Full HYDRA integration with direction/regime/blowup/GEX gates
-
-2. **SPY unblocked** (line 866-869)
-   - V7 is disabled, SPY now trades through CPL with HYDRA validation
-
-3. **Trading hours: 9:30 AM - 1:00 PM ET** (line 800)
-
-### Deployment Commands
-
+## DEPLOY COMMANDS:
 ```bash
-# 1. Push to EC2
-cd /Users/seankuesia/Downloads/Intellibot
-git add -A && git commit -m "CPL V2: Full HYDRA integration with 7 gates"
+git add -A && git commit -m "Beast Mode V3: 9-signal conviction"
 git push origin main
-
-# 2. Deploy on EC2
 aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
   --document-name "AWS-RunShellScript" \
   --parameters 'commands=["cd /home/ubuntu/wsb-snake && git pull && systemctl restart wsb-snake"]'
-
-# 3. Verify logs
-aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["journalctl -u wsb-snake --no-pager -n 50"]'
 ```
 
-### SUCCESS CRITERIA FOR TOMORROW
-
-- [ ] CPL does NOT trade if HYDRA says NEUTRAL
-- [ ] CPL does NOT trade if Polygon data is missing
-- [ ] CPL does NOT buy both CALL and PUT on same ticker
-- [ ] CPL ONLY trades in HYDRA's confirmed direction
-- [ ] If no signal by 1:00 PM, $0 P&L day (that's a WIN)
+## KEY CONSTANTS (jobs_day_cpl.py):
+- SNIPER_CAPITAL = 2500
+- MAX_OPEN_POSITIONS = 1
+- DAILY_PROFIT_TARGET = 2500 (change to 10000)
+- DAILY_MAX_LOSS = -500 (change to -750)
+- MIN_CONVICTION = 4

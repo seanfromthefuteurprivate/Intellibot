@@ -341,186 +341,329 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
 
 def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
     """
-    PREDICTIVE ENTRY VALIDATION V2.0 - Strict HYDRA + Volume Confirmation.
+    ╔══════════════════════════════════════════════════════════════════════════════╗
+    ║                           BEAST MODE V3.0                                     ║
+    ║                    9-SIGNAL CONVICTION STACKING SYSTEM                        ║
+    ╚══════════════════════════════════════════════════════════════════════════════╝
 
-    PHILOSOPHY: When data is missing, REJECT. No defaults to True.
-    Target: 55%+ win rate with 2:1 R:R on 0DTE.
+    CONVICTION SIGNALS (each adds +1):
+    ┌────────────────────────────────────────────────────────────────────────────┐
+    │ 1. HYDRA direction aligned                                                  │
+    │ 2. Sweep direction aligned (flow_sweep_direction)                          │
+    │ 3. Near dark pool level (dp_support for CALL, dp_resistance for PUT)       │
+    │ 4. Volume ratio > 1.5x                                                      │
+    │ 5. GEX regime favorable (NEGATIVE = trending)                              │
+    │ 6. Momentum accelerating (price change > 0.3%)                             │
+    │ 7. Whale premium present ($500K+ in direction)                             │
+    │ 8. Charm flow favorable (afternoon theta alignment)                        │
+    │ 9. Time window optimal (power hour / morning momentum)                     │
+    └────────────────────────────────────────────────────────────────────────────┘
 
-    HARD GATES (ALL must pass):
-    0. Polygon health: API must be working
-    1. HYDRA connection: Must be connected and fresh (<3 min)
-    2. Direction gate: BULLISH=calls only, BEARISH=puts only, NEUTRAL=REJECT
-    3. Regime gate: TRENDING/RISK_ON/RECOVERY=trade, CHOPPY/UNKNOWN=REJECT
-    4. Blowup gate: >70% = REJECT (too dangerous)
-    5. GEX flip proximity: <1% to flip = REJECT
-    6. Volume confirmation: Price direction + 1.2x volume = REQUIRED
+    MINIMUM conviction = 4 to trade
+    4-5 = base position size (confidence 55-69)
+    6-7 = 1.5x position size (confidence 70-84)
+    8-9 = FULL SEND max $2,500 (confidence 85-95)
+
+    HARD GATES (instant reject, no conviction points):
+    - HYDRA disconnected/stale
+    - Blowup > 70%
+    - GEX flip < 1%
+    - Data unavailable
 
     Returns: (is_valid, confidence_score, reason)
     """
     side_upper = side.upper()
+    from zoneinfo import ZoneInfo
+    et_now = datetime.now(ZoneInfo("America/New_York"))
 
-    # ========== GATE 0: POLYGON HEALTH ==========
+    # ════════════════════════════════════════════════════════════════════════════
+    # HARD GATES - Instant rejection, no conviction calculation
+    # ════════════════════════════════════════════════════════════════════════════
+
+    # Gate 0: Polygon health
     try:
         from wsb_snake.utils.polygon_health import polygon_health_check
         is_healthy, health_reason = polygon_health_check()
         if not is_healthy:
-            logger.error(f"ENTRY_V2_REJECT: {ticker} {side_upper} - Polygon unhealthy: {health_reason}")
-            return False, 0, f"POLYGON_UNHEALTHY: {health_reason}"
+            logger.error(f"BEAST_REJECT: {ticker} {side_upper} - Polygon unhealthy: {health_reason}")
+            return False, 0, f"HARD_GATE_POLYGON: {health_reason}"
     except ImportError:
-        pass  # Module not available, skip this check
+        pass
 
-    # ========== GATE 1: HYDRA CONNECTION ==========
+    # Gate 1: HYDRA connection
     try:
         hydra = get_hydra_intel()
     except Exception as e:
-        logger.warning(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA unavailable: {e}")
-        return False, 0, "HYDRA_UNAVAILABLE: Cannot validate without intelligence"
+        logger.warning(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA unavailable: {e}")
+        return False, 0, "HARD_GATE_HYDRA: Intelligence unavailable"
 
     if not hydra.connected:
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA disconnected")
-        return False, 0, "HYDRA_DISCONNECTED: No intelligence connection"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA disconnected")
+        return False, 0, "HARD_GATE_HYDRA: Disconnected"
 
     if hydra.is_stale():
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA data stale (>3 min)")
-        return False, 0, "HYDRA_STALE: Intelligence data too old"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA stale >3min")
+        return False, 0, "HARD_GATE_HYDRA: Stale data"
 
-    # ========== GATE 2: DIRECTION ALIGNMENT (HARD) ==========
+    # Gate 2: Direction conflict (hard block opposite direction)
     if hydra.direction == "NEUTRAL":
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA NEUTRAL")
-        return False, 0, "HYDRA_NEUTRAL: No directional edge - no trade"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA NEUTRAL")
+        return False, 0, "HARD_GATE_DIRECTION: NEUTRAL market"
 
     if side_upper == "CALL" and hydra.direction == "BEARISH":
-        logger.info(f"ENTRY_V2_REJECT: {ticker} CALL blocked - HYDRA BEARISH")
-        return False, 0, "HYDRA_CONFLICT: CALL blocked (market BEARISH)"
+        logger.info(f"BEAST_REJECT: {ticker} CALL blocked - HYDRA BEARISH")
+        return False, 0, "HARD_GATE_DIRECTION: CALL in BEARISH"
 
     if side_upper == "PUT" and hydra.direction == "BULLISH":
-        logger.info(f"ENTRY_V2_REJECT: {ticker} PUT blocked - HYDRA BULLISH")
-        return False, 0, "HYDRA_CONFLICT: PUT blocked (market BULLISH)"
+        logger.info(f"BEAST_REJECT: {ticker} PUT blocked - HYDRA BULLISH")
+        return False, 0, "HARD_GATE_DIRECTION: PUT in BULLISH"
 
-    # ========== GATE 3: REGIME CHECK ==========
-    untradeable_regimes = {"UNKNOWN", "CHOPPY", "NEUTRAL"}
-    if hydra.regime in untradeable_regimes:
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - regime {hydra.regime}")
-        return False, 0, f"REGIME_UNCERTAIN: {hydra.regime} - no predictable structure"
-
-    # Regime-direction alignment for edge cases
-    if hydra.regime == "RISK_OFF" and side_upper == "CALL":
-        if hydra.flow_bias not in ["BULLISH", "AGGRESSIVELY_BULLISH"]:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL in RISK_OFF without bullish flow")
-            return False, 0, "REGIME_CONFLICT: CALL in RISK_OFF needs bullish flow"
-
-    if hydra.regime == "RISK_ON" and side_upper == "PUT":
-        if hydra.flow_bias not in ["BEARISH", "AGGRESSIVELY_BEARISH"]:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT in RISK_ON without bearish flow")
-            return False, 0, "REGIME_CONFLICT: PUT in RISK_ON needs bearish flow"
-
-    # ========== GATE 4: BLOWUP PROBABILITY ==========
+    # Gate 3: Blowup probability
     if hydra.blowup_probability > 70:
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - blowup {hydra.blowup_probability}%")
-        return False, 0, f"BLOWUP_RISK: {hydra.blowup_probability}% probability - too dangerous"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - blowup {hydra.blowup_probability}%")
+        return False, 0, f"HARD_GATE_BLOWUP: {hydra.blowup_probability}%"
 
-    blowup_penalty = 20 if hydra.blowup_probability > 50 else 0
-
-    # ========== GATE 5: GEX FLIP PROXIMITY ==========
+    # Gate 4: GEX flip proximity
     if hydra.gex_flip_distance_pct < 1.0:
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - GEX flip {hydra.gex_flip_distance_pct:.2f}%")
-        return False, 0, f"GEX_FLIP_PROXIMITY: {hydra.gex_flip_distance_pct:.1f}% from flip"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - GEX flip {hydra.gex_flip_distance_pct:.2f}%")
+        return False, 0, f"HARD_GATE_GEX_FLIP: {hydra.gex_flip_distance_pct:.1f}%"
 
-    # ========== GATE 6: VOLUME CONFIRMATION (CRITICAL - THE EDGE) ==========
+    # Gate 5: Regime (hard block CHOPPY/UNKNOWN)
+    if hydra.regime in {"UNKNOWN", "CHOPPY"}:
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - regime {hydra.regime}")
+        return False, 0, f"HARD_GATE_REGIME: {hydra.regime}"
+
+    # Gate 6: Data availability
     try:
         bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=8)
     except Exception as e:
-        logger.warning(f"ENTRY_V2_REJECT: {ticker} {side_upper} - bars fetch failed: {e}")
-        return False, 0, "DATA_FETCH_FAILED: Cannot get price bars"
+        logger.warning(f"BEAST_REJECT: {ticker} {side_upper} - bars failed: {e}")
+        return False, 0, "HARD_GATE_DATA: Bars unavailable"
 
-    # STRICT: Require minimum bars for volume analysis
     if not bars or len(bars) < 5:
-        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - insufficient bars ({len(bars) if bars else 0})")
-        return False, 0, "DATA_INSUFFICIENT: Need 5+ bars for volume confirmation"
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - insufficient bars")
+        return False, 0, "HARD_GATE_DATA: Insufficient bars"
 
-    # Extract closes and volumes
+    # Extract price/volume data
     closes = []
     volumes = []
     for b in bars[:5]:
         c = b.get('close') or b.get('c')
         v = b.get('volume') or b.get('v') or 0
         if c is None:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - missing close data")
-            return False, 0, "DATA_INCOMPLETE: Missing close prices"
+            return False, 0, "HARD_GATE_DATA: Missing close"
         closes.append(c)
         volumes.append(v)
 
-    # Calculate price momentum (bars[0] is most recent due to desc sort)
     price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
-
-    # Volume ratio: recent 2 bars vs older 3 bars
     recent_vol_avg = sum(volumes[:2]) / 2
     older_vol_avg = sum(volumes[2:]) / len(volumes[2:]) if len(volumes) > 2 else 1
     volume_ratio = recent_vol_avg / older_vol_avg if older_vol_avg > 0 else 1.0
 
-    # VOLUME CONFIRMATION: Must have 1.2x+ volume in trade direction
-    MIN_VOLUME_RATIO = 1.2
+    # Gate 7: Basic momentum alignment (must be in right direction)
+    if side_upper == "CALL" and price_change_pct < -0.5:
+        logger.info(f"BEAST_REJECT: {ticker} CALL - strong downtrend {price_change_pct:+.2f}%")
+        return False, 0, f"HARD_GATE_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
+    if side_upper == "PUT" and price_change_pct > 0.5:
+        logger.info(f"BEAST_REJECT: {ticker} PUT - strong uptrend {price_change_pct:+.2f}%")
+        return False, 0, f"HARD_GATE_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
 
-    if side_upper == "CALL":
-        if price_change_pct <= 0:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL - price declining {price_change_pct:+.2f}%")
-            return False, 0, f"MOMENTUM_AGAINST: Price {price_change_pct:+.2f}% (need positive for CALL)"
-        if volume_ratio < MIN_VOLUME_RATIO:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL - weak volume {volume_ratio:.2f}x")
-            return False, 0, f"VOLUME_WEAK: {volume_ratio:.2f}x < {MIN_VOLUME_RATIO}x required"
-    else:  # PUT
-        if price_change_pct >= 0:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT - price rising {price_change_pct:+.2f}%")
-            return False, 0, f"MOMENTUM_AGAINST: Price {price_change_pct:+.2f}% (need negative for PUT)"
-        if volume_ratio < MIN_VOLUME_RATIO:
-            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT - weak volume {volume_ratio:.2f}x")
-            return False, 0, f"VOLUME_WEAK: {volume_ratio:.2f}x < {MIN_VOLUME_RATIO}x required"
+    # ════════════════════════════════════════════════════════════════════════════
+    # CONVICTION STACKING - 9 Signals, need 4+ to trade
+    # ════════════════════════════════════════════════════════════════════════════
 
-    # ========== ALL GATES PASSED - CALCULATE CONFIDENCE ==========
-    base_confidence = 55  # Starting point when all gates pass
+    conviction = 0
+    conviction_details = []
 
-    # Flow bias boost
-    flow_boost = 0
-    if side_upper == "CALL" and hydra.flow_bias in ["BULLISH", "AGGRESSIVELY_BULLISH"]:
-        flow_boost = 5 if hydra.flow_bias == "BULLISH" else 10
-    elif side_upper == "PUT" and hydra.flow_bias in ["BEARISH", "AGGRESSIVELY_BEARISH"]:
-        flow_boost = 5 if hydra.flow_bias == "BEARISH" else 10
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 1: HYDRA Direction Aligned (+1)
+    # ══════════════════════════════════════════════════════════════════════════
+    direction_aligned = (
+        (side_upper == "CALL" and hydra.direction == "BULLISH") or
+        (side_upper == "PUT" and hydra.direction == "BEARISH")
+    )
+    if direction_aligned:
+        conviction += 1
+        conviction_details.append("✓ HYDRA_DIR")
+    else:
+        conviction_details.append("✗ HYDRA_DIR")
 
-    # GEX regime boost (negative GEX = trends amplify)
-    gex_boost = 10 if hydra.gex_regime == "NEGATIVE" else 0
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 2: Sweep Direction Aligned (+1)
+    # ══════════════════════════════════════════════════════════════════════════
+    sweep_aligned = (
+        (side_upper == "CALL" and hydra.flow_sweep_direction == "CALL_HEAVY") or
+        (side_upper == "PUT" and hydra.flow_sweep_direction == "PUT_HEAVY")
+    )
+    if sweep_aligned:
+        conviction += 1
+        conviction_details.append("✓ SWEEP")
+    else:
+        conviction_details.append(f"✗ SWEEP({hydra.flow_sweep_direction})")
 
-    # Sweep direction boost
-    sweep_boost = 0
-    if hydra.flow_sweep_direction == "CALL_HEAVY" and side_upper == "CALL":
-        sweep_boost = 5
-    elif hydra.flow_sweep_direction == "PUT_HEAVY" and side_upper == "PUT":
-        sweep_boost = 5
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 3: Dark Pool Level (+1)
+    # ══════════════════════════════════════════════════════════════════════════
+    dp_support = hydra.dp_nearest_support or 0
+    dp_resistance = hydra.dp_nearest_resistance or 0
+    dp_proximity_pct = 0.5  # Within 0.5% of level
 
-    # Volume strength boost (capped)
-    volume_boost = min(10, (volume_ratio - 1.0) * 10)
+    near_dp_level = False
+    if side_upper == "CALL" and dp_support > 0:
+        dist_to_support = abs(spot - dp_support) / spot * 100
+        if dist_to_support < dp_proximity_pct:
+            near_dp_level = True
+    if side_upper == "PUT" and dp_resistance > 0:
+        dist_to_resistance = abs(spot - dp_resistance) / spot * 100
+        if dist_to_resistance < dp_proximity_pct:
+            near_dp_level = True
 
-    # Momentum strength boost (capped)
-    momentum_boost = min(10, abs(price_change_pct) * 3)
+    if near_dp_level:
+        conviction += 1
+        conviction_details.append("✓ DARK_POOL")
+    else:
+        conviction_details.append("✗ DARK_POOL")
 
-    # Historical win rate boost (Layer 11)
-    historical_boost = 0
-    if hydra.seq_historical_win_rate > 0.55:
-        historical_boost = int((hydra.seq_historical_win_rate - 0.5) * 30)
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 4: Volume Confirmation (+1) - 1.5x ratio
+    # ══════════════════════════════════════════════════════════════════════════
+    strong_volume = volume_ratio >= 1.5
+    if strong_volume:
+        conviction += 1
+        conviction_details.append(f"✓ VOL({volume_ratio:.1f}x)")
+    else:
+        conviction_details.append(f"✗ VOL({volume_ratio:.1f}x)")
 
-    # Final confidence
-    final_confidence = min(95, max(55,
-        base_confidence + flow_boost + gex_boost + sweep_boost +
-        volume_boost + momentum_boost + historical_boost - blowup_penalty
-    ))
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 5: GEX Regime Favorable (+1) - NEGATIVE = trending
+    # ══════════════════════════════════════════════════════════════════════════
+    gex_favorable = hydra.gex_regime == "NEGATIVE"
+    if gex_favorable:
+        conviction += 1
+        conviction_details.append("✓ GEX_NEG")
+    else:
+        conviction_details.append(f"✗ GEX({hydra.gex_regime})")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 6: Momentum Accelerating (+1) - >0.3% in direction
+    # ══════════════════════════════════════════════════════════════════════════
+    momentum_strong = (
+        (side_upper == "CALL" and price_change_pct > 0.3) or
+        (side_upper == "PUT" and price_change_pct < -0.3)
+    )
+    if momentum_strong:
+        conviction += 1
+        conviction_details.append(f"✓ MOM({price_change_pct:+.2f}%)")
+    else:
+        conviction_details.append(f"✗ MOM({price_change_pct:+.2f}%)")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 7: Whale Premium Present (+1) - $500K+ in direction
+    # ══════════════════════════════════════════════════════════════════════════
+    WHALE_THRESHOLD = 500_000
+    whale_present = False
+    if side_upper == "CALL" and hydra.flow_net_premium_calls >= WHALE_THRESHOLD:
+        whale_present = True
+    if side_upper == "PUT" and hydra.flow_net_premium_puts >= WHALE_THRESHOLD:
+        whale_present = True
+
+    if whale_present:
+        conviction += 1
+        premium = hydra.flow_net_premium_calls if side_upper == "CALL" else hydra.flow_net_premium_puts
+        conviction_details.append(f"✓ WHALE(${premium/1000:.0f}K)")
+    else:
+        conviction_details.append("✗ WHALE")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 8: Charm Flow Favorable (+1) - Afternoon theta alignment
+    # ══════════════════════════════════════════════════════════════════════════
+    charm_favorable = False
+    charm_flow = hydra.charm_flow_per_hour or 0
+
+    # After 2 PM: negative charm = MM selling puts = favor calls
+    # Positive charm = MM selling calls = favor puts
+    if et_now.hour >= 14:
+        if side_upper == "CALL" and charm_flow < -10000:
+            charm_favorable = True
+        if side_upper == "PUT" and charm_flow > 10000:
+            charm_favorable = True
+
+    if charm_favorable:
+        conviction += 1
+        conviction_details.append(f"✓ CHARM({charm_flow/1000:.0f}K)")
+    else:
+        if et_now.hour >= 14:
+            conviction_details.append(f"✗ CHARM({charm_flow/1000:.0f}K)")
+        else:
+            conviction_details.append("- CHARM(pre-2PM)")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 9: Time Window Optimal (+1) - Power hour / morning momentum
+    # ══════════════════════════════════════════════════════════════════════════
+    optimal_time = False
+    current_hour = et_now.hour
+    current_minute = et_now.minute
+
+    # Morning momentum: 9:35 - 10:30 (after open chop settles)
+    if current_hour == 9 and current_minute >= 35:
+        optimal_time = True
+    if current_hour == 10 and current_minute <= 30:
+        optimal_time = True
+    # Power hour: 2:30 - 3:45 (momentum + gamma amplification)
+    if current_hour == 14 and current_minute >= 30:
+        optimal_time = True
+    if current_hour == 15 and current_minute <= 45:
+        optimal_time = True
+
+    if optimal_time:
+        conviction += 1
+        conviction_details.append(f"✓ TIME({current_hour}:{current_minute:02d})")
+    else:
+        conviction_details.append(f"✗ TIME({current_hour}:{current_minute:02d})")
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # CONVICTION VERDICT
+    # ════════════════════════════════════════════════════════════════════════════
+
+    MIN_CONVICTION = 4
+    conviction_str = " | ".join(conviction_details)
+
+    if conviction < MIN_CONVICTION:
+        logger.info(
+            f"BEAST_REJECT: {ticker} {side_upper} CONVICTION {conviction}/9 < {MIN_CONVICTION} | {conviction_str}"
+        )
+        return False, 0, f"CONVICTION_LOW: {conviction}/9 (need {MIN_CONVICTION}+) | {conviction_str}"
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # POSITION SIZING via Confidence Score
+    # ════════════════════════════════════════════════════════════════════════════
+    # 4-5 conviction = 55-69 confidence = base size
+    # 6-7 conviction = 70-84 confidence = 1.5x size
+    # 8-9 conviction = 85-95 confidence = FULL SEND
+
+    if conviction <= 5:
+        confidence = 55 + (conviction - 4) * 7  # 55-62
+    elif conviction <= 7:
+        confidence = 70 + (conviction - 6) * 7  # 70-77
+    else:
+        confidence = 85 + (conviction - 8) * 5  # 85-90
+
+    # Boost for aggressive flow
+    if hydra.flow_bias in ["AGGRESSIVELY_BULLISH", "AGGRESSIVELY_BEARISH"]:
+        confidence = min(95, confidence + 5)
+
+    # Penalty for elevated blowup
+    if hydra.blowup_probability > 50:
+        confidence = max(55, confidence - 10)
 
     reason = (
-        f"ENTRY_V2_APPROVED: HYDRA={hydra.direction} regime={hydra.regime} "
-        f"GEX={hydra.gex_regime} flow={hydra.flow_bias} "
-        f"vol={volume_ratio:.2f}x mom={price_change_pct:+.2f}%"
+        f"BEAST_APPROVED: {ticker} {side_upper} CONVICTION={conviction}/9 | "
+        f"HYDRA={hydra.direction} GEX={hydra.gex_regime} regime={hydra.regime} | "
+        f"{conviction_str}"
     )
-    logger.info(f"{ticker} {side_upper}: {reason} | conf={final_confidence}%")
+    logger.info(f"{reason} | conf={confidence}%")
 
-    return True, final_confidence, reason
+    return True, confidence, reason
 
 
 def _check_exits_and_emit_sells(broadcast: bool, dry_run: bool, untruncated_tails: bool = False) -> List[JobsDayCall]:
@@ -794,12 +937,11 @@ class JobsDayCPL:
         import os
         import requests as req
         from zoneinfo import ZoneInfo
-        
-        # Session halt at 1:00 PM ET (proper DST handling)
+
+        # BEAST MODE: Session halt REMOVED - let it hunt all day
+        # Kill switch (+$2,500 / -$500) still active below
         et_now = datetime.now(ZoneInfo("America/New_York"))
-        if et_now.hour >= 13:
-            logger.info(f"CPL_SESSION_HALT: No trading after 1:00 PM ET (current: {et_now.hour}:{et_now.minute:02d} ET)")
-            return []
+        logger.debug(f"CPL_BEAST_MODE: Hunting at {et_now.hour}:{et_now.minute:02d} ET")
 
         # SNIPER COOLDOWN: Prevent API lag race condition (March 3 bug)
         if _sniper_state["last_trade_time"] is not None:
