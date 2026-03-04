@@ -1,32 +1,25 @@
-# BEAST MODE HANDOFF - March 4, 2026
+# BEAST MODE HANDOFF - March 4, 2026 (Updated)
 
-## WHAT IS DEPLOYED ON EC2 (commit 7bd6112)
+## WHAT IS DEPLOYED ON EC2 (commit 0e31205)
+
+### Beast Mode V3.1 - LIVE
+- 10-signal conviction stacking system DEPLOYED
+- Service running: `wsb-snake.service active (running)`
+- HYDRA Bridge connected and polling
+
+### Changes in V3.1 (this commit):
+1. **Signal 10: Predator Vision** — AI pattern recognition via PredatorStackV2
+2. **Kill switch updated** — $10K profit / -$750 loss (was $2.5K / -$500)
+3. **IWM removed** from watchlist (illiquid)
+4. Session halt REMOVED (hunts all day)
+5. SPY block REMOVED
 
 ### Files Modified:
-- wsb_snake/execution/jobs_day_cpl.py — BEAST MODE V3.0
-  9-signal conviction stacking system DEPLOYED, compiles clean
-- wsb_snake/trading/alpaca_executor.py — kill switch in place
-- wsb_snake/engines/v7_scalper.py — V7 disabled
-- ops/monitor_agent.py — DOWN_STATES + circuit breaker
-- wsb_snake/utils/polygon_health.py — NEW health monitoring
+- `wsb_snake/execution/jobs_day_cpl.py` — Beast Mode V3.1 with 10 signals
+- `wsb_snake/trading/alpaca_executor.py` — Updated kill switch
+- `wsb_snake/ai_stack/predator_stack_v2.py` — Now wired into CPL
 
-### What's LIVE on EC2 right now:
-- Session halt: REMOVED (hunts all day)
-- 9 conviction signals implemented (1-9)
-- Signal 10 (Predator Vision) NOT YET ADDED — was interrupted
-- Hard gates: Polygon health, HYDRA connection, HYDRA direction,
-  blowup >70%, GEX flip <1%, regime CHOPPY/UNKNOWN, data availability,
-  momentum wrong direction
-- Conviction minimum: 4 signals to trade
-- Conviction sizing: 4-5=base, 6-7=1.5x, 8-9=full send
-- Kill switch: $2,500 profit / -$500 loss (NEEDS UPDATE to $10K/-$750)
-- Cooldown: 5 min between trades
-- Max positions: 1
-- IWM: NOT YET REMOVED from watchlist
-- SPY block: REMOVED
-- V7: DISABLED
-
-### 9 CONVICTION SIGNALS IMPLEMENTED:
+### 10 CONVICTION SIGNALS IMPLEMENTED:
 1. HYDRA direction aligned
 2. Sweep direction aligned (flow_sweep_direction)
 3. Near dark pool level (dp_support/resistance within 0.5%)
@@ -36,26 +29,35 @@
 7. Whale premium > $500K in direction
 8. Charm flow favorable (afternoon only)
 9. Time window optimal (9:35-10:30 AM or 2:30-3:45 PM)
+10. **Predator Vision** — AI pattern recognition (STRIKE + >60% conviction)
 
-### What's NOT YET DONE:
-- [ ] Signal 10: Predator Vision (predator_stack_v2 exists, not wired)
-- [ ] Kill switch update: $2500→$10000 profit, -$500→-$750 loss
-- [ ] Remove IWM from watchlist
-- [ ] Opening range breakout gate (discussed, not coded)
-- [ ] Momentum acceleration (candle size increasing, not just direction)
-- [ ] Pre-market bias from futures
-- [ ] GEX-aware strike selection
-- [ ] Run simulated scan to verify all gates work
+### HARD GATES (instant rejection):
+- Polygon health failing
+- HYDRA disconnected/stale
+- Direction conflict (CALL in BEARISH, PUT in BULLISH)
+- Blowup > 70%
+- GEX flip < 1%
+- Regime CHOPPY/UNKNOWN
+- Insufficient data
+- Momentum wrong direction (>0.5% against)
 
-### CRITICAL: Current state
-- LOCAL code has beast mode changes, compiled successfully
-- EC2 has commit 7bd6112 (previous HYDRA integration)
-- Need to: git commit new changes, push, pull on EC2, restart
+### Conviction Scoring:
+- Minimum conviction = 4 signals to trade
+- 4-5 signals = base position size (confidence 55-69)
+- 6-7 signals = 1.5x size (confidence 70-84)
+- 8-10 signals = FULL SEND max $2,500 (confidence 85-95)
 
-### Account State:
-- Portfolio: ~$88,034
-- Daily P&L: ~-$462
-- Open positions: 0
+### Current Configuration:
+- SNIPER_CAPITAL = $2,500
+- MAX_OPEN_POSITIONS = 1
+- DAILY_PROFIT_TARGET = $10,000
+- DAILY_MAX_LOSS = -$750
+- SNIPER_COOLDOWN_SECONDS = 300 (5 min)
+
+### Watchlist (IWM removed):
+SPY, QQQ, DIA, VXX, UVXY, TLT, IEF, XLF, UUP, GLD, SLV, GDX,
+MSTR, COIN, MARA, RIOT, NVDA, TSLA, AAPL, AMZN, META, GOOGL, MSFT, AMD,
+ITB, XHB, XLY, XLV, NBIS, RKLB, ASTS, LUNR, PL, ONDS, SLS
 
 ### Architecture:
 - EC2: i-03f3a7c46ec809a43 (AWS SSM)
@@ -63,15 +65,26 @@
 - Branch: main
 - Services: wsb-snake, wsb-ops-monitor (systemd)
 - Telegram: alerts active
-- HYDRA: connected, direction=NEUTRAL, regime=UNKNOWN
+- HYDRA: connected at http://54.172.22.157:8000/api/predator
 
-### Key Files:
-- _check_entry_quality() at jobs_day_cpl.py:342-660
-- Conviction constants at jobs_day_cpl.py:84-91
-- SNIPER_CAPITAL=2500, MAX_OPEN_POSITIONS=1
-- predator_stack_v2.py exists at wsb_snake/ai_stack/
+### NOT YET DONE:
+- [ ] Opening range breakout gate (discussed, not coded)
+- [ ] Momentum acceleration (candle SIZE increasing, not just direction)
+- [ ] Pre-market bias from futures
+- [ ] GEX-aware strike selection
+- [ ] Simulated scan showing all gates (market closed)
+
+### Deploy Commands:
+```bash
+git add -A && git commit -m "update message"
+git push origin main
+aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["export HOME=/root && git config --global --add safe.directory /home/ubuntu/wsb-snake && cd /home/ubuntu/wsb-snake && git pull && systemctl restart wsb-snake"]' \
+  --region us-east-1
+```
 
 ### The Goal:
 $2,500 capital → multiply daily via ONE lethal 0DTE trade
-9-signal conviction stacking ensures only the best setups trade
+10-signal conviction stacking ensures only the best setups trade
 Execution layer (pyramid + trailing stop) proven and working
