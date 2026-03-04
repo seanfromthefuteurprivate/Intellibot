@@ -67,7 +67,7 @@ CPL_EVENT_DATE = get_todays_expiry_date()
 # Crypto beta: MSTR, COIN, MARA, RIOT | AI/mega: NVDA, TSLA, AAPL, AMZN, META, GOOGL, MSFT, AMD
 # Sectors: XLF, ITB, XHB, XLY, XLV, GDX
 CPL_WATCHLIST = [
-    "SPY", "QQQ", "IWM", "DIA",                   # core index 0DTE
+    "SPY", "QQQ", "DIA",                          # core index 0DTE (IWM removed - illiquid)
     "VXX", "UVXY",                                # panic meter (VIX products)
     "TLT", "IEF", "XLF",                          # rates, intermediate Treasuries, financials
     "UUP", "GLD", "SLV", "GDX",                   # dollar, metals, gold miners
@@ -83,8 +83,8 @@ TARGET_BUY_CALLS = 3
 # SNIPER MODE CONFIG
 SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
-DAILY_PROFIT_TARGET = 2500          # +$2,500 = halt
-DAILY_MAX_LOSS = -500               # -$500 = halt
+DAILY_PROFIT_TARGET = 10000         # +$10,000 = halt (Beast Mode)
+DAILY_MAX_LOSS = -750               # -$750 = halt (wider floor)
 SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents API lag race)
 
 # Local tracking to prevent API lag race condition (mutable dict for nested scope)
@@ -620,6 +620,48 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         conviction_details.append(f"✓ TIME({current_hour}:{current_minute:02d})")
     else:
         conviction_details.append(f"✗ TIME({current_hour}:{current_minute:02d})")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SIGNAL 10: Predator Vision (+1) - AI pattern recognition
+    # ══════════════════════════════════════════════════════════════════════════
+    predator_bullish = False
+    try:
+        from wsb_snake.ai_stack.predator_stack_v2 import get_predator_stack
+
+        # Build signal dict for Predator
+        predator_signal = {
+            'ticker': ticker,
+            'direction': 'BULLISH' if side_upper == 'CALL' else 'BEARISH',
+            'price': spot,
+        }
+
+        # Convert bars to candles format for Predator
+        predator_candles = []
+        for b in bars[:5]:
+            predator_candles.append({
+                'open': b.get('open') or b.get('o'),
+                'high': b.get('high') or b.get('h'),
+                'low': b.get('low') or b.get('l'),
+                'close': b.get('close') or b.get('c'),
+                'volume': b.get('volume') or b.get('v') or 0,
+            })
+
+        predator_stack = get_predator_stack()
+        verdict = predator_stack.analyze(
+            signal=predator_signal,
+            candles=predator_candles
+        )
+
+        if verdict.action == "STRIKE" and verdict.conviction >= 60:
+            predator_bullish = True
+            conviction += 1
+            conviction_details.append(f"✓ PREDATOR({verdict.conviction:.0f}%)")
+        else:
+            conviction_details.append(f"✗ PREDATOR({verdict.action}:{verdict.conviction:.0f}%)")
+
+    except Exception as e:
+        logger.debug(f"Predator Stack unavailable: {e}")
+        conviction_details.append("- PREDATOR(n/a)")
 
     # ════════════════════════════════════════════════════════════════════════════
     # CONVICTION VERDICT

@@ -692,10 +692,10 @@ No overnight risk. Fresh start tomorrow!
         Place an option order on Alpaca paper trading.
         """
         try:
-            # SNIPER MODE: DAILY P&L KILL SWITCH
+            # SNIPER MODE: DAILY P&L KILL SWITCH (Beast Mode V3)
             from zoneinfo import ZoneInfo
-            DAILY_PROFIT_TARGET = 2500
-            DAILY_MAX_LOSS = -500
+            DAILY_PROFIT_TARGET = 10000  # +$10K target (Beast Mode)
+            DAILY_MAX_LOSS = -750        # -$750 floor (wider)
             try:
                 acct_resp = requests.get(f"{self.BASE_URL}/v2/account", headers=self.headers, timeout=5)
                 if acct_resp.status_code == 200:
