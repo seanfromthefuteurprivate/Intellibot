@@ -22,28 +22,57 @@ class PolygonOptionsAdapter:
     def __init__(self):
         self.api_key = POLYGON_API_KEY
         self.base_url = POLYGON_BASE_URL
+
+        # Health monitoring integration
+        from wsb_snake.utils.polygon_health import get_polygon_monitor
+        self._health_monitor = get_polygon_monitor()
         
     def _request(self, endpoint: str, params: Optional[Dict] = None) -> Optional[Dict]:
-        """Make authenticated request to Polygon API."""
+        """Make authenticated request to Polygon API with health monitoring."""
         if not self.api_key:
             log.error("POLYGON_API_KEY not set")
             return None
-            
+
         if params is None:
             params = {}
         params["apiKey"] = self.api_key
-        
+
+        # Check rate limit with health monitor
+        can_request, rate_reason = self._health_monitor.can_make_request()
+        if not can_request:
+            log.warning(f"Health monitor blocked request: {rate_reason}")
+            return None
+
         url = f"{self.base_url}{endpoint}"
-        
+
         try:
+            # Record request
+            self._health_monitor.record_request()
+
             resp = requests.get(url, params=params, timeout=15)
+
             if resp.status_code == 200:
+                self._health_monitor.record_success()
                 return resp.json()
+            elif resp.status_code == 429:
+                log.warning(f"Polygon 429 rate limited: {endpoint}")
+                self._health_monitor.record_failure(429, "Rate limit exceeded")
+                return None
+            elif resp.status_code == 403:
+                log.error(f"Polygon 403 auth failed: {endpoint}")
+                self._health_monitor.record_failure(403, "Authentication failed")
+                return None
+            elif resp.status_code >= 500:
+                log.error(f"Polygon {resp.status_code} server error: {endpoint}")
+                self._health_monitor.record_failure(resp.status_code, f"Server error: {resp.text[:100]}")
+                return None
             else:
                 log.warning(f"Polygon API error {resp.status_code}: {resp.text[:200]}")
+                self._health_monitor.record_failure(resp.status_code, f"HTTP {resp.status_code}")
                 return None
         except Exception as e:
             log.error(f"Polygon request failed: {e}")
+            self._health_monitor.record_failure(0, str(e))
             return None
     
     def get_options_chain(

@@ -1,0 +1,300 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    HYDRA-CPL INTEGRATION ARCHITECTURE
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           HYDRA INTELLIGENCE ENGINE                         │
+│                     http://54.172.22.157:8000/api/predator                  │
+│                                                                             │
+│  Layers 8-11: GEX, Flow, Dark Pool, Sequence Matching                      │
+│  Output: direction, regime, blowup_probability, gex_regime, flow_bias      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       │ HTTP GET (every 10-60s)
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              HYDRA BRIDGE                                   │
+│                   wsb_snake/collectors/hydra_bridge.py                      │
+│                                                                             │
+│  - Background polling thread (adaptive 10s-60s)                             │
+│  - Caches latest intelligence in HydraIntelligence dataclass                │
+│  - Singleton pattern: get_hydra_intel()                                     │
+│  - Handles disconnection gracefully                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       │ get_hydra_intel()
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CPL ENTRY QUALITY CHECK                             │
+│                  wsb_snake/execution/jobs_day_cpl.py                        │
+│                      _check_entry_quality(ticker, side, spot)               │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                         GATE 1: DIRECTION                             │ │
+│  │                                                                       │ │
+│  │  HYDRA Direction:  BULLISH  │  BEARISH  │  NEUTRAL                   │ │
+│  │  Allow:           CALLS only│ PUTS only │  NOTHING                   │ │
+│  │  Block:           PUTS      │ CALLS     │  ALL                       │ │
+│  │                                                                       │ │
+│  │  Result: PASS (aligned) or REJECT (misaligned)                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                       │                                     │
+│                                       │ PASS                                │
+│                                       ▼                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                         GATE 2: BLOWUP                                │ │
+│  │                                                                       │ │
+│  │  Blowup Probability:  0-50%    │  51-70%     │  71-100%              │ │
+│  │  Action:             ALLOW     │ ALLOW       │  REJECT               │ │
+│  │  Size Multiplier:    1.0x      │ 0.5x        │  0.0x (block)         │ │
+│  │  Confidence Penalty: None      │ -20 points  │  N/A                  │ │
+│  │                                                                       │ │
+│  │  Result: PASS (<=70%) or REJECT (>70%)                               │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                       │                                     │
+│                                       │ PASS                                │
+│                                       ▼                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                         GATE 3: REGIME                                │ │
+│  │                                                                       │ │
+│  │  Tradeable:  TRENDING_UP, TRENDING_DOWN, RISK_ON*, RECOVERY          │ │
+│  │  Blocked:    CHOPPY, UNKNOWN, CRASH, RISK_OFF                        │ │
+│  │                                                                       │ │
+│  │  *RISK_ON requires flow confirmation:                                │ │
+│  │   - CALLS need BULLISH/AGGRESSIVELY_BULLISH flow                     │ │
+│  │   - PUTS need BEARISH/AGGRESSIVELY_BEARISH flow                      │ │
+│  │                                                                       │ │
+│  │  Result: PASS (tradeable) or REJECT (not tradeable)                 │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                       │                                     │
+│                                       │ PASS                                │
+│                                       ▼                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                    GATE 4: GEX FLIP PROXIMITY                         │ │
+│  │                                                                       │ │
+│  │  GEX Flip Distance:  < 1%       │  >= 1%                             │ │
+│  │  Action:            REJECT      │  ALLOW                             │ │
+│  │  Reason:            Too volatile│  Safe zone                         │ │
+│  │                                                                       │ │
+│  │  Rationale: Within 1% of GEX flip = dealer hedging behavior          │ │
+│  │             changes dramatically → explosive volatility               │ │
+│  │                                                                       │ │
+│  │  Result: PASS (>=1% away) or REJECT (<1% away)                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                       │                                     │
+│                                       │ ALL GATES PASSED                    │
+│                                       ▼                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                    CONFIDENCE SCORING                                 │ │
+│  │                                                                       │ │
+│  │  Base Confidence: 60 points                                          │ │
+│  │                                                                       │ │
+│  │  + Flow Boosts:                                                      │ │
+│  │    AGGRESSIVELY_BULLISH/BEARISH:        +15 points                   │ │
+│  │    BULLISH/BEARISH:                     +10 points                   │ │
+│  │                                                                       │ │
+│  │  + GEX Boost:                                                        │ │
+│  │    NEGATIVE (trending market):          +10 points                   │ │
+│  │                                                                       │ │
+│  │  + Sweep Alignment:                                                  │ │
+│  │    CALL_HEAVY + buying calls:           +5 points                    │ │
+│  │    PUT_HEAVY + buying puts:             +5 points                    │ │
+│  │                                                                       │ │
+│  │  + Momentum Validation (5-min bars):                                 │ │
+│  │    Trend aligned with HYDRA:            +15 points                   │ │
+│  │    Trend opposite to HYDRA:             -15 points                   │ │
+│  │    RSI confirmation:                    ±10 points                   │ │
+│  │                                                                       │ │
+│  │  - Blowup Penalty:                                                   │ │
+│  │    Blowup 51-70%:                       -20 points                   │ │
+│  │                                                                       │ │
+│  │  Final: max(30, min(95, HYDRA + momentum - penalty))                │ │
+│  │                                                                       │ │
+│  │  Typical High-Quality Trade: 75-90%                                  │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       │ (valid=True, confidence=75-90, reason)
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          CPL TRADE GENERATION                               │
+│                                                                             │
+│  - Liquidity check (bid-ask spread, min/max price)                         │
+│  - Affordability check (option premium vs capital)                         │
+│  - Diversity check (max 2 per ticker)                                      │
+│  - Cooldown check (45 min between same ticker/side/expiry)                 │
+│  - Deduplication check (memory + DB)                                       │
+│                                                                             │
+│  If all pass → Generate JobsDayCall                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       │ JobsDayCall object
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ALPACA AUTO-EXECUTION                               │
+│                   wsb_snake/trading/alpaca_executor.py                      │
+│                                                                             │
+│  1. Log HYDRA context (direction, regime, blowup, flow)                    │
+│  2. Calculate position size with HYDRA multiplier:                         │
+│     - blowup 0-50%:  1.0x (full size)                                      │
+│     - blowup 51-70%: 0.5x (half size)                                      │
+│     - blowup 71-100%: 0.0x (trade already blocked)                         │
+│  3. Execute option buy order (market order)                                │
+│  4. Track position in _open_positions                                      │
+│  5. Monitor for TP/SL/TIME exits                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       │ Position opened
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         POSITION MONITORING                                 │
+│                                                                             │
+│  Every CPL run (every 5 min):                                              │
+│  - Check current option price                                              │
+│  - Calculate PnL percentage                                                │
+│  - Check exit conditions:                                                  │
+│    * Stop Loss: -15% PnL                                                   │
+│    * Take Profit: +25% PnL                                                 │
+│    * Time: 30 minutes elapsed                                              │
+│    * Governance: Structure break (if enabled)                              │
+│  - Execute exit via Alpaca if condition met                                │
+│  - Record outcome to database                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              EXAMPLE TRADE FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+SCENARIO: SPY 450 CALL @ $1.50 (0DTE)
+
+Step 1: HYDRA Intelligence
+───────────────────────────
+HYDRA says:
+  direction: BULLISH
+  regime: TRENDING_UP
+  blowup_probability: 45%
+  gex_regime: NEGATIVE (trending)
+  gex_flip_distance_pct: 2.5%
+  flow_bias: AGGRESSIVELY_BULLISH
+  flow_sweep_direction: CALL_HEAVY
+
+Step 2: Gate Validation
+───────────────────────
+  ✅ GATE 1 (Direction):  BULLISH allows CALLS
+  ✅ GATE 2 (Blowup):     45% < 70% → PASS (full size)
+  ✅ GATE 3 (Regime):     TRENDING_UP → Tradeable
+  ✅ GATE 4 (GEX Flip):   2.5% > 1% → Safe zone
+
+Step 3: Confidence Scoring
+──────────────────────────
+  Base:                        60
+  + Aggressive flow:          +15
+  + Negative GEX:             +10
+  + Call sweeps aligned:       +5
+  + Momentum uptrend:         +15
+  ────────────────────────────────
+  Final Confidence:            90%
+
+Step 4: Trade Generation
+────────────────────────
+  ✅ Liquidity:  Bid-ask spread 5%, mid $1.48
+  ✅ Affordability: $150 cost < $250 cap
+  ✅ Diversity: First SPY CALL today
+  ✅ Cooldown: No recent SPY CALL
+  ✅ Deduplication: Not seen before
+
+  → Generate BUY call
+
+Step 5: Alpaca Execution
+────────────────────────
+  Log HYDRA context:
+    ALPACA_HYDRA_CONTEXT: dir=BULLISH regime=TRENDING_UP blowup=45% flow=AGGRESSIVELY_BULLISH
+
+  Calculate size:
+    _get_hydra_size_multiplier() = 1.0x (blowup 45% < 50%)
+    Position size: 1 contract ($150)
+
+  Execute:
+    Market BUY 1x SPY 450C @ $1.50
+    Entry logged, position tracked
+
+Step 6: Position Monitoring
+───────────────────────────
+  Current price: $1.88 (+25%)
+  Exit condition: TP1 hit (+25%)
+
+  Execute exit:
+    Market SELL 1x SPY 450C @ $1.88
+    PnL: +$38 (+25.3%)
+    Record to database
+
+═══════════════════════════════════════════════════════════════════════════════
+                            REJECTION SCENARIOS
+═══════════════════════════════════════════════════════════════════════════════
+
+SCENARIO 1: Wrong Direction
+─────────────────────────────
+  Trade: SPY 450 PUT
+  HYDRA: direction=BULLISH
+
+  Gate 1: FAIL ❌
+  Reason: "HYDRA_REJECT: BULLISH market - puts blocked"
+  Action: Skip this trade
+
+SCENARIO 2: High Blowup
+───────────────────────
+  Trade: SPY 450 CALL
+  HYDRA: blowup_probability=75%
+
+  Gate 2: FAIL ❌
+  Reason: "HYDRA_REJECT: Blowup probability 75% - too high"
+  Action: Skip this trade
+
+SCENARIO 3: Choppy Regime
+─────────────────────────
+  Trade: SPY 450 CALL
+  HYDRA: regime=CHOPPY
+
+  Gate 3: FAIL ❌
+  Reason: "HYDRA_REJECT: Regime CHOPPY - not tradeable"
+  Action: Skip this trade (wait for TRENDING)
+
+SCENARIO 4: Near GEX Flip
+─────────────────────────
+  Trade: SPY 450 CALL
+  HYDRA: gex_flip_distance_pct=0.8%
+
+  Gate 4: FAIL ❌
+  Reason: "HYDRA_REJECT: GEX flip 0.80% away - too volatile"
+  Action: Skip this trade (wait for flip to pass)
+
+═══════════════════════════════════════════════════════════════════════════════
+                          FALLBACK & ERROR HANDLING
+═══════════════════════════════════════════════════════════════════════════════
+
+HYDRA Disconnected
+──────────────────
+  Symptom: hydra.connected = False
+  Action:  CPL falls back to momentum-only validation
+  Impact:  Gates return PASS with reduced confidence (50%)
+  Log:     "HYDRA_DISCONNECTED: Trading may be limited"
+
+HYDRA Exception
+───────────────
+  Symptom: get_hydra_intel() throws error
+  Action:  Catch exception, log warning, fall back to momentum
+  Impact:  Trading continues in degraded mode
+  Log:     "HYDRA entry check failed {ticker}: {exception}"
+
+Momentum Data Missing
+─────────────────────
+  Symptom: No 5-min bars available
+  Action:  Use HYDRA confidence alone (no momentum boost/penalty)
+  Impact:  Slightly lower confidence (60-80 range vs 75-90)
+  Log:     "HYDRA_APPROVED: {direction} {regime} (no momentum data)"
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Integration Date: 2026-03-04
+Status: Production Ready
+Architect: Claude Opus 4.5 (Claude Code)

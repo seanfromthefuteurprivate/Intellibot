@@ -78,6 +78,10 @@ class EnhancedPolygonAdapter:
         self._v3_available: Optional[bool] = None
         self._v3_checked = False
 
+        # Health monitoring integration
+        from wsb_snake.utils.polygon_health import get_polygon_monitor
+        self._health_monitor = get_polygon_monitor()
+
     def _classify_request_type(self, endpoint: str) -> str:
         """Classify an endpoint to determine priority and cache TTL."""
         endpoint_lower = endpoint.lower()
@@ -132,10 +136,27 @@ class EnhancedPolygonAdapter:
         # Check cache first (use type-specific TTL or override)
         cache_ttl = cache_ttl_override if cache_ttl_override is not None else self._get_cache_ttl(request_type)
         cache_key = f"{endpoint}:{str(sorted(params.items()))}"
+
+        # Check health monitor cache FIRST
+        cached_data = self._health_monitor.get_cached(cache_key)
+        if cached_data is not None:
+            return cached_data
+
+        # Legacy cache check (for backward compatibility)
         if cache_key in self._cache:
             cached_time, cached_data = self._cache[cache_key]
             if (datetime.now() - cached_time).seconds < cache_ttl:
                 return cached_data
+
+        # Health monitor rate limit check
+        can_request, rate_reason = self._health_monitor.can_make_request()
+        if not can_request:
+            log.warning(f"Health monitor blocked request: {rate_reason}")
+            # Try to return stale cache
+            if cache_key in self._cache:
+                log.debug(f"Using stale cache due to rate limit: {cache_key}")
+                return self._cache[cache_key][1]
+            return None
 
         # Rate limiting - track requests and throttle if needed
         now = datetime.now()
@@ -174,25 +195,60 @@ class EnhancedPolygonAdapter:
         url = f"{self.base_url}{endpoint}"
 
         try:
+            # Record request with health monitor
+            self._health_monitor.record_request()
+
             resp = requests.get(url, params=params, timeout=10)
             self._request_times.append(datetime.now())
 
             if resp.status_code == 200:
                 data = resp.json()
+                # Cache in both places
                 self._cache[cache_key] = (datetime.now(), data)
+                self._health_monitor.set_cache(cache_key, data, request_type)
+                # Record success
+                self._health_monitor.record_success()
                 return data
             elif resp.status_code == 429:
-                # Rate limited by API - use stale cache if available
+                # Rate limited by API - record failure and use stale cache
                 log.warning(f"Polygon 429 rate limited: {endpoint}")
+                self._health_monitor.record_failure(429, "Rate limit exceeded")
+
+                # Try health monitor cache first
+                cached = self._health_monitor.get_cached(cache_key)
+                if cached:
+                    return cached
+
+                if cache_key in self._cache:
+                    return self._cache[cache_key][1]
+                return None
+            elif resp.status_code == 403:
+                # Authentication failure - CRITICAL
+                log.error(f"Polygon 403 auth failed: {endpoint}")
+                self._health_monitor.record_failure(403, "Authentication failed - check API key")
+                return None
+            elif resp.status_code >= 500:
+                # Server error
+                log.error(f"Polygon {resp.status_code} server error: {endpoint}")
+                self._health_monitor.record_failure(resp.status_code, f"Server error: {resp.text[:100]}")
+                # Try stale cache
+                cached = self._health_monitor.get_cached(cache_key)
+                if cached:
+                    return cached
                 if cache_key in self._cache:
                     return self._cache[cache_key][1]
                 return None
             else:
                 log.warning(f"Polygon API {resp.status_code}: {endpoint}")
+                self._health_monitor.record_failure(resp.status_code, f"HTTP {resp.status_code}")
                 return None
         except Exception as e:
             log.error(f"Polygon request failed: {e}")
+            self._health_monitor.record_failure(0, str(e))
             # Return stale cache on network error
+            cached = self._health_monitor.get_cached(cache_key)
+            if cached:
+                return cached
             if cache_key in self._cache:
                 return self._cache[cache_key][1]
             return None

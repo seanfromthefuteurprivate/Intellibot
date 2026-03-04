@@ -27,6 +27,7 @@ from wsb_snake.db.database import save_cpl_outcome
 from wsb_snake.utils.logger import get_logger
 from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.trading.risk_governor import TradingEngine
+from wsb_snake.collectors.hydra_bridge import get_hydra_intel
 
 # Apex Governance Layer (toggleable)
 try:
@@ -145,6 +146,27 @@ def _get_spot_price(ticker: str) -> Optional[float]:
         if snap and snap.get("price"):
             return float(snap["price"])
     return None
+
+
+def _get_hydra_size_multiplier() -> float:
+    """
+    Get position size multiplier based on HYDRA blowup probability.
+
+    Returns:
+        1.0 (full size) if blowup <= 50
+        0.5 (half size) if blowup 51-70
+        0.0 (no trade) if blowup > 70
+    """
+    try:
+        hydra = get_hydra_intel()
+        if hydra.blowup_probability > 70:
+            return 0.0  # Block trade
+        elif hydra.blowup_probability > 50:
+            return 0.5  # Half size
+        return 1.0  # Full size
+    except Exception as e:
+        logger.warning(f"HYDRA size multiplier failed: {e}")
+        return 1.0  # Default to full size on error
 
 
 def _is_affordable(contract: Dict[str, Any], max_cap_override: Optional[float] = None) -> bool:
@@ -319,55 +341,186 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
 
 def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
     """
-    SMART ENTRY: Validate momentum/trend before entry.
-    Only buy CALLS when trending up, PUTS when trending down.
+    PREDICTIVE ENTRY VALIDATION V2.0 - Strict HYDRA + Volume Confirmation.
+
+    PHILOSOPHY: When data is missing, REJECT. No defaults to True.
+    Target: 55%+ win rate with 2:1 R:R on 0DTE.
+
+    HARD GATES (ALL must pass):
+    0. Polygon health: API must be working
+    1. HYDRA connection: Must be connected and fresh (<3 min)
+    2. Direction gate: BULLISH=calls only, BEARISH=puts only, NEUTRAL=REJECT
+    3. Regime gate: TRENDING/RISK_ON/RECOVERY=trade, CHOPPY/UNKNOWN=REJECT
+    4. Blowup gate: >70% = REJECT (too dangerous)
+    5. GEX flip proximity: <1% to flip = REJECT
+    6. Volume confirmation: Price direction + 1.2x volume = REQUIRED
+
     Returns: (is_valid, confidence_score, reason)
     """
+    side_upper = side.upper()
+
+    # ========== GATE 0: POLYGON HEALTH ==========
     try:
-        # 1. Get 5-minute bars for trend analysis
-        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=6)
-        if not bars or len(bars) < 3:
-            return True, 50, "insufficient_data"
+        from wsb_snake.utils.polygon_health import polygon_health_check
+        is_healthy, health_reason = polygon_health_check()
+        if not is_healthy:
+            logger.error(f"ENTRY_V2_REJECT: {ticker} {side_upper} - Polygon unhealthy: {health_reason}")
+            return False, 0, f"POLYGON_UNHEALTHY: {health_reason}"
+    except ImportError:
+        pass  # Module not available, skip this check
 
-        # 2. Calculate momentum (last 3 bars direction) - bars[0] is most recent
-        closes = [b.get('close', b.get('c', 0)) for b in bars[:3]]
-        if not all(closes):
-            return True, 50, "missing_close_data"
-
-        is_uptrend = closes[0] > closes[1] > closes[2]  # Most recent > older = uptrend
-        is_downtrend = closes[0] < closes[1] < closes[2]  # Most recent < older = downtrend
-
-        # 3. Get RSI for overbought/oversold check
-        rsi = 50  # Default neutral
-        try:
-            rsi_data = polygon_enhanced.get_rsi(ticker) if hasattr(polygon_enhanced, 'get_rsi') else None
-            if rsi_data and rsi_data.get('current'):
-                rsi = float(rsi_data['current'])
-        except Exception:
-            pass
-
-        # 4. Validate direction alignment
-        if side.upper() == "CALL":
-            if is_downtrend:
-                return False, 20, f"MOMENTUM_REJECT: {ticker} downtrend, skip CALL"
-            if rsi > 75:
-                return False, 25, f"MOMENTUM_REJECT: {ticker} RSI {rsi:.0f} overbought, skip CALL"
-            confidence = 70 if is_uptrend else 50
-            if rsi < 35:
-                confidence += 15  # Oversold bounce potential
-        else:  # PUT
-            if is_uptrend:
-                return False, 20, f"MOMENTUM_REJECT: {ticker} uptrend, skip PUT"
-            if rsi < 25:
-                return False, 25, f"MOMENTUM_REJECT: {ticker} RSI {rsi:.0f} oversold, skip PUT"
-            confidence = 70 if is_downtrend else 50
-            if rsi > 65:
-                confidence += 15  # Overbought reversal potential
-
-        return True, confidence, "momentum_ok"
+    # ========== GATE 1: HYDRA CONNECTION ==========
+    try:
+        hydra = get_hydra_intel()
     except Exception as e:
-        logger.debug(f"Entry quality check failed {ticker}: {e}")
-        return True, 50, "check_failed"
+        logger.warning(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA unavailable: {e}")
+        return False, 0, "HYDRA_UNAVAILABLE: Cannot validate without intelligence"
+
+    if not hydra.connected:
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA disconnected")
+        return False, 0, "HYDRA_DISCONNECTED: No intelligence connection"
+
+    if hydra.is_stale():
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA data stale (>3 min)")
+        return False, 0, "HYDRA_STALE: Intelligence data too old"
+
+    # ========== GATE 2: DIRECTION ALIGNMENT (HARD) ==========
+    if hydra.direction == "NEUTRAL":
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - HYDRA NEUTRAL")
+        return False, 0, "HYDRA_NEUTRAL: No directional edge - no trade"
+
+    if side_upper == "CALL" and hydra.direction == "BEARISH":
+        logger.info(f"ENTRY_V2_REJECT: {ticker} CALL blocked - HYDRA BEARISH")
+        return False, 0, "HYDRA_CONFLICT: CALL blocked (market BEARISH)"
+
+    if side_upper == "PUT" and hydra.direction == "BULLISH":
+        logger.info(f"ENTRY_V2_REJECT: {ticker} PUT blocked - HYDRA BULLISH")
+        return False, 0, "HYDRA_CONFLICT: PUT blocked (market BULLISH)"
+
+    # ========== GATE 3: REGIME CHECK ==========
+    untradeable_regimes = {"UNKNOWN", "CHOPPY", "NEUTRAL"}
+    if hydra.regime in untradeable_regimes:
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - regime {hydra.regime}")
+        return False, 0, f"REGIME_UNCERTAIN: {hydra.regime} - no predictable structure"
+
+    # Regime-direction alignment for edge cases
+    if hydra.regime == "RISK_OFF" and side_upper == "CALL":
+        if hydra.flow_bias not in ["BULLISH", "AGGRESSIVELY_BULLISH"]:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL in RISK_OFF without bullish flow")
+            return False, 0, "REGIME_CONFLICT: CALL in RISK_OFF needs bullish flow"
+
+    if hydra.regime == "RISK_ON" and side_upper == "PUT":
+        if hydra.flow_bias not in ["BEARISH", "AGGRESSIVELY_BEARISH"]:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT in RISK_ON without bearish flow")
+            return False, 0, "REGIME_CONFLICT: PUT in RISK_ON needs bearish flow"
+
+    # ========== GATE 4: BLOWUP PROBABILITY ==========
+    if hydra.blowup_probability > 70:
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - blowup {hydra.blowup_probability}%")
+        return False, 0, f"BLOWUP_RISK: {hydra.blowup_probability}% probability - too dangerous"
+
+    blowup_penalty = 20 if hydra.blowup_probability > 50 else 0
+
+    # ========== GATE 5: GEX FLIP PROXIMITY ==========
+    if hydra.gex_flip_distance_pct < 1.0:
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - GEX flip {hydra.gex_flip_distance_pct:.2f}%")
+        return False, 0, f"GEX_FLIP_PROXIMITY: {hydra.gex_flip_distance_pct:.1f}% from flip"
+
+    # ========== GATE 6: VOLUME CONFIRMATION (CRITICAL - THE EDGE) ==========
+    try:
+        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=8)
+    except Exception as e:
+        logger.warning(f"ENTRY_V2_REJECT: {ticker} {side_upper} - bars fetch failed: {e}")
+        return False, 0, "DATA_FETCH_FAILED: Cannot get price bars"
+
+    # STRICT: Require minimum bars for volume analysis
+    if not bars or len(bars) < 5:
+        logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - insufficient bars ({len(bars) if bars else 0})")
+        return False, 0, "DATA_INSUFFICIENT: Need 5+ bars for volume confirmation"
+
+    # Extract closes and volumes
+    closes = []
+    volumes = []
+    for b in bars[:5]:
+        c = b.get('close') or b.get('c')
+        v = b.get('volume') or b.get('v') or 0
+        if c is None:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} {side_upper} - missing close data")
+            return False, 0, "DATA_INCOMPLETE: Missing close prices"
+        closes.append(c)
+        volumes.append(v)
+
+    # Calculate price momentum (bars[0] is most recent due to desc sort)
+    price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
+
+    # Volume ratio: recent 2 bars vs older 3 bars
+    recent_vol_avg = sum(volumes[:2]) / 2
+    older_vol_avg = sum(volumes[2:]) / len(volumes[2:]) if len(volumes) > 2 else 1
+    volume_ratio = recent_vol_avg / older_vol_avg if older_vol_avg > 0 else 1.0
+
+    # VOLUME CONFIRMATION: Must have 1.2x+ volume in trade direction
+    MIN_VOLUME_RATIO = 1.2
+
+    if side_upper == "CALL":
+        if price_change_pct <= 0:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL - price declining {price_change_pct:+.2f}%")
+            return False, 0, f"MOMENTUM_AGAINST: Price {price_change_pct:+.2f}% (need positive for CALL)"
+        if volume_ratio < MIN_VOLUME_RATIO:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} CALL - weak volume {volume_ratio:.2f}x")
+            return False, 0, f"VOLUME_WEAK: {volume_ratio:.2f}x < {MIN_VOLUME_RATIO}x required"
+    else:  # PUT
+        if price_change_pct >= 0:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT - price rising {price_change_pct:+.2f}%")
+            return False, 0, f"MOMENTUM_AGAINST: Price {price_change_pct:+.2f}% (need negative for PUT)"
+        if volume_ratio < MIN_VOLUME_RATIO:
+            logger.info(f"ENTRY_V2_REJECT: {ticker} PUT - weak volume {volume_ratio:.2f}x")
+            return False, 0, f"VOLUME_WEAK: {volume_ratio:.2f}x < {MIN_VOLUME_RATIO}x required"
+
+    # ========== ALL GATES PASSED - CALCULATE CONFIDENCE ==========
+    base_confidence = 55  # Starting point when all gates pass
+
+    # Flow bias boost
+    flow_boost = 0
+    if side_upper == "CALL" and hydra.flow_bias in ["BULLISH", "AGGRESSIVELY_BULLISH"]:
+        flow_boost = 5 if hydra.flow_bias == "BULLISH" else 10
+    elif side_upper == "PUT" and hydra.flow_bias in ["BEARISH", "AGGRESSIVELY_BEARISH"]:
+        flow_boost = 5 if hydra.flow_bias == "BEARISH" else 10
+
+    # GEX regime boost (negative GEX = trends amplify)
+    gex_boost = 10 if hydra.gex_regime == "NEGATIVE" else 0
+
+    # Sweep direction boost
+    sweep_boost = 0
+    if hydra.flow_sweep_direction == "CALL_HEAVY" and side_upper == "CALL":
+        sweep_boost = 5
+    elif hydra.flow_sweep_direction == "PUT_HEAVY" and side_upper == "PUT":
+        sweep_boost = 5
+
+    # Volume strength boost (capped)
+    volume_boost = min(10, (volume_ratio - 1.0) * 10)
+
+    # Momentum strength boost (capped)
+    momentum_boost = min(10, abs(price_change_pct) * 3)
+
+    # Historical win rate boost (Layer 11)
+    historical_boost = 0
+    if hydra.seq_historical_win_rate > 0.55:
+        historical_boost = int((hydra.seq_historical_win_rate - 0.5) * 30)
+
+    # Final confidence
+    final_confidence = min(95, max(55,
+        base_confidence + flow_boost + gex_boost + sweep_boost +
+        volume_boost + momentum_boost + historical_boost - blowup_penalty
+    ))
+
+    reason = (
+        f"ENTRY_V2_APPROVED: HYDRA={hydra.direction} regime={hydra.regime} "
+        f"GEX={hydra.gex_regime} flow={hydra.flow_bias} "
+        f"vol={volume_ratio:.2f}x mom={price_change_pct:+.2f}%"
+    )
+    logger.info(f"{ticker} {side_upper}: {reason} | conf={final_confidence}%")
+
+    return True, final_confidence, reason
 
 
 def _check_exits_and_emit_sells(broadcast: bool, dry_run: bool, untruncated_tails: bool = False) -> List[JobsDayCall]:
@@ -623,6 +776,20 @@ class JobsDayCPL:
         self.event_date = get_todays_expiry_date()
         logger.debug(f"CPL scanning for expiry: {self.event_date}")
 
+        # HYDRA INTELLIGENCE STATUS
+        try:
+            hydra = get_hydra_intel()
+            logger.info(
+                f"HYDRA_STATUS: dir={hydra.direction} regime={hydra.regime} "
+                f"blowup={hydra.blowup_probability}% gex_regime={hydra.gex_regime} "
+                f"gex_flip_dist={hydra.gex_flip_distance_pct:.2f}% flow={hydra.flow_bias} "
+                f"connected={hydra.connected}"
+            )
+            if not hydra.connected:
+                logger.warning("HYDRA_DISCONNECTED: Trading may be limited without intelligence")
+        except Exception as e:
+            logger.warning(f"HYDRA status check failed: {e}")
+
         # SNIPER MODE: Session, Position, and P&L checks
         import os
         import requests as req
@@ -696,10 +863,8 @@ class JobsDayCPL:
 
         # Collect all candidates first
         for ticker in self.watchlist:
-            # V7 OWNS SPY 0DTE - CPL does NOT touch it
-            if ticker.upper() == "SPY" and self.event_date == get_todays_expiry_date():
-                logger.info(f"CPL_BLOCKED: SPY 0DTE now handled by V7 engine")
-                continue
+            # NOTE: V7 was disabled - SPY 0DTE now handled by CPL with HYDRA gates
+            # (Block removed 2026-03-04 - CPL trades SPY with full HYDRA validation)
             price = _get_spot_price(ticker)
             if not price or price <= 0:
                 logger.debug(f"CPL: no price for {ticker}, skip")
@@ -984,6 +1149,16 @@ class JobsDayCPL:
                         logger.info(f"ALPACA: Attempting execution for {call.underlying} {call.side} ${call.strike}")
                         logger.info(f"ALPACA: option_symbol={call.option_symbol}, entry_trigger={call.entry_trigger}")
                         try:
+                            # Log HYDRA context for this trade
+                            try:
+                                hydra = get_hydra_intel()
+                                logger.info(
+                                    f"ALPACA_HYDRA_CONTEXT: dir={hydra.direction} regime={hydra.regime} "
+                                    f"blowup={hydra.blowup_probability}% flow={hydra.flow_bias}"
+                                )
+                            except Exception:
+                                pass
+
                             option_premium = call.entry_trigger.get("price", 0)
                             logger.info(f"ALPACA: option_premium=${option_premium:.2f}")
                             # Direction: Always "long" since we're BUYING options (calls or puts)

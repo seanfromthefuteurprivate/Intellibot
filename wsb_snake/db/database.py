@@ -24,6 +24,8 @@ def get_connection() -> sqlite3.Connection:
     """Get database connection."""
     conn = sqlite3.connect(DB_PATH, timeout=_CONNECTION_TIMEOUT)
     conn.row_factory = sqlite3.Row
+    # Enable WAL mode for better concurrency (prevents "database is locked" errors)
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
