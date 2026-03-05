@@ -458,9 +458,11 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         return False, 0, "HARD_GATE_HYDRA: Stale data"
 
     # Gate 2: Direction conflict (hard block opposite direction)
+    # NOTE: NEUTRAL is no longer a hard block - allows trading with reduced conviction
+    # when HYDRA has no clear directional signal (common during low-volume periods)
     if hydra.direction == "NEUTRAL":
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA NEUTRAL")
-        return False, 0, "HARD_GATE_DIRECTION: NEUTRAL market"
+        logger.info(f"BEAST_WARNING: {ticker} {side_upper} - HYDRA NEUTRAL (proceeding with caution)")
+        # Don't block - just log warning and continue to conviction scoring
 
     if side_upper == "CALL" and hydra.direction == "BEARISH":
         logger.info(f"BEAST_REJECT: {ticker} CALL blocked - HYDRA BEARISH")
@@ -484,10 +486,14 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
     elif hydra.gex_flip_point == 0:
         logger.debug(f"BEAST_SKIP_GEX_GATE: {ticker} - GEX data unavailable (flip_point=0)")
 
-    # Gate 5: Regime (hard block CHOPPY/UNKNOWN)
-    if hydra.regime in {"UNKNOWN", "CHOPPY"}:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - regime {hydra.regime}")
-        return False, 0, f"HARD_GATE_REGIME: {hydra.regime}"
+    # Gate 5: Regime (hard block CHOPPY only, UNKNOWN = missing data)
+    # NOTE: UNKNOWN regime is no longer a hard block - indicates HYDRA data unavailable
+    # CHOPPY is a valid signal to stay out (high whipsaw risk)
+    if hydra.regime == "CHOPPY":
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - regime CHOPPY")
+        return False, 0, "HARD_GATE_REGIME: CHOPPY"
+    elif hydra.regime == "UNKNOWN":
+        logger.info(f"BEAST_WARNING: {ticker} {side_upper} - regime UNKNOWN (proceeding with caution)")
 
     # Gate 6: Data availability
     try:
