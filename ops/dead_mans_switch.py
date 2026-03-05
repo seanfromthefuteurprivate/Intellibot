@@ -159,6 +159,52 @@ class DeadMansSwitch:
             logger.error(f"Failed to query last signal: {e}")
             return None
 
+    def get_last_cpl_call_time(self) -> Optional[datetime]:
+        """
+        Get timestamp of last CPL call from database.
+        CPL (Convexity Proof Layer) is the main active trading engine.
+
+        Returns:
+            Datetime of last CPL call, or None if no calls
+        """
+        if not os.path.exists(self.db_path):
+            logger.warning(f"Database not found: {self.db_path}")
+            return None
+
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5)
+            cursor = conn.cursor()
+
+            # Query cpl_calls table - this is where CPL engine writes
+            cursor.execute(
+                """
+                SELECT MAX(timestamp_et)
+                FROM cpl_calls
+            """
+            )
+
+            result = cursor.fetchone()
+            conn.close()
+
+            if result and result[0]:
+                # Parse timestamp (ISO format with timezone)
+                ts = result[0]
+                # Handle timezone-aware strings
+                if '+' in ts or ts.endswith('Z'):
+                    ts = ts.replace('Z', '+00:00')
+                    return datetime.fromisoformat(ts).replace(tzinfo=None)
+                return datetime.fromisoformat(ts)
+
+            return None
+
+        except sqlite3.OperationalError as e:
+            # Table might not exist
+            logger.debug(f"CPL calls table query failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to query last CPL call: {e}")
+            return None
+
     def check(self) -> tuple[bool, str]:
         """
         Check if system is alive based on trading activity.
@@ -188,7 +234,7 @@ class DeadMansSwitch:
                     )
                     return False, message
 
-        # Check last signal
+        # Check last signal (from signals table)
         last_signal = self.get_last_signal_time()
         if last_signal:
             silence_duration = now - last_signal
@@ -203,8 +249,23 @@ class DeadMansSwitch:
                     )
                     return False, message
 
-        # If we have no trade or signal data at all during market hours, that's suspicious
-        if not last_trade and not last_signal:
+        # Check last CPL call (CPL is the main active trading engine)
+        last_cpl = self.get_last_cpl_call_time()
+        if last_cpl:
+            silence_duration = now - last_cpl
+            if silence_duration > self.silence_threshold:
+                if self.last_alert is None or (now - self.last_alert) > timedelta(
+                    hours=1
+                ):
+                    self.last_alert = now
+                    message = (
+                        f"No CPL calls in {silence_duration.total_seconds() / 60:.1f}m "
+                        f"(last: {last_cpl.strftime('%H:%M:%S')})"
+                    )
+                    return False, message
+
+        # If we have no trade, signal, or CPL call data at all during market hours, that's suspicious
+        if not last_trade and not last_signal and not last_cpl:
             return False, "No trade or signal data found in database"
 
         return True, "Trading activity normal"
@@ -213,11 +274,13 @@ class DeadMansSwitch:
         """Get current status for monitoring."""
         last_trade = self.get_last_trade_time()
         last_signal = self.get_last_signal_time()
+        last_cpl = self.get_last_cpl_call_time()
 
         return {
             "is_market_hours": self.is_market_hours(),
             "last_trade": last_trade.isoformat() if last_trade else None,
             "last_signal": last_signal.isoformat() if last_signal else None,
+            "last_cpl_call": last_cpl.isoformat() if last_cpl else None,
             "silence_threshold_minutes": self.silence_threshold.total_seconds() / 60,
             "database_path": self.db_path,
             "database_exists": os.path.exists(self.db_path),

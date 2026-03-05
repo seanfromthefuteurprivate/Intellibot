@@ -476,9 +476,13 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         return False, 0, f"HARD_GATE_BLOWUP: {hydra.blowup_probability}%"
 
     # Gate 4: GEX flip proximity
-    if hydra.gex_flip_distance_pct < 1.0:
+    # NOTE: Skip gate if GEX data appears missing (flip_point=0 or flip_distance=0 indicates unavailable data)
+    # Only apply gate when we have valid GEX data (flip_point > 0)
+    if hydra.gex_flip_point > 0 and hydra.gex_flip_distance_pct < 1.0:
         logger.info(f"BEAST_REJECT: {ticker} {side_upper} - GEX flip {hydra.gex_flip_distance_pct:.2f}%")
         return False, 0, f"HARD_GATE_GEX_FLIP: {hydra.gex_flip_distance_pct:.1f}%"
+    elif hydra.gex_flip_point == 0:
+        logger.debug(f"BEAST_SKIP_GEX_GATE: {ticker} - GEX data unavailable (flip_point=0)")
 
     # Gate 5: Regime (hard block CHOPPY/UNKNOWN)
     if hydra.regime in {"UNKNOWN", "CHOPPY"}:
