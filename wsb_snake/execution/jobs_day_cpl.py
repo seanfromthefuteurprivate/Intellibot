@@ -496,20 +496,22 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         logger.info(f"BEAST_WARNING: {ticker} {side_upper} - regime UNKNOWN (proceeding with caution)")
 
     # Gate 6: Data availability
+    # NOTE: Reduced minimum from 5 to 2 bars - allows trading with limited data
+    # when Polygon has temporary gaps. 2 bars is minimum for price change calculation.
     try:
         bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=8)
     except Exception as e:
         logger.warning(f"BEAST_REJECT: {ticker} {side_upper} - bars failed: {e}")
         return False, 0, "HARD_GATE_DATA: Bars unavailable"
 
-    if not bars or len(bars) < 5:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - insufficient bars")
+    if not bars or len(bars) < 2:
+        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - insufficient bars (got {len(bars) if bars else 0})")
         return False, 0, "HARD_GATE_DATA: Insufficient bars"
 
-    # Extract price/volume data
+    # Extract price/volume data (use available bars, up to 5)
     closes = []
     volumes = []
-    for b in bars[:5]:
+    for b in bars[:min(5, len(bars))]:
         c = b.get('close') or b.get('c')
         v = b.get('volume') or b.get('v') or 0
         if c is None:
@@ -518,8 +520,8 @@ def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, flo
         volumes.append(v)
 
     price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
-    recent_vol_avg = sum(volumes[:2]) / 2
-    older_vol_avg = sum(volumes[2:]) / len(volumes[2:]) if len(volumes) > 2 else 1
+    recent_vol_avg = sum(volumes[:min(2, len(volumes))]) / min(2, len(volumes))
+    older_vol_avg = sum(volumes[2:]) / len(volumes[2:]) if len(volumes) > 2 else recent_vol_avg
     volume_ratio = recent_vol_avg / older_vol_avg if older_vol_avg > 0 else 1.0
 
     # Gate 7: Basic momentum alignment (must be in right direction)
