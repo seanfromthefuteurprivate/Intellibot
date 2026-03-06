@@ -49,6 +49,55 @@ _direction_lock = {}  # {ticker: "CALL" or "PUT", "_last_reset": "YYYY-MM-DD"}
 # Format: {"SPY": {"high": 585.50, "low": 584.20, "date": "2026-03-04"}, ...}
 _opening_range = {}
 
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    SECOND BRAIN INTEGRATION                                   ║
+# ║              Persistent memory for cross-session context                      ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+SECOND_BRAIN_URL = "http://98.82.24.119:8080"
+
+def _report_trade_to_second_brain(
+    ticker: str,
+    side: str,
+    strike: float,
+    entry_price: float,
+    option_symbol: str,
+    confidence: float,
+    signals: List[str] = None,
+    note: str = None
+) -> bool:
+    """
+    Report a trade execution to Second Brain for persistent memory.
+
+    This ensures trade history persists across Claude Code context resets.
+    """
+    import requests as req
+    try:
+        payload = {
+            "ticker": ticker,
+            "side": side,
+            "strike": strike,
+            "entry": entry_price,
+            "option_symbol": option_symbol,
+            "conviction": confidence,
+            "signals": signals or [],
+            "note": note or f"V6_SNIPER_{side}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        resp = req.post(
+            f"{SECOND_BRAIN_URL}/api/report/trade",
+            json=payload,
+            timeout=5
+        )
+        if resp.status_code == 200:
+            logger.info(f"SECOND_BRAIN: Trade reported - {ticker} {side} ${strike}")
+            return True
+        else:
+            logger.warning(f"SECOND_BRAIN: Report failed ({resp.status_code})")
+            return False
+    except Exception as e:
+        logger.warning(f"SECOND_BRAIN: Report error - {e}")
+        return False
+
 
 def _update_opening_range():
     """
@@ -1084,6 +1133,18 @@ class JobsDayCPL:
                                 _v6_state["trade_complete"] = True
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
+
+                                # SECOND BRAIN: Report HIGH HITTER trade
+                                _report_trade_to_second_brain(
+                                    ticker=call.underlying,
+                                    side=call.side,
+                                    strike=call.strike,
+                                    entry_price=option_premium,
+                                    option_symbol=alpaca_pos.option_symbol,
+                                    confidence=real_confidence,
+                                    signals=["HIGH_HITTER", f"V6_{_v6_state['daily_direction']}"],
+                                    note=f"HIGH_HITTER executed at {real_confidence:.0f}% confidence"
+                                )
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
@@ -1291,6 +1352,20 @@ class JobsDayCPL:
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
                                 send_alert(f"🎯 V6 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
+
+                                # ═══════════════════════════════════════════════════════════════
+                                # SECOND BRAIN: Report trade for persistent memory
+                                # ═══════════════════════════════════════════════════════════════
+                                _report_trade_to_second_brain(
+                                    ticker=call.underlying,
+                                    side=call.side,
+                                    strike=call.strike,
+                                    entry_price=call.entry_trigger.get("price", 0),
+                                    option_symbol=alpaca_pos.option_symbol,
+                                    confidence=real_confidence,
+                                    signals=[f"V6_SNIPER_{_v6_state['daily_direction']}"],
+                                    note=f"V6_SNIPER executed at {real_confidence:.0f}% confidence"
+                                )
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
