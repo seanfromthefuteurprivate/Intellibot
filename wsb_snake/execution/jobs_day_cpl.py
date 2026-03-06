@@ -123,7 +123,7 @@ TARGET_BUY_CALLS = 3
 SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
 DAILY_PROFIT_TARGET = 10000         # +$10,000 = halt (Beast Mode)
-DAILY_MAX_LOSS = -750               # -$750 = halt (wider floor)
+DAILY_MAX_LOSS = -5000              # -$5000 = halt (testing V6 with Week 1 drawdown)
 SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents API lag race)
 
 # Local tracking to prevent API lag race condition (mutable dict for nested scope)
