@@ -248,25 +248,18 @@ def _determine_v6_direction() -> Optional[str]:
     if _v6_state["direction_set"]:
         return _v6_state["daily_direction"]
 
-    # Get SPY opening bar and current price
-    today_str = et_now.strftime("%Y-%m-%d")
+    # Get SPY snapshot with today's open and current price
     try:
-        # Get the 9:30 opening bar
-        opening_bars = polygon_enhanced.get_intraday_bars(
-            "SPY", timespan="minute", multiplier=5, limit=1,
-            from_time=f"{today_str}T09:30:00", to_time=f"{today_str}T09:35:00"
-        )
-        if not opening_bars:
-            logger.warning("V6_DIRECTION: No opening bar for SPY")
+        # Use snapshot which includes today_open and change_pct
+        spy_snapshot = polygon_enhanced.get_snapshot("SPY")
+        if not spy_snapshot:
+            logger.warning("V6_DIRECTION: No snapshot for SPY")
             return None
 
-        open_price = opening_bars[0].get('open') or opening_bars[0].get('o')
-        if not open_price:
-            return None
-
-        # Get current price
-        current_price = _get_spot_price("SPY")
-        if not current_price:
+        open_price = spy_snapshot.get("today_open")
+        current_price = spy_snapshot.get("price")
+        if not open_price or not current_price:
+            logger.warning(f"V6_DIRECTION: Missing price data (open={open_price}, current={current_price})")
             return None
 
         # Calculate change percentage
