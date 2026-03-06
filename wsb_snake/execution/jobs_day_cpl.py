@@ -107,19 +107,14 @@ def get_todays_expiry_date() -> str:
 # Dynamic 0DTE expiry: always use today's date for SPY/QQQ/IWM daily expirations
 CPL_EVENT_DATE = get_todays_expiry_date()
 # Strike mode: full event-vol watchlist to capture all macro/WSB events (NFP day + risk-off/earnings/crypto days)
-# Index: SPY, QQQ, IWM, DIA | Vol: VXX, UVXY | Rates: TLT, IEF | Dollar: UUP | Metals: GLD, SLV
-# Crypto beta: MSTR, COIN, MARA, RIOT | AI/mega: NVDA, TSLA, AAPL, AMZN, META, GOOGL, MSFT, AMD
-# Sectors: XLF, ITB, XHB, XLY, XLV, GDX
-CPL_WATCHLIST = [
-    "SPY", "QQQ", "DIA",                          # core index 0DTE (IWM removed - illiquid)
-    "VXX", "UVXY",                                # panic meter (VIX products)
-    "TLT", "IEF", "XLF",                          # rates, intermediate Treasuries, financials
-    "UUP", "GLD", "SLV", "GDX",                   # dollar, metals, gold miners
-    "MSTR", "COIN", "MARA", "RIOT",               # crypto beta (WSB focus)
-    "NVDA", "TSLA", "AAPL", "AMZN", "META", "GOOGL", "MSFT", "AMD",  # AI / mega-cap
-    "ITB", "XHB", "XLY", "XLV",                   # homebuilders, consumer, healthcare
-    "NBIS", "RKLB", "ASTS", "LUNR", "PL", "ONDS", "SLS",  # WSB 0DTE / momentum (NBIS spot vs strike context)
-]
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                           V6 SNIPER MODE                                      ║
+# ║                   SPY + QQQ ONLY — ONE TRADE PER DAY                         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# LESSON LEARNED (Week 1): V1 with NO filters found QQQ $609C winner (+$1,551).
+# Every version after with MORE filters performed WORSE.
+# V6 strips back to basics: SPY/QQQ only, one direction, one trade, let execution work.
+CPL_WATCHLIST = ["SPY", "QQQ"]  # HARD-CODED — NO OTHER TICKERS
 
 # FIX 1: Target forcing function
 TARGET_BUY_CALLS = 3
@@ -133,6 +128,20 @@ SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents A
 
 # Local tracking to prevent API lag race condition (mutable dict for nested scope)
 _sniper_state = {"last_trade_time": None}
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                      V6 SNIPER: ONE DIRECTION, ONE TRADE                     ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Rule 1: ONE DIRECTION PER DAY - first 15 min of SPY determines CALL or PUT
+# Rule 2: ONE TRADE THEN DONE - after first trade executes, STOP for the day
+_v6_state = {
+    "daily_direction": None,      # "CALL" or "PUT" - set by first 15 min SPY move
+    "direction_set": False,       # True once direction is locked
+    "direction_set_time": None,   # When direction was determined
+    "trade_complete": False,      # True after first trade - NO MORE SCANS
+    "trade_completed_time": None, # When trade was executed
+    "last_reset_date": None,      # Date of last daily reset
+}
 
 # FIX 3: Liquidity gates — relaxed so we get 5–10 HIGH hitters (SPY/QQQ ATM often > $2.50)
 LIQUIDITY_MAX_SPREAD_PCT = 0.15  # 15% of mid (slightly relaxed)
@@ -211,6 +220,89 @@ def _get_hydra_size_multiplier() -> float:
     except Exception as e:
         logger.warning(f"HYDRA size multiplier failed: {e}")
         return 1.0  # Default to full size on error
+
+
+def _determine_v6_direction() -> Optional[str]:
+    """
+    V6 SNIPER: Determine daily direction based on first 15 minutes of SPY.
+
+    Rules:
+    - Wait until 9:45 AM ET (15 min after open)
+    - Check SPY price change from 9:30 open
+    - If SPY +0.2% or more: CALLS only all day
+    - If SPY -0.2% or more: PUTS only all day
+    - If between -0.2% and +0.2%: Wait for breakout (check again next scan)
+
+    Returns: "CALL", "PUT", or None (still waiting)
+    """
+    global _v6_state
+    from zoneinfo import ZoneInfo
+    et_now = datetime.now(ZoneInfo("America/New_York"))
+
+    # Must be after 9:45 AM to have 15 min of data
+    if et_now.hour < 9 or (et_now.hour == 9 and et_now.minute < 45):
+        logger.debug(f"V6_DIRECTION: Waiting for 9:45 AM (currently {et_now.hour}:{et_now.minute:02d})")
+        return None
+
+    # Already set today
+    if _v6_state["direction_set"]:
+        return _v6_state["daily_direction"]
+
+    # Get SPY opening bar and current price
+    today_str = et_now.strftime("%Y-%m-%d")
+    try:
+        # Get the 9:30 opening bar
+        opening_bars = polygon_enhanced.get_intraday_bars(
+            "SPY", timespan="minute", multiplier=5, limit=1,
+            from_time=f"{today_str}T09:30:00", to_time=f"{today_str}T09:35:00"
+        )
+        if not opening_bars:
+            logger.warning("V6_DIRECTION: No opening bar for SPY")
+            return None
+
+        open_price = opening_bars[0].get('open') or opening_bars[0].get('o')
+        if not open_price:
+            return None
+
+        # Get current price
+        current_price = _get_spot_price("SPY")
+        if not current_price:
+            return None
+
+        # Calculate change percentage
+        change_pct = ((current_price - open_price) / open_price) * 100
+
+        logger.info(f"V6_DIRECTION_CHECK: SPY open={open_price:.2f} current={current_price:.2f} change={change_pct:+.2f}%")
+
+        # Determine direction
+        if change_pct >= 0.2:
+            direction = "CALL"
+            logger.info(f"V6_DIRECTION_SET: CALLS ONLY (SPY +{change_pct:.2f}%)")
+        elif change_pct <= -0.2:
+            direction = "PUT"
+            logger.info(f"V6_DIRECTION_SET: PUTS ONLY (SPY {change_pct:.2f}%)")
+        else:
+            # Not enough move yet - keep waiting
+            logger.info(f"V6_DIRECTION_WAIT: SPY {change_pct:+.2f}% (need ±0.2% for direction lock)")
+            return None
+
+        # Lock direction for the day
+        _v6_state["daily_direction"] = direction
+        _v6_state["direction_set"] = True
+        _v6_state["direction_set_time"] = datetime.now(timezone.utc)
+
+        # Send Telegram alert
+        try:
+            from wsb_snake.notifications.telegram_bot import send_alert
+            send_alert(f"🎯 V6 SNIPER DIRECTION LOCKED: {direction}S ONLY\nSPY {change_pct:+.2f}% from open\nOne trade, let it ride.")
+        except Exception:
+            pass
+
+        return direction
+
+    except Exception as e:
+        logger.warning(f"V6_DIRECTION_ERROR: {e}")
+        return None
 
 
 def _is_affordable(contract: Dict[str, Any], max_cap_override: Optional[float] = None) -> bool:
@@ -386,488 +478,98 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
 def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
     """
     ╔══════════════════════════════════════════════════════════════════════════════╗
-    ║                           BEAST MODE V4.0                                     ║
-    ║                   13-SIGNAL CONVICTION STACKING SYSTEM                        ║
+    ║                           V6 SNIPER MODE                                      ║
+    ║                   SIMPLE: MOMENTUM + DIRECTION ONLY                          ║
     ╚══════════════════════════════════════════════════════════════════════════════╝
 
-    CONVICTION SIGNALS (each adds +1, some can add -1 penalty):
-    ┌────────────────────────────────────────────────────────────────────────────┐
-    │ 1.  HYDRA direction aligned                                                 │
-    │ 2.  Sweep direction aligned (flow_sweep_direction)                         │
-    │ 3.  Near dark pool level (dp_support for CALL, dp_resistance for PUT)      │
-    │ 4.  Volume ratio > 1.5x                                                     │
-    │ 5.  GEX regime favorable (NEGATIVE = trending)                             │
-    │ 6.  Momentum ACCELERATING (candle SIZE increasing, not just direction)     │
-    │ 7.  Whale premium present ($500K+ in direction)                            │
-    │ 8.  Charm flow favorable (afternoon theta alignment)                       │
-    │ 9.  Time window optimal (power hour / morning momentum)                    │
-    │ 10. Predator Vision (AI pattern recognition)                               │
-    │ 11. Opening Range Breakout (SPY/QQQ > OR high = CALL, < OR low = PUT)     │
-    │ 12. Pre-market Bias (+1 if confirms, -1 if conflicts)                      │
-    │ 13. GEX proximity favorable (near positive GEX for CALL, negative for PUT) │
-    └────────────────────────────────────────────────────────────────────────────┘
+    LESSON LEARNED (Week 1): V1 with NO filters found QQQ $609C winner (+$1,551).
+    Every version with MORE filters performed WORSE because:
+    - HYDRA returns garbage (87% broken)
+    - Polygon returns limited bars
+    - Complex gates blocked everything
 
-    MINIMUM conviction = 5 to trade (out of 13)
-    5-7  = base position size (confidence 55-69)
-    8-10 = 1.5x position size (confidence 70-84)
-    11-13 = FULL SEND max $2,500 (confidence 85-95)
-
-    HARD GATES (instant reject, no conviction points):
-    - Polygon API unhealthy
-    - HYDRA disconnected/stale
-    - Direction conflict
-    - Blowup > 70%
-    - GEX flip < 1%
-    - Regime CHOPPY/UNKNOWN
-    - Data unavailable
-    - Strong momentum against
+    V6 STRIPS BACK TO BASICS:
+    1. Check momentum: price moving in trade direction
+    2. Check volume: above average (when data available)
+    3. NO HYDRA GATES - data is unreliable
+    4. NO 13-SIGNAL CONVICTION - overkill with broken data
 
     Returns: (is_valid, confidence_score, reason)
     """
     side_upper = side.upper()
-    from zoneinfo import ZoneInfo
-    et_now = datetime.now(ZoneInfo("America/New_York"))
 
     # ════════════════════════════════════════════════════════════════════════════
-    # HARD GATES - Instant rejection, no conviction calculation
+    # V6 SNIPER: SIMPLE ENTRY CHECK
+    # Only check: (1) momentum in direction, (2) basic volume
+    # NO HYDRA GATES - data is unreliable
     # ════════════════════════════════════════════════════════════════════════════
 
-    # Gate 0: Polygon health
+    # Get price bars for momentum check
     try:
-        from wsb_snake.utils.polygon_health import polygon_health_check
-        is_healthy, health_reason = polygon_health_check()
-        if not is_healthy:
-            logger.error(f"BEAST_REJECT: {ticker} {side_upper} - Polygon unhealthy: {health_reason}")
-            return False, 0, f"HARD_GATE_POLYGON: {health_reason}"
-    except ImportError:
-        pass
-
-    # Gate 1: HYDRA connection
-    try:
-        hydra = get_hydra_intel()
+        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=3)
     except Exception as e:
-        logger.warning(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA unavailable: {e}")
-        return False, 0, "HARD_GATE_HYDRA: Intelligence unavailable"
+        logger.warning(f"V6_REJECT: {ticker} {side_upper} - bars failed: {e}")
+        return False, 0, "V6_DATA: Bars unavailable"
 
-    if not hydra.connected:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA disconnected")
-        return False, 0, "HARD_GATE_HYDRA: Disconnected"
+    # Need at least 1 bar to check current direction
+    if not bars or len(bars) < 1:
+        logger.info(f"V6_REJECT: {ticker} {side_upper} - no bars available")
+        return False, 0, "V6_DATA: No bars"
 
-    if hydra.is_stale():
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - HYDRA stale >3min")
-        return False, 0, "HARD_GATE_HYDRA: Stale data"
-
-    # Gate 2: Direction conflict (hard block opposite direction)
-    # NOTE: NEUTRAL is no longer a hard block - allows trading with reduced conviction
-    # when HYDRA has no clear directional signal (common during low-volume periods)
-    if hydra.direction == "NEUTRAL":
-        logger.info(f"BEAST_WARNING: {ticker} {side_upper} - HYDRA NEUTRAL (proceeding with caution)")
-        # Don't block - just log warning and continue to conviction scoring
-
-    if side_upper == "CALL" and hydra.direction == "BEARISH":
-        logger.info(f"BEAST_REJECT: {ticker} CALL blocked - HYDRA BEARISH")
-        return False, 0, "HARD_GATE_DIRECTION: CALL in BEARISH"
-
-    if side_upper == "PUT" and hydra.direction == "BULLISH":
-        logger.info(f"BEAST_REJECT: {ticker} PUT blocked - HYDRA BULLISH")
-        return False, 0, "HARD_GATE_DIRECTION: PUT in BULLISH"
-
-    # Gate 3: Blowup probability
-    if hydra.blowup_probability > 70:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - blowup {hydra.blowup_probability}%")
-        return False, 0, f"HARD_GATE_BLOWUP: {hydra.blowup_probability}%"
-
-    # Gate 4: GEX flip proximity
-    # NOTE: Skip gate if GEX data appears missing (flip_point=0 or flip_distance=0 indicates unavailable data)
-    # Only apply gate when we have valid GEX data (flip_point > 0)
-    if hydra.gex_flip_point > 0 and hydra.gex_flip_distance_pct < 1.0:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - GEX flip {hydra.gex_flip_distance_pct:.2f}%")
-        return False, 0, f"HARD_GATE_GEX_FLIP: {hydra.gex_flip_distance_pct:.1f}%"
-    elif hydra.gex_flip_point == 0:
-        logger.debug(f"BEAST_SKIP_GEX_GATE: {ticker} - GEX data unavailable (flip_point=0)")
-
-    # Gate 5: Regime (hard block CHOPPY only, UNKNOWN = missing data)
-    # NOTE: UNKNOWN regime is no longer a hard block - indicates HYDRA data unavailable
-    # CHOPPY is a valid signal to stay out (high whipsaw risk)
-    if hydra.regime == "CHOPPY":
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - regime CHOPPY")
-        return False, 0, "HARD_GATE_REGIME: CHOPPY"
-    elif hydra.regime == "UNKNOWN":
-        logger.info(f"BEAST_WARNING: {ticker} {side_upper} - regime UNKNOWN (proceeding with caution)")
-
-    # Gate 6: Data availability
-    # NOTE: Reduced minimum from 5 to 2 bars - allows trading with limited data
-    # when Polygon has temporary gaps. 2 bars is minimum for price change calculation.
-    try:
-        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=8)
-    except Exception as e:
-        logger.warning(f"BEAST_REJECT: {ticker} {side_upper} - bars failed: {e}")
-        return False, 0, "HARD_GATE_DATA: Bars unavailable"
-
-    if not bars or len(bars) < 2:
-        logger.info(f"BEAST_REJECT: {ticker} {side_upper} - insufficient bars (got {len(bars) if bars else 0})")
-        return False, 0, "HARD_GATE_DATA: Insufficient bars"
-
-    # Extract price/volume data (use available bars, up to 5)
+    # Extract price data
     closes = []
-    volumes = []
-    for b in bars[:min(5, len(bars))]:
+    for b in bars[:min(3, len(bars))]:
         c = b.get('close') or b.get('c')
-        v = b.get('volume') or b.get('v') or 0
-        if c is None:
-            return False, 0, "HARD_GATE_DATA: Missing close"
-        closes.append(c)
-        volumes.append(v)
+        if c is not None:
+            closes.append(c)
 
-    price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
-    recent_vol_avg = sum(volumes[:min(2, len(volumes))]) / min(2, len(volumes))
-    older_vol_avg = sum(volumes[2:]) / len(volumes[2:]) if len(volumes) > 2 else recent_vol_avg
-    volume_ratio = recent_vol_avg / older_vol_avg if older_vol_avg > 0 else 1.0
+    if len(closes) < 1:
+        return False, 0, "V6_DATA: No close prices"
 
-    # Gate 7: Basic momentum alignment (must be in right direction)
-    if side_upper == "CALL" and price_change_pct < -0.5:
-        logger.info(f"BEAST_REJECT: {ticker} CALL - strong downtrend {price_change_pct:+.2f}%")
-        return False, 0, f"HARD_GATE_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
-    if side_upper == "PUT" and price_change_pct > 0.5:
-        logger.info(f"BEAST_REJECT: {ticker} PUT - strong uptrend {price_change_pct:+.2f}%")
-        return False, 0, f"HARD_GATE_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
+    # Calculate momentum (if we have 2+ bars)
+    if len(closes) >= 2:
+        price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
+    else:
+        # Single bar - check if price is above/below spot
+        price_change_pct = 0  # Can't calculate, allow trade
 
     # ════════════════════════════════════════════════════════════════════════════
-    # CONVICTION STACKING - 13 Signals, need 5+ to trade
+    # V6 SIMPLE CHECK: Price moving in trade direction
     # ════════════════════════════════════════════════════════════════════════════
 
-    conviction = 0
-    conviction_details = []
+    # For CALLS: price should not be strongly falling
+    if side_upper == "CALL" and price_change_pct < -0.3:
+        logger.info(f"V6_REJECT: {ticker} CALL - downtrend {price_change_pct:+.2f}%")
+        return False, 0, f"V6_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 1: HYDRA Direction Aligned (+1)
-    # ══════════════════════════════════════════════════════════════════════════
-    direction_aligned = (
-        (side_upper == "CALL" and hydra.direction == "BULLISH") or
-        (side_upper == "PUT" and hydra.direction == "BEARISH")
-    )
-    if direction_aligned:
-        conviction += 1
-        conviction_details.append("✓ HYDRA_DIR")
-    else:
-        conviction_details.append("✗ HYDRA_DIR")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 2: Sweep Direction Aligned (+1)
-    # ══════════════════════════════════════════════════════════════════════════
-    sweep_aligned = (
-        (side_upper == "CALL" and hydra.flow_sweep_direction == "CALL_HEAVY") or
-        (side_upper == "PUT" and hydra.flow_sweep_direction == "PUT_HEAVY")
-    )
-    if sweep_aligned:
-        conviction += 1
-        conviction_details.append("✓ SWEEP")
-    else:
-        conviction_details.append(f"✗ SWEEP({hydra.flow_sweep_direction})")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 3: Dark Pool Level (+1)
-    # ══════════════════════════════════════════════════════════════════════════
-    dp_support = hydra.dp_nearest_support or 0
-    dp_resistance = hydra.dp_nearest_resistance or 0
-    dp_proximity_pct = 0.5  # Within 0.5% of level
-
-    near_dp_level = False
-    if side_upper == "CALL" and dp_support > 0:
-        dist_to_support = abs(spot - dp_support) / spot * 100
-        if dist_to_support < dp_proximity_pct:
-            near_dp_level = True
-    if side_upper == "PUT" and dp_resistance > 0:
-        dist_to_resistance = abs(spot - dp_resistance) / spot * 100
-        if dist_to_resistance < dp_proximity_pct:
-            near_dp_level = True
-
-    if near_dp_level:
-        conviction += 1
-        conviction_details.append("✓ DARK_POOL")
-    else:
-        conviction_details.append("✗ DARK_POOL")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 4: Volume Confirmation (+1) - 1.5x ratio
-    # ══════════════════════════════════════════════════════════════════════════
-    strong_volume = volume_ratio >= 1.5
-    if strong_volume:
-        conviction += 1
-        conviction_details.append(f"✓ VOL({volume_ratio:.1f}x)")
-    else:
-        conviction_details.append(f"✗ VOL({volume_ratio:.1f}x)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 5: GEX Regime Favorable (+1) - NEGATIVE = trending
-    # ══════════════════════════════════════════════════════════════════════════
-    gex_favorable = hydra.gex_regime == "NEGATIVE"
-    if gex_favorable:
-        conviction += 1
-        conviction_details.append("✓ GEX_NEG")
-    else:
-        conviction_details.append(f"✗ GEX({hydra.gex_regime})")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 6: Momentum ACCELERATING (+1) - Candles getting BIGGER
-    # ══════════════════════════════════════════════════════════════════════════
-    # Get last 3 candle sizes: abs(close - open) for each
-    # Accelerating = each candle bigger than the previous
-    candle_sizes = []
-    for b in bars[:3]:
-        o = b.get('open') or b.get('o') or 0
-        c = b.get('close') or b.get('c') or 0
-        candle_sizes.append(abs(c - o))
-
-    # Check acceleration: each candle bigger than previous (most recent first)
-    accelerating = False
-    if len(candle_sizes) >= 3:
-        # bars[0] is most recent, bars[1] is second most recent, etc.
-        # Accelerating means: size[0] > size[1] > size[2]
-        if candle_sizes[0] > candle_sizes[1] > candle_sizes[2] and candle_sizes[2] > 0:
-            accelerating = True
-
-    if accelerating:
-        conviction += 1
-        conviction_details.append(f"✓ ACCEL({candle_sizes[0]:.2f}>{candle_sizes[1]:.2f}>{candle_sizes[2]:.2f})")
-    else:
-        conviction_details.append(f"✗ ACCEL(flat)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 7: Whale Premium Present (+1) - $500K+ in direction
-    # ══════════════════════════════════════════════════════════════════════════
-    WHALE_THRESHOLD = 500_000
-    whale_present = False
-    if side_upper == "CALL" and hydra.flow_net_premium_calls >= WHALE_THRESHOLD:
-        whale_present = True
-    if side_upper == "PUT" and hydra.flow_net_premium_puts >= WHALE_THRESHOLD:
-        whale_present = True
-
-    if whale_present:
-        conviction += 1
-        premium = hydra.flow_net_premium_calls if side_upper == "CALL" else hydra.flow_net_premium_puts
-        conviction_details.append(f"✓ WHALE(${premium/1000:.0f}K)")
-    else:
-        conviction_details.append("✗ WHALE")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 8: Charm Flow Favorable (+1) - Afternoon theta alignment
-    # ══════════════════════════════════════════════════════════════════════════
-    charm_favorable = False
-    charm_flow = hydra.charm_flow_per_hour or 0
-
-    # After 2 PM: negative charm = MM selling puts = favor calls
-    # Positive charm = MM selling calls = favor puts
-    if et_now.hour >= 14:
-        if side_upper == "CALL" and charm_flow < -10000:
-            charm_favorable = True
-        if side_upper == "PUT" and charm_flow > 10000:
-            charm_favorable = True
-
-    if charm_favorable:
-        conviction += 1
-        conviction_details.append(f"✓ CHARM({charm_flow/1000:.0f}K)")
-    else:
-        if et_now.hour >= 14:
-            conviction_details.append(f"✗ CHARM({charm_flow/1000:.0f}K)")
-        else:
-            conviction_details.append("- CHARM(pre-2PM)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 9: Time Window Optimal (+1) - Power hour / morning momentum
-    # ══════════════════════════════════════════════════════════════════════════
-    optimal_time = False
-    current_hour = et_now.hour
-    current_minute = et_now.minute
-
-    # Morning momentum: 9:35 - 10:30 (after open chop settles)
-    if current_hour == 9 and current_minute >= 35:
-        optimal_time = True
-    if current_hour == 10 and current_minute <= 30:
-        optimal_time = True
-    # Power hour: 2:30 - 3:45 (momentum + gamma amplification)
-    if current_hour == 14 and current_minute >= 30:
-        optimal_time = True
-    if current_hour == 15 and current_minute <= 45:
-        optimal_time = True
-
-    if optimal_time:
-        conviction += 1
-        conviction_details.append(f"✓ TIME({current_hour}:{current_minute:02d})")
-    else:
-        conviction_details.append(f"✗ TIME({current_hour}:{current_minute:02d})")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 10: Predator Vision (+1) - AI pattern recognition
-    # ══════════════════════════════════════════════════════════════════════════
-    predator_bullish = False
-    try:
-        from wsb_snake.ai_stack.predator_stack_v2 import get_predator_stack
-
-        # Build signal dict for Predator
-        predator_signal = {
-            'ticker': ticker,
-            'direction': 'BULLISH' if side_upper == 'CALL' else 'BEARISH',
-            'price': spot,
-        }
-
-        # Convert bars to candles format for Predator
-        predator_candles = []
-        for b in bars[:5]:
-            predator_candles.append({
-                'open': b.get('open') or b.get('o'),
-                'high': b.get('high') or b.get('h'),
-                'low': b.get('low') or b.get('l'),
-                'close': b.get('close') or b.get('c'),
-                'volume': b.get('volume') or b.get('v') or 0,
-            })
-
-        predator_stack = get_predator_stack()
-        verdict = predator_stack.analyze(
-            signal=predator_signal,
-            candles=predator_candles
-        )
-
-        if verdict.action == "STRIKE" and verdict.conviction >= 60:
-            predator_bullish = True
-            conviction += 1
-            conviction_details.append(f"✓ PREDATOR({verdict.conviction:.0f}%)")
-        else:
-            conviction_details.append(f"✗ PREDATOR({verdict.action}:{verdict.conviction:.0f}%)")
-
-    except Exception as e:
-        logger.debug(f"Predator Stack unavailable: {e}")
-        conviction_details.append("- PREDATOR(n/a)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 11: Opening Range Breakout (+1) - SPY/QQQ only
-    # ══════════════════════════════════════════════════════════════════════════
-    or_breakout = False
-    if ticker in ["SPY", "QQQ"] and ticker in _opening_range:
-        or_data = _opening_range[ticker]
-        or_high = or_data.get("high", 0)
-        or_low = or_data.get("low", 0)
-        or_date = or_data.get("date", "")
-
-        # Only use if captured today
-        today_str = et_now.strftime("%Y-%m-%d")
-        if or_date == today_str and or_high > 0 and or_low > 0:
-            if side_upper == "CALL" and spot > or_high:
-                or_breakout = True
-                conviction += 1
-                conviction_details.append(f"✓ OR_BRK(>{or_high:.2f})")
-            elif side_upper == "PUT" and spot < or_low:
-                or_breakout = True
-                conviction += 1
-                conviction_details.append(f"✓ OR_BRK(<{or_low:.2f})")
-            else:
-                conviction_details.append(f"✗ OR_BRK({or_low:.2f}-{or_high:.2f})")
-        else:
-            conviction_details.append("- OR_BRK(stale)")
-    else:
-        conviction_details.append("- OR_BRK(n/a)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 12: Pre-market Bias (+1 if confirms, -1 if conflicts)
-    # ══════════════════════════════════════════════════════════════════════════
-    premarket_bias = None
-    try:
-        with open("/tmp/premarket_bias.txt", "r") as f:
-            premarket_bias = f.read().strip().upper()
-    except Exception:
-        pass
-
-    if premarket_bias in ["BULLISH", "BEARISH", "NEUTRAL"]:
-        if side_upper == "CALL" and premarket_bias == "BULLISH":
-            conviction += 1
-            conviction_details.append("✓ PM_BIAS(BULL)")
-        elif side_upper == "PUT" and premarket_bias == "BEARISH":
-            conviction += 1
-            conviction_details.append("✓ PM_BIAS(BEAR)")
-        elif side_upper == "CALL" and premarket_bias == "BEARISH":
-            conviction -= 1  # PENALTY
-            conviction_details.append("✗ PM_BIAS(BEAR,-1)")
-        elif side_upper == "PUT" and premarket_bias == "BULLISH":
-            conviction -= 1  # PENALTY
-            conviction_details.append("✗ PM_BIAS(BULL,-1)")
-        else:
-            conviction_details.append(f"- PM_BIAS({premarket_bias})")
-    else:
-        conviction_details.append("- PM_BIAS(n/a)")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SIGNAL 13: GEX Proximity Favorable (+1)
-    # For CALLS: price near positive GEX level (support)
-    # For PUTS: price near negative GEX level (resistance)
-    # ══════════════════════════════════════════════════════════════════════════
-    gex_proximity_favorable = False
-    gex_flip_point = hydra.gex_flip_point or 0
-
-    if gex_flip_point > 0:
-        # NEGATIVE GEX regime: price below flip point favors momentum
-        # POSITIVE GEX regime: price above flip point = mean reversion
-        if hydra.gex_regime == "NEGATIVE":
-            # In NEGATIVE GEX, we want price BELOW flip point (trending)
-            if spot < gex_flip_point:
-                # Good for momentum trades - both calls and puts can work
-                # But CALLs after bounce, PUTs in breakdown
-                if side_upper == "CALL" and price_change_pct > 0:
-                    gex_proximity_favorable = True
-                if side_upper == "PUT" and price_change_pct < 0:
-                    gex_proximity_favorable = True
-        else:
-            # In POSITIVE GEX, we want price ABOVE flip point (stable)
-            if spot > gex_flip_point:
-                # Good for mean reversion - fades work better
-                gex_proximity_favorable = True
-
-    if gex_proximity_favorable:
-        conviction += 1
-        conviction_details.append(f"✓ GEX_PROX({hydra.gex_regime}@{gex_flip_point:.0f})")
-    else:
-        conviction_details.append(f"✗ GEX_PROX({hydra.gex_regime})")
+    # For PUTS: price should not be strongly rising
+    if side_upper == "PUT" and price_change_pct > 0.3:
+        logger.info(f"V6_REJECT: {ticker} PUT - uptrend {price_change_pct:+.2f}%")
+        return False, 0, f"V6_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
 
     # ════════════════════════════════════════════════════════════════════════════
-    # CONVICTION VERDICT
+    # V6 APPROVED - Simple confidence based on momentum strength
     # ════════════════════════════════════════════════════════════════════════════
 
-    MIN_CONVICTION = 5  # Updated for 13-signal system
-    conviction_str = " | ".join(conviction_details)
+    # Base confidence 70% - we're trading SPY/QQQ with direction lock
+    confidence = 70
 
-    if conviction < MIN_CONVICTION:
-        logger.info(
-            f"BEAST_REJECT: {ticker} {side_upper} CONVICTION {conviction}/13 < {MIN_CONVICTION} | {conviction_str}"
-        )
-        return False, 0, f"CONVICTION_LOW: {conviction}/13 (need {MIN_CONVICTION}+) | {conviction_str}"
+    # Boost for strong momentum in direction
+    if side_upper == "CALL" and price_change_pct > 0.1:
+        confidence += 10
+    if side_upper == "PUT" and price_change_pct < -0.1:
+        confidence += 10
 
-    # ════════════════════════════════════════════════════════════════════════════
-    # POSITION SIZING via Confidence Score (Beast Mode V4)
-    # ════════════════════════════════════════════════════════════════════════════
-    # 5-7  conviction = 55-69 confidence = base size
-    # 8-10 conviction = 70-84 confidence = 1.5x size
-    # 11-13 conviction = 85-95 confidence = FULL SEND
+    # Boost for very strong momentum
+    if side_upper == "CALL" and price_change_pct > 0.2:
+        confidence += 5
+    if side_upper == "PUT" and price_change_pct < -0.2:
+        confidence += 5
 
-    if conviction <= 7:
-        confidence = 55 + (conviction - 5) * 5  # 55-65
-    elif conviction <= 10:
-        confidence = 70 + (conviction - 8) * 5  # 70-80
-    else:
-        confidence = 85 + (conviction - 11) * 5  # 85-95
+    confidence = min(95, confidence)
 
-    # Boost for aggressive flow
-    if hydra.flow_bias in ["AGGRESSIVELY_BULLISH", "AGGRESSIVELY_BEARISH"]:
-        confidence = min(95, confidence + 5)
-
-    # Penalty for elevated blowup
-    if hydra.blowup_probability > 50:
-        confidence = max(55, confidence - 10)
-
-    reason = (
-        f"BEAST_APPROVED: {ticker} {side_upper} CONVICTION={conviction}/13 | "
-        f"HYDRA={hydra.direction} GEX={hydra.gex_regime} regime={hydra.regime} | "
-        f"{conviction_str}"
-    )
-    logger.info(f"{reason} | conf={confidence}%")
+    reason = f"V6_APPROVED: {ticker} {side_upper} momentum={price_change_pct:+.2f}% conf={confidence}%"
+    logger.info(reason)
 
     return True, confidence, reason
 
@@ -1109,7 +811,7 @@ class JobsDayCPL:
         When untruncated_tails: sequential only (max 1 open), target=1 when flat, cooldown=0.
         When high_hitters_batch=N: emit top N 20X/4X BUYs to Telegram only (no position tracking).
         """
-        global _call_number_counter, _direction_lock, _sent_calls, _cooldown_tracker
+        global _call_number_counter, _direction_lock, _sent_calls, _cooldown_tracker, _v6_state
 
         # Daily reset of direction lock and memory-leak-prone structures
         today = datetime.now().strftime("%Y-%m-%d")
@@ -1120,6 +822,28 @@ class JobsDayCPL:
             _sent_calls.clear()
             _cooldown_tracker.clear()
             logger.info(f"CPL_DIRECTION_COOLDOWN: Daily reset for {today} (cleared direction locks, _sent_calls, _cooldown_tracker)")
+
+        # ╔══════════════════════════════════════════════════════════════════════════════╗
+        # ║                      V6 SNIPER: DAILY RESET + TRADE CHECK                    ║
+        # ╚══════════════════════════════════════════════════════════════════════════════╝
+        if _v6_state["last_reset_date"] != today:
+            _v6_state = {
+                "daily_direction": None,
+                "direction_set": False,
+                "direction_set_time": None,
+                "trade_complete": False,
+                "trade_completed_time": None,
+                "last_reset_date": today,
+            }
+            logger.info(f"V6_SNIPER_RESET: New day {today} - direction unlocked, ready for ONE trade")
+
+        # V6 RULE 2: ONE TRADE THEN DONE - If trade already executed today, STOP
+        if _v6_state["trade_complete"]:
+            completed_time = _v6_state.get("trade_completed_time", "unknown")
+            logger.info(f"V6_SNIPER_DONE: Trade already completed at {completed_time}. No more scans until tomorrow.")
+            # Still check for exits on existing position
+            sell_calls = _check_exits_and_emit_sells(broadcast, dry_run, untruncated_tails)
+            return sell_calls
 
         # Always refresh to today's date on each run (handles overnight/multi-day runs)
         self.event_date = get_todays_expiry_date()
@@ -1202,6 +926,16 @@ class JobsDayCPL:
         except Exception as e:
             logger.warning(f"CPL daily P&L check failed: {e}")
 
+        # ╔══════════════════════════════════════════════════════════════════════════════╗
+        # ║                  V6 SNIPER: DETERMINE DAILY DIRECTION                        ║
+        # ╚══════════════════════════════════════════════════════════════════════════════╝
+        # Rule 1: ONE DIRECTION PER DAY - wait for first 15 min, then lock direction
+        v6_direction = _determine_v6_direction()
+        if v6_direction is None:
+            logger.info("V6_SNIPER_WAIT: Direction not yet determined. Waiting for SPY to show bias.")
+            return []
+        logger.info(f"V6_SNIPER_DIRECTION: {v6_direction}S ONLY today")
+
         untruncated_tails = untruncated_tails or UNTRUNCATED_TAILS
         generated: List[JobsDayCall] = []
         candidates: List[JobsDayCall] = []
@@ -1232,11 +966,15 @@ class JobsDayCPL:
             calls = chain.get("calls") or []
             puts = chain.get("puts") or []
 
+            # V6 SNIPER: Only process the locked direction
             # Process calls and puts
             for side, contracts, regime in [
                 ("CALL", calls, "RISK_ON"),
                 ("PUT", puts, "RISK_OFF"),
             ]:
+                # V6: Skip if not the locked direction
+                if v6_direction and side != v6_direction:
+                    continue
                 if side == "CALL":
                     atm_list = [c for c in contracts if c.get("strike") and abs(c["strike"] - price) < 3]
                     otm_list = [c for c in contracts if c.get("strike") and c["strike"] > price]
@@ -1348,6 +1086,11 @@ class JobsDayCPL:
                                 logger.info(f"ALPACA EXECUTED: {call.underlying} {call.side} ${call.strike} qty={alpaca_pos.qty}")
                                 logger.info(f"SNIPER_COOLDOWN_SET: {SNIPER_COOLDOWN_SECONDS}s cooldown started")
                                 send_alert(f"✅ **ALPACA EXECUTED** HIGH HITTER #{_call_number_counter}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
+
+                                # V6 SNIPER: ONE TRADE THEN DONE
+                                _v6_state["trade_complete"] = True
+                                _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
+                                logger.info(f"V6_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
@@ -1547,6 +1290,14 @@ class JobsDayCPL:
                                 # Lock direction: 30-minute cooldown, not full day
                                 _direction_lock[ticker] = {"side": call.side.upper(), "time": datetime.now(timezone.utc)}
                                 logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {call.side.upper()} for 30min cooldown")
+
+                                # ═══════════════════════════════════════════════════════════════
+                                # V6 SNIPER: ONE TRADE THEN DONE - Mark trade complete
+                                # ═══════════════════════════════════════════════════════════════
+                                _v6_state["trade_complete"] = True
+                                _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
+                                logger.info(f"V6_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
+                                send_alert(f"🎯 V6 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
                             else:
                                 logger.warning(f"ALPACA SKIPPED: {call.underlying} (max positions or limit)")
                         except Exception as e:
