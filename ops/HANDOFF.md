@@ -1,185 +1,170 @@
-# BEAST MODE V4.0 - FINAL HANDOFF
-## March 4, 2026 — Pre-Market Audit PASSED
+# WSB-Snake Handoff Document
+## Last Updated: March 6, 2026 @ 2:00 PM EST
 
 ---
 
-## DEPLOYMENT STATUS: ✅ READY
+## CRITICAL STATUS
 
-| Component | Status | Commit |
-|-----------|--------|--------|
-| EC2 Code | DEPLOYED | `739ff93` |
-| wsb-snake | RUNNING | active |
-| wsb-ops-monitor | RUNNING | active |
-| HYDRA Bridge | CONNECTED | polling |
-
----
-
-## 13-SIGNAL CONVICTION SYSTEM
-
-| # | Signal | What It Checks |
-|---|--------|----------------|
-| 1 | HYDRA_DIR | Direction aligned (BULLISH→CALL, BEARISH→PUT) |
-| 2 | SWEEP | Flow sweep direction (CALL_HEAVY/PUT_HEAVY) |
-| 3 | DARK_POOL | Near DP support/resistance (within 0.5%) |
-| 4 | VOLUME | Volume ratio > 1.5x |
-| 5 | GEX_NEG | GEX regime NEGATIVE (trending) |
-| 6 | ACCEL | Candle SIZE acceleration (bigger candles) |
-| 7 | WHALE | Whale premium > $500K |
-| 8 | CHARM | Charm flow favorable (PM only) |
-| 9 | TIME | Optimal window (9:35-10:30 or 14:30-15:45) |
-| 10 | PREDATOR | AI pattern recognition |
-| 11 | OR_BRK | Opening Range Breakout (SPY/QQQ) |
-| 12 | PM_BIAS | Pre-market bias confirms (+1) or conflicts (-1) |
-| 13 | GEX_PROX | GEX proximity favorable |
+| System | State | Notes |
+|--------|-------|-------|
+| **WSB-Snake** | STOPPED | Disabled via systemctl |
+| **Second Brain** | ONLINE | http://98.82.24.119:8080 |
+| **HYDRA** | DEGRADED | 50% fields working |
+| **Open Positions** | NONE | All closed |
 
 ---
 
-## HARD GATES (Instant Rejection)
+## This Week: -$3,939 Lost
 
-1. Polygon API unhealthy
-2. HYDRA disconnected
-3. HYDRA stale (>3min)
-4. Direction NEUTRAL
-5. Direction conflict (CALL in BEARISH)
-6. Direction conflict (PUT in BULLISH)
-7. Blowup > 70%
-8. GEX flip < 1%
-9. Regime CHOPPY/UNKNOWN
-10. Insufficient data
-11. Momentum wrong direction (>0.5% against)
+| Day | P&L | Root Cause |
+|-----|-----|------------|
+| Mon | -$1,172 | CPL no filters, gave back QQQ winner |
+| Tue | -$615 | Position cap race condition |
+| Wed | -$462 | Polygon API 403 errors |
+| Thu | $0 | Beast Mode gates blocked everything |
+| Fri | -$1,656 | DIA/VXX traded (not in watchlist) |
+
+**One Winner:** QQQ $609C +$1,551 (March 2, 12:13 PM)
 
 ---
 
-## CONFIGURATION
+## Second Brain Deployment
 
-```python
-# jobs_day_cpl.py
-SNIPER_CAPITAL = 2500
-MAX_OPEN_POSITIONS = 1
-DAILY_PROFIT_TARGET = 10000   # $10K target
-DAILY_MAX_LOSS = -750         # -$750 floor
-SNIPER_COOLDOWN_SECONDS = 300 # 5 min
-MIN_CONVICTION = 5            # Out of 13
+### Instance Details
+- **Instance ID:** i-04b0f930bd1e371c1
+- **Public IP:** 98.82.24.119
+- **API Port:** 8080
+- **AI Model:** Claude Haiku 4.5 via Bedrock
 
-# Sizing Tiers
-# 5-7 signals  = base size (confidence 55-69)
-# 8-10 signals = 1.5x size (confidence 70-84)
-# 11-13 signals = FULL SEND (confidence 85-95)
+### API Endpoints
+```bash
+# Health check
+curl http://98.82.24.119:8080/api/health
+
+# Get full context (after compaction)
+curl http://98.82.24.119:8080/api/context
+
+# Check HYDRA health
+curl http://98.82.24.119:8080/api/hydra/health
+
+# Report a trade
+curl -X POST http://98.82.24.119:8080/api/report/trade \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"SPY","side":"CALL","pnl":500}'
+
+# Report a bug
+curl -X POST http://98.82.24.119:8080/api/report/bug \
+  -H "Content-Type: application/json" \
+  -d '{"id":"bug_007","title":"Description","severity":"critical"}'
+
+# Ask the brain (AI-powered with context)
+curl -X POST http://98.82.24.119:8080/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Why did the system fail today?"}'
 ```
 
 ---
 
-## WATCHLIST (32 tickers, IWM removed)
+## Root Causes Identified
 
-```
-SPY, QQQ, DIA, VXX, UVXY, TLT, IEF, XLF, UUP, GLD, SLV, GDX,
-MSTR, COIN, MARA, RIOT, NVDA, TSLA, AAPL, AMZN, META, GOOGL, MSFT, AMD,
-ITB, XHB, XLY, XLV, NBIS, RKLB, ASTS, LUNR, PL, ONDS, SLS
-```
-
----
-
-## PRE-MARKET AUDIT RESULTS (20 CHECKS)
-
-| Check | Status |
-|-------|--------|
-| Git commit correct | ✅ |
-| All files compile | ✅ |
-| 13 signals present | ✅ |
-| Hard gates present | ✅ |
-| Kill switch $10K/-$750 | ✅ |
-| Session halt removed | ✅ |
-| V7 disabled | ✅ |
-| IWM removed | ✅ |
-| 5-min cooldown | ✅ |
-| Max 1 position | ✅ |
-| HYDRA integrated | ✅ |
-| Opening range | ✅ |
-| Premarket bias | ✅ |
-| Services running | ✅ |
-| 0 open positions | ✅ |
-| HYDRA connected | ✅ |
-| Polygon API | ✅ |
-| Cron 9:25 AM | ✅ |
-| No critical errors | ✅ |
-
-**AUDIT SCORE: 19/20 PASS** (1 minor Telegram warning)
+1. **NO PERSISTENT MEMORY** - Claude Code compacts and loses context
+2. **NO END-TO-END TESTING** - Changes deployed directly to production
+3. **HYDRA DATA QUALITY** - 50% of signals return garbage
+4. **POLYGON DATA QUALITY** - Delayed, 1 bar, rate limited
+5. **WATCHLIST NOT ENFORCED** - DIA/VXX appeared despite SPY/QQQ only
+6. **NO EXTERNAL OVERSIGHT** - 1,400+ alerts but no intelligent response
 
 ---
 
-## ARCHITECTURE
-
-```
-EC2: i-03f3a7c46ec809a43 (us-east-1)
-├── wsb-snake.service (main trading engine)
-├── wsb-ops-monitor.service (health monitoring)
-├── HYDRA Bridge → http://54.172.22.157:8000/api/predator
-└── Cron: 9:25 AM premarket_check.sh
-```
+## What Works
+- Execution layer (pyramids, trailing stops)
+- Kill switch (when configured correctly)
+- Cooldown (prevents race conditions)
+- Telegram alerts (when not spamming)
+- CPL signal discovery (found the QQQ winner)
+- Second Brain memory persistence
 
 ---
 
-## DEPLOY COMMANDS
+## Weekend Plan
+
+### Saturday (DONE)
+- [x] Stop wsb-snake service
+- [x] Close all positions
+- [x] Write WEEK_1_POSTMORTEM.md
+- [x] Deploy Second Brain EC2
+- [x] Verify all API endpoints
+
+### Sunday (TODO)
+- [ ] Rebuild CPL V6 with hard-coded watchlist (SPY, QQQ ONLY)
+- [ ] Test in simulation with real data
+- [ ] Verify kill switch and cooldown
+- [ ] Deploy to EC2 (disabled)
+
+### Monday (TODO)
+- [ ] Pre-market: Run /api/health checks
+- [ ] 9:30 AM: Enable wsb-snake
+- [ ] Monitor via Second Brain
+- [ ] Report every trade to Second Brain
+- [ ] Post-market: Daily post-mortem
+
+---
+
+## EC2 Instances
+
+| Instance | ID | IP | Purpose |
+|----------|----|----|---------|
+| WSB-Snake | i-03f3a7c46ec809a43 | 54.172.22.157 | Trading engine (STOPPED) |
+| Second Brain | i-04b0f930bd1e371c1 | 98.82.24.119 | AI command center (ONLINE) |
+
+---
+
+## Commands for Next Session
 
 ```bash
-# Quick deploy
-git add -A && git commit -m "message" && git push origin main
+# Check Second Brain
+curl http://98.82.24.119:8080/api/health
 
-# Pull to EC2
+# Get full context
+curl http://98.82.24.119:8080/api/context | jq .
+
+# Check wsb-snake status
 aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["export HOME=/root && git config --global --add safe.directory /home/ubuntu/wsb-snake && cd /home/ubuntu/wsb-snake && git pull && chown -R ubuntu:ubuntu wsb_snake_data/ && systemctl restart wsb-snake"]' \
+  --parameters 'commands=["systemctl is-active wsb-snake"]' \
   --region us-east-1
 
-# Check status
+# Enable wsb-snake (Monday)
 aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["systemctl status wsb-snake --no-pager | head -10 && journalctl -u wsb-snake -n 20 --no-pager"]' \
+  --parameters 'commands=["systemctl enable wsb-snake && systemctl start wsb-snake"]' \
+  --region us-east-1
+
+# View logs
+aws ssm send-command --instance-ids i-03f3a7c46ec809a43 \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["journalctl -u wsb-snake --no-pager -n 50"]' \
   --region us-east-1
 ```
 
 ---
 
-## THE GOAL
+## The Mission
 
-**$2,500 capital → multiply daily via ONE lethal 0DTE trade**
+**$2,500 capital -> multiply daily via ONE lethal 0DTE trade.**
 
-- 13-signal conviction stacking ensures only the BEST setups trade
-- Hard gates reject 90%+ of noise
-- HYDRA intelligence provides market structure context
-- Execution layer (pyramid + trailing stop) maximizes winners
+Three things:
+1. PICK the right trade (conviction stacking)
+2. EXECUTE it perfectly (pyramid + trailing stop)
+3. STOP after one trade (kill switch + cooldown)
 
----
-
-## WHAT HAPPENS AT MARKET OPEN
-
-1. **9:25 AM ET**: `premarket_check.sh` runs
-   - Fetches SPY pre-market gap
-   - Writes BULLISH/BEARISH/NEUTRAL to `/tmp/premarket_bias.txt`
-   - Restarts services if down
-
-2. **9:30 AM ET**: Market opens
-   - CPL starts scanning
-   - HYDRA updates direction from NEUTRAL
-
-3. **9:35 AM ET**: Opening Range captured
-   - `_update_opening_range()` stores SPY/QQQ 9:30-9:35 high/low
-   - Signal 11 activates for breakout detection
-
-4. **9:35-10:30 AM**: Morning momentum window (Signal 9 active)
-
-5. **14:30-15:45**: Power hour window (Signal 9 active)
-
-6. **When 5+ signals align**: TRADE EXECUTES
-   - Telegram alert sent
-   - Alpaca order placed
-   - 5-min cooldown starts
+Win 3 out of 5 days. Dont lose big on the other 2.
 
 ---
 
-## SIGNED OFF
+## Signed Off
 
-**Beast Mode V4.0 is READY.**
+**Week 1 Post-Mortem Complete. Second Brain Deployed.**
 
-Audited: March 4, 2026 21:40 UTC
+Updated: March 6, 2026 14:00 EST
 Engineer: Claude Opus 4.5
