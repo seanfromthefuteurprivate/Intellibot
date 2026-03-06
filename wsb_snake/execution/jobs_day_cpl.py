@@ -172,7 +172,7 @@ TARGET_BUY_CALLS = 3
 SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
 DAILY_PROFIT_TARGET = 10000         # +$10,000 = halt (Beast Mode)
-DAILY_MAX_LOSS = -5000              # -$5000 = halt (testing V6 with Week 1 drawdown)
+DAILY_MAX_LOSS = -750               # -$750 = halt. Week 1 lesson: cut losses early.
 SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents API lag race)
 
 # Local tracking to prevent API lag race condition (mutable dict for nested scope)
@@ -191,6 +191,40 @@ _v6_state = {
     "trade_completed_time": None, # When trade was executed
     "last_reset_date": None,      # Date of last daily reset
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# V6 TRADE_COMPLETE PERSISTENCE — Survives systemd restarts
+# Week 1 bug: service crashed mid-day, restarted, trade_complete was reset,
+# system placed ANOTHER trade the same day. File flag prevents this.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_trade_complete_flag_path() -> str:
+    """Get path for today's trade_complete persistence flag."""
+    from zoneinfo import ZoneInfo
+    et_now = datetime.now(ZoneInfo("America/New_York"))
+    today_str = et_now.strftime("%Y-%m-%d")
+    return f"/tmp/wsb_snake_trade_complete_{today_str}.flag"
+
+
+def _check_persisted_trade_complete() -> bool:
+    """Check if trade_complete was set before a service restart."""
+    flag_path = _get_trade_complete_flag_path()
+    if os.path.exists(flag_path):
+        logger.info(f"TRADE_COMPLETE_PERSISTENCE: Found flag {flag_path} — trade already done today.")
+        return True
+    return False
+
+
+def _persist_trade_complete():
+    """Write trade_complete flag to disk so it survives systemd restarts."""
+    flag_path = _get_trade_complete_flag_path()
+    try:
+        with open(flag_path, "w") as f:
+            f.write(f"trade_complete=True\nset_at={datetime.now(timezone.utc).isoformat()}\n")
+        logger.info(f"TRADE_COMPLETE_PERSISTENCE: Wrote flag to {flag_path}")
+    except Exception as e:
+        logger.error(f"TRADE_COMPLETE_PERSISTENCE: Failed to write flag: {e}")
+
 
 # FIX 3: Liquidity gates — relaxed so we get 5–10 HIGH hitters (SPY/QQQ ATM often > $2.50)
 LIQUIDITY_MAX_SPREAD_PCT = 0.15  # 15% of mid (slightly relaxed)
@@ -520,97 +554,152 @@ def _get_current_option_price(option_symbol: str, ticker: str) -> Optional[float
 def _check_entry_quality(ticker: str, side: str, spot: float) -> Tuple[bool, float, str]:
     """
     ╔══════════════════════════════════════════════════════════════════════════════╗
-    ║                           V6 SNIPER MODE                                      ║
-    ║                   SIMPLE: MOMENTUM + DIRECTION ONLY                          ║
+    ║                           V7 SNAPSHOT MODE                                    ║
     ╚══════════════════════════════════════════════════════════════════════════════╝
 
-    LESSON LEARNED (Week 1): V1 with NO filters found QQQ $609C winner (+$1,551).
-    Every version with MORE filters performed WORSE because:
-    - HYDRA returns garbage (87% broken)
-    - Polygon returns limited bars
-    - Complex gates blocked everything
+    LESSON LEARNED (Week 1):
+    - V1 (no filters) found QQQ $609C winner: +$1,551
+    - V6 required intraday bars → Polygon returns 0 → ALL trades blocked → $0
+    - The execution layer (pyramids + trailing stops) IS the edge
+    - This check's job: reject obvious garbage, approve anything reasonable
 
-    V6 STRIPS BACK TO BASICS:
-    1. Check momentum: price moving in trade direction
-    2. Check volume: above average (when data available)
-    3. NO HYDRA GATES - data is unreliable
-    4. NO 13-SIGNAL CONVICTION - overkill with broken data
+    AVAILABLE DATA (Polygon Starter plan):
+    - get_snapshot(): today_open, price, today_high, today_low, today_volume, change_pct ✅
+    - get_previous_day(): prev open, high, low, close, volume ✅
+    - get_intraday_bars(): UNRELIABLE (returns 0-1 bars) ❌
+
+    CHECKS:
+    1. Price moving in trade direction (from today's open, via snapshot)
+    2. Not at session extreme (don't buy calls at day high, puts at day low)
+    3. Volume sanity (today's volume > 0)
+    4. Time filter (skip first 15 min — direction lock handles this, but be safe)
 
     Returns: (is_valid, confidence_score, reason)
     """
     side_upper = side.upper()
 
     # ════════════════════════════════════════════════════════════════════════════
-    # V6 SNIPER: SIMPLE ENTRY CHECK
-    # Only check: (1) momentum in direction, (2) basic volume
-    # NO HYDRA GATES - data is unreliable
+    # STEP 1: Get snapshot data (this WORKS on Polygon Starter)
     # ════════════════════════════════════════════════════════════════════════════
-
-    # Get price bars for momentum check
     try:
-        bars = polygon_enhanced.get_intraday_bars(ticker, timespan="minute", multiplier=5, limit=3)
+        snapshot = polygon_enhanced.get_snapshot(ticker)
     except Exception as e:
-        logger.warning(f"V6_REJECT: {ticker} {side_upper} - bars failed: {e}")
-        return False, 0, "V6_DATA: Bars unavailable"
+        logger.warning(f"V7_REJECT: {ticker} {side_upper} - snapshot failed: {e}")
+        return False, 0, "V7_DATA: Snapshot unavailable"
 
-    # Need at least 1 bar to check current direction
-    if not bars or len(bars) < 1:
-        logger.info(f"V6_REJECT: {ticker} {side_upper} - no bars available")
-        return False, 0, "V6_DATA: No bars"
+    if not snapshot or not snapshot.get("price"):
+        logger.info(f"V7_REJECT: {ticker} {side_upper} - no snapshot data")
+        return False, 0, "V7_DATA: No snapshot"
 
-    # Extract price data
-    closes = []
-    for b in bars[:min(3, len(bars))]:
-        c = b.get('close') or b.get('c')
-        if c is not None:
-            closes.append(c)
+    current_price = float(snapshot["price"])
+    today_open = float(snapshot.get("today_open", 0))
+    today_high = float(snapshot.get("today_high", current_price))
+    today_low = float(snapshot.get("today_low", current_price))
+    today_volume = int(snapshot.get("today_volume", 0))
 
-    if len(closes) < 1:
-        return False, 0, "V6_DATA: No close prices"
-
-    # Calculate momentum (if we have 2+ bars)
-    if len(closes) >= 2:
-        price_change_pct = (closes[0] - closes[-1]) / closes[-1] * 100 if closes[-1] > 0 else 0
-    else:
-        # Single bar - check if price is above/below spot
-        price_change_pct = 0  # Can't calculate, allow trade
+    if today_open <= 0:
+        logger.info(f"V7_REJECT: {ticker} {side_upper} - no open price in snapshot")
+        return False, 0, "V7_DATA: No open price"
 
     # ════════════════════════════════════════════════════════════════════════════
-    # V6 SIMPLE CHECK: Price moving in trade direction
+    # STEP 2: Direction alignment — price must be moving with the trade
     # ════════════════════════════════════════════════════════════════════════════
+    # Calculate intraday change from today's open
+    intraday_change_pct = ((current_price - today_open) / today_open) * 100
 
-    # For CALLS: price should not be strongly falling
-    if side_upper == "CALL" and price_change_pct < -0.3:
-        logger.info(f"V6_REJECT: {ticker} CALL - downtrend {price_change_pct:+.2f}%")
-        return False, 0, f"V6_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
+    # For CALLS: price should be above today's open (uptrend from open)
+    # Allow flat (>= -0.1%) — don't require strong momentum, just not falling
+    if side_upper == "CALL" and intraday_change_pct < -0.1:
+        logger.info(
+            f"V7_REJECT: {ticker} CALL - price BELOW open by {intraday_change_pct:.2f}% "
+            f"(open={today_open:.2f}, now={current_price:.2f})"
+        )
+        return False, 0, f"V7_DIRECTION: Price below open {intraday_change_pct:+.2f}%"
 
-    # For PUTS: price should not be strongly rising
-    if side_upper == "PUT" and price_change_pct > 0.3:
-        logger.info(f"V6_REJECT: {ticker} PUT - uptrend {price_change_pct:+.2f}%")
-        return False, 0, f"V6_MOMENTUM: Wrong direction {price_change_pct:+.2f}%"
+    # For PUTS: price should be below today's open (downtrend from open)
+    if side_upper == "PUT" and intraday_change_pct > 0.1:
+        logger.info(
+            f"V7_REJECT: {ticker} PUT - price ABOVE open by {intraday_change_pct:.2f}% "
+            f"(open={today_open:.2f}, now={current_price:.2f})"
+        )
+        return False, 0, f"V7_DIRECTION: Price above open {intraday_change_pct:+.2f}%"
 
     # ════════════════════════════════════════════════════════════════════════════
-    # V6 APPROVED - Simple confidence based on momentum strength
+    # STEP 3: Don't chase extremes — avoid buying at day high/low
     # ════════════════════════════════════════════════════════════════════════════
+    day_range = today_high - today_low
+    if day_range > 0.01:  # Avoid division by near-zero
+        position_in_range = (current_price - today_low) / day_range
 
+        # For CALLS: don't buy if price is in top 5% of today's range
+        if side_upper == "CALL" and position_in_range > 0.95:
+            logger.info(
+                f"V7_REJECT: {ticker} CALL - at day high "
+                f"({position_in_range:.0%} of range, high={today_high:.2f})"
+            )
+            return False, 0, f"V7_EXTREME: At day high ({position_in_range:.0%})"
+
+        # For PUTS: don't buy if price is in bottom 5% of today's range
+        if side_upper == "PUT" and position_in_range < 0.05:
+            logger.info(
+                f"V7_REJECT: {ticker} PUT - at day low "
+                f"({position_in_range:.0%} of range, low={today_low:.2f})"
+            )
+            return False, 0, f"V7_EXTREME: At day low ({position_in_range:.0%})"
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # STEP 4: Volume sanity — make sure market is actually trading
+    # ════════════════════════════════════════════════════════════════════════════
+    if today_volume <= 0:
+        logger.info(f"V7_REJECT: {ticker} {side_upper} - no volume data")
+        return False, 0, "V7_VOLUME: No trading volume"
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # STEP 5: Gap analysis (bonus confidence)
+    # ════════════════════════════════════════════════════════════════════════════
+    gap_boost = 0
+    try:
+        prev_day = polygon_enhanced.get_previous_day(ticker)
+        if prev_day and prev_day.get("close", 0) > 0:
+            prev_close = prev_day["close"]
+            gap_pct = ((today_open - prev_close) / prev_close) * 100
+            # Gap in trade direction = confidence boost
+            if side_upper == "CALL" and gap_pct > 0.2:
+                gap_boost = 5
+            elif side_upper == "PUT" and gap_pct < -0.2:
+                gap_boost = 5
+    except Exception:
+        pass  # Previous day data is a bonus, not required
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # V7 APPROVED - Calculate confidence
+    # ════════════════════════════════════════════════════════════════════════════
     # Base confidence 70% - we're trading SPY/QQQ with direction lock
     confidence = 70
 
-    # Boost for strong momentum in direction
-    if side_upper == "CALL" and price_change_pct > 0.1:
+    # Boost for momentum in direction
+    if side_upper == "CALL" and intraday_change_pct > 0.15:
         confidence += 10
-    if side_upper == "PUT" and price_change_pct < -0.1:
+    elif side_upper == "PUT" and intraday_change_pct < -0.15:
         confidence += 10
 
     # Boost for very strong momentum
-    if side_upper == "CALL" and price_change_pct > 0.2:
+    if side_upper == "CALL" and intraday_change_pct > 0.3:
         confidence += 5
-    if side_upper == "PUT" and price_change_pct < -0.2:
+    elif side_upper == "PUT" and intraday_change_pct < -0.3:
         confidence += 5
+
+    # Gap boost
+    confidence += gap_boost
 
     confidence = min(95, confidence)
 
-    reason = f"V6_APPROVED: {ticker} {side_upper} momentum={price_change_pct:+.2f}% conf={confidence}%"
+    reason = (
+        f"V7_APPROVED: {ticker} {side_upper} "
+        f"intraday={intraday_change_pct:+.2f}% "
+        f"range_pos={((current_price - today_low) / max(today_high - today_low, 0.01)):.0%} "
+        f"conf={confidence}%"
+    )
     logger.info(reason)
 
     return True, confidence, reason
@@ -878,6 +967,22 @@ class JobsDayCPL:
                 "last_reset_date": today,
             }
             logger.info(f"V6_SNIPER_RESET: New day {today} - direction unlocked, ready for ONE trade")
+            # Clean up old persistence flags (keep only today's)
+            import glob as _glob
+            today_flag = _get_trade_complete_flag_path()
+            for old_flag in _glob.glob("/tmp/wsb_snake_trade_complete_*.flag"):
+                if old_flag != today_flag:
+                    try:
+                        os.remove(old_flag)
+                        logger.debug(f"Cleaned old flag: {old_flag}")
+                    except Exception:
+                        pass
+
+        # V6 PERSISTENCE RECOVERY: Check if trade was completed before a restart
+        if not _v6_state["trade_complete"] and _check_persisted_trade_complete():
+            _v6_state["trade_complete"] = True
+            _v6_state["direction_set"] = True
+            logger.info("V6_PERSISTENCE_RESTORED: trade_complete recovered from flag file. Done for today.")
 
         # V6 RULE 2: ONE TRADE THEN DONE - If trade already executed today, STOP
         if _v6_state["trade_complete"]:
@@ -1133,6 +1238,7 @@ class JobsDayCPL:
                                 _v6_state["trade_complete"] = True
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
+                                _persist_trade_complete()
 
                                 # SECOND BRAIN: Report HIGH HITTER trade
                                 _report_trade_to_second_brain(
@@ -1351,6 +1457,7 @@ class JobsDayCPL:
                                 _v6_state["trade_complete"] = True
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
+                                _persist_trade_complete()
                                 send_alert(f"🎯 V6 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
 
                                 # ═══════════════════════════════════════════════════════════════

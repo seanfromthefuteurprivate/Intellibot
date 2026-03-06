@@ -137,16 +137,34 @@ class EnhancedPolygonAdapter:
         cache_ttl = cache_ttl_override if cache_ttl_override is not None else self._get_cache_ttl(request_type)
         cache_key = f"{endpoint}:{str(sorted(params.items()))}"
 
-        # Check health monitor cache FIRST
+        # Check health monitor cache FIRST - but ONLY if it's not stale or empty
         cached_data = self._health_monitor.get_cached(cache_key)
         if cached_data is not None:
-            return cached_data
+            # FIX: Don't return empty cached results for critical data (bars)
+            # Empty bars cache = momentum check fails = no trades
+            if request_type == "bars" and isinstance(cached_data, dict):
+                results = cached_data.get("results", [])
+                if not results or len(results) == 0:
+                    log.debug(f"CACHE_SKIP: Bars cache is empty for {cache_key}, forcing fresh request")
+                    cached_data = None  # Force fresh request
+                else:
+                    return cached_data
+            else:
+                return cached_data
 
         # Legacy cache check (for backward compatibility)
         if cache_key in self._cache:
             cached_time, cached_data = self._cache[cache_key]
             if (datetime.now() - cached_time).seconds < cache_ttl:
-                return cached_data
+                # Same check: don't return empty bars cache
+                if request_type == "bars" and isinstance(cached_data, dict):
+                    results = cached_data.get("results", [])
+                    if not results or len(results) == 0:
+                        log.debug(f"LEGACY_CACHE_SKIP: Empty bars cache for {cache_key}")
+                    else:
+                        return cached_data
+                else:
+                    return cached_data
 
         # Health monitor rate limit check
         can_request, rate_reason = self._health_monitor.can_make_request()
@@ -258,30 +276,33 @@ class EnhancedPolygonAdapter:
     # ========================
     
     def get_intraday_bars(
-        self, 
-        ticker: str, 
+        self,
+        ticker: str,
         timespan: str = "minute",
         multiplier: int = 1,
         limit: int = 100
     ) -> List[Dict]:
         """
         Get intraday price bars for momentum analysis.
-        
+
         Args:
             ticker: Stock symbol
             timespan: minute, hour, day
             multiplier: Bar size multiplier
             limit: Number of bars
-            
+
         Returns:
             List of OHLCV bars
         """
-        today = date.today().strftime("%Y-%m-%d")
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        endpoint = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{yesterday}/{today}"
+        # FIX: Use wider date range to capture recent bars regardless of market hours
+        # Instead of yesterday-to-today (which may have no data), use last 5 trading days
+        today = date.today()
+        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # Last week
+        to_date = today.strftime("%Y-%m-%d")
+
+        endpoint = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
         data = self._request(endpoint, {"limit": limit, "sort": "desc"})
-        
+
         if data and "results" in data:
             bars = []
             for bar in data["results"]:
@@ -295,8 +316,15 @@ class EnhancedPolygonAdapter:
                     "vwap": bar.get("vw", 0),
                     "trades": bar.get("n", 0),
                 })
+            log.info(f"POLYGON_BARS_SUCCESS: {ticker} {multiplier}{timespan} - got {len(bars)} bars (range: {from_date} to {to_date})")
             return bars
-        return []
+        else:
+            # Log why we got no bars
+            if data:
+                log.warning(f"POLYGON_BARS_EMPTY: {ticker} {multiplier}{timespan} - no 'results' key. Response keys: {list(data.keys())}")
+            else:
+                log.warning(f"POLYGON_BARS_NONE: {ticker} {multiplier}{timespan} - null response (likely rate limited or stale cache)")
+            return []
     
     def get_daily_bars(
         self,

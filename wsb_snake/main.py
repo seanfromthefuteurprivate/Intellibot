@@ -380,18 +380,13 @@ def main():
     schedule.every(60).seconds.do(run_cpl_scanner)
     log.info("CPL Scanner scheduled (every 60s during market hours)")
 
-    # V7 LIVE SCALPER: Backtest-validated signal detection
-    def run_v7_scanner():
-        if not should_scan_for_signals():
-            return
-        try:
-            result = run_v7_scan()
-            if result:
-                log.info(f"V7 Scanner: {result['direction']} ${result['strike']} executed")
-        except Exception as e:
-            log.debug(f"V7 scan skipped: {e}")
-    schedule.every(30).seconds.do(run_v7_scanner)
-    log.info("V7 LIVE SCALPER scheduled (every 30s during market hours)")
+    # V7 LIVE SCALPER: DISABLED — bypasses CPL one-trade-per-day enforcement
+    # Week 1 postmortem: Multiple engines placing independent trades caused chaos.
+    # All trade entry now routes exclusively through CPL V6 Sniper.
+    # def run_v7_scanner():
+    #     ...
+    # schedule.every(30).seconds.do(run_v7_scanner)
+    log.info("V7 LIVE SCALPER: DISABLED — all trades via CPL V6 Sniper only")
 
     # Jobs report tracker: refresh NFP Feb 11 playbook every 30 min until Wed 5 PM ET
     schedule.every(30).minutes.do(run_jobs_report_tracker_once)
@@ -453,38 +448,27 @@ def main():
             log.debug(f"HYDRA→DualMode sync: {e}")
     schedule.every(30).seconds.do(sync_hydra_dual_mode)
 
-    # POWER HOUR PROTOCOL: Start the assault protocol (arms at 14:55 ET)
-    log.info("Starting Power Hour Protocol...")
-    try:
-        power_hour = start_power_hour_protocol()
-        log.info("Power Hour Protocol active - arming at 14:55 ET")
-    except Exception as e:
-        log.warning(f"Power Hour Protocol startup failed: {e}")
-        power_hour = None
+    # POWER HOUR PROTOCOL: DISABLED — bypasses CPL one-trade-per-day enforcement
+    # Week 1 postmortem: Independent trade placement caused multiple positions.
+    # log.info("Starting Power Hour Protocol...")
+    # power_hour = start_power_hour_protocol()
+    power_hour = None
+    log.info("Power Hour Protocol: DISABLED — all trades via CPL V6 Sniper only")
 
-    # BERSERKER ENGINE: Aggressive 0DTE SPX trading when GEX conditions are optimal
-    log.info("Starting BERSERKER Engine...")
-    try:
-        berserker = get_berserker_engine()
-        berserker.set_coordinator(coordinator)  # Register with coordinator
-        berserker.start()
-        log.info("BERSERKER Engine armed - watching for GEX edge opportunities (flip proximity < 0.3%)")
-    except Exception as e:
-        log.warning(f"BERSERKER Engine startup failed: {e}")
-        berserker = None
+    # BERSERKER ENGINE: DISABLED — bypasses CPL one-trade-per-day enforcement
+    # Week 1 postmortem: Independent trade placement caused multiple positions.
+    # berserker = get_berserker_engine()
+    # berserker.set_coordinator(coordinator)
+    # berserker.start()
+    berserker = None
+    log.info("BERSERKER Engine: DISABLED — all trades via CPL V6 Sniper only")
 
-    # Run immediately on startup if market-appropriate
-    log.info("Running initial pipeline check...")
+    # ORCHESTRATOR PIPELINE: DISABLED — uses ZERO_DTE_UNIVERSE which includes IWM,
+    # and can place trades via execute_scalp_entry() bypassing CPL's one-trade-per-day.
+    # Week 1 postmortem: This was one source of phantom ticker trades.
+    log.info("Orchestrator pipeline: DISABLED — CPL V6 Sniper is the only active engine")
     session_info = get_session_info()
-    
-    if should_scan_for_signals():
-        log.info("Market active - running full pipeline...")
-        run_pipeline()
-    else:
-        log.info(f"Market session: {session_info['session']} - pipeline on standby")
-        # Still run once to initialize
-        results = run_pipeline()
-        log.info(f"Initial scan complete: {len(results.get('probabilities', []))} signals")
+    log.info(f"Market session: {session_info['session']}")
     
     # Main loop
     log.info("=" * 50)

@@ -38,7 +38,8 @@ BENZINGA_BASE_URL = "https://api.benzinga.com/api/v2"
 # 2026-02-11 LESSON: SLV/GLD/commodities have wide spreads and caused -$255 loss
 # Only trade the MOST LIQUID: SPY, QQQ, IWM - tight spreads, fast fills
 ZERO_DTE_UNIVERSE = [
-    "SPY", "QQQ", "IWM",  # Index ETFs with daily 0DTE - PROVEN WINNERS
+    "SPY", "QQQ",  # V6 SNIPER MODE — SPY/QQQ only, all other tickers disabled
+    # "IWM",  # DISABLED: Was in orchestrator pipeline, caused phantom trades Week 1
     # "SLV", "GLD", "GDX", "GDXJ",  # DISABLED: Metals ETFs - wide spreads, big losses
     # "USO", "XLE",  # DISABLED: Energy ETFs - less liquid
 ]

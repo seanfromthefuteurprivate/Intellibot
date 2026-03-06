@@ -409,7 +409,21 @@ class AlpacaExecutor:
                 if c.isdigit():
                     underlying = option_symbol[:i]
                     break
-            
+
+            # ═══════════════════════════════════════════════════════════════════
+            # SYNC WHITELIST — Only monitor positions for allowed tickers
+            # Week 1: Old IWM/DIA/VXX positions in Alpaca got synced on restart,
+            # then exit management created "phantom trades" for tickers we never
+            # intended to trade. Block them at sync time.
+            # ═══════════════════════════════════════════════════════════════════
+            SYNC_ALLOWED_TICKERS = {"SPY", "QQQ"}
+            if underlying.upper() not in SYNC_ALLOWED_TICKERS:
+                logger.warning(
+                    f"SYNC_WHITELIST_SKIP: {option_symbol} ({underlying}) not in {SYNC_ALLOWED_TICKERS}. "
+                    f"Skipping orphaned position."
+                )
+                continue
+
             # Determine if calls or puts from symbol
             trade_type = "CALLS" if "C" in option_symbol[len(underlying):len(underlying)+7] else "PUTS"
             
@@ -893,6 +907,28 @@ No overnight risk. Fresh start tomorrow!
         """
         # DIAGNOSTIC: Log entry to help trace execution flow
         logger.info(f"EXECUTOR: execute_scalp_entry called for {underlying} {direction} @ ${entry_price:.2f}")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # EXECUTOR WHITELIST — Last line of defense against phantom tickers
+        # Week 1 postmortem: DIA/VXX appeared on Friday March 6 via
+        # orchestrator pipeline, V7 scalper, or sync_existing_positions().
+        # This whitelist blocks ALL non-SPY/QQQ trades regardless of source.
+        # ═══════════════════════════════════════════════════════════════════
+        EXECUTOR_ALLOWED_TICKERS = {"SPY", "QQQ"}
+        if underlying.upper() not in EXECUTOR_ALLOWED_TICKERS:
+            logger.warning(
+                f"EXECUTOR_WHITELIST_BLOCKED: {underlying} not in {EXECUTOR_ALLOWED_TICKERS}. "
+                f"Trade rejected. Source pattern: {pattern}"
+            )
+            try:
+                from wsb_snake.notifications.telegram_channels import send_alpaca_status
+                send_alpaca_status(
+                    f"🚫 WHITELIST BLOCKED: {underlying} {direction}\n"
+                    f"Only SPY/QQQ allowed. Source: {pattern}"
+                )
+            except Exception:
+                pass
+            return None
 
         self._reset_daily_count_if_needed()
         logger.debug(f"EXECUTOR: daily count reset done")
