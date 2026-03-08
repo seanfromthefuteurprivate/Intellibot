@@ -165,11 +165,14 @@ CPL_EVENT_DATE = get_todays_expiry_date()
 # V6 strips back to basics: SPY/QQQ only, one direction, one trade, let execution work.
 CPL_WATCHLIST = ["SPY", "QQQ"]  # HARD-CODED — NO OTHER TICKERS
 
+# V7 FINAL V2: TICKER LOCK - ONLY SPY AND QQQ ALLOWED
+V7_TICKER_LOCK = ["SPY", "QQQ"]  # HARD BLOCK - DO NOT MODIFY
+
 # FIX 1: Target forcing function
 TARGET_BUY_CALLS = 3
 
 # SNIPER MODE CONFIG
-SNIPER_CAPITAL = 2500               # Position sizing base (pretend cap)
+SNIPER_CAPITAL = 500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
 DAILY_PROFIT_TARGET = 10000         # +$10,000 = halt (Beast Mode)
 DAILY_MAX_LOSS = -750               # -$750 = halt. Week 1 lesson: cut losses early.

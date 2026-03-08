@@ -163,7 +163,7 @@ class AlpacaExecutor:
     
     # ========== RISK CONTROLS - VENOM AGGRESSIVE ==========
     MAX_DAILY_EXPOSURE = 6000   # $6k max daily (UP from $4k - use margin aggressively)
-    MAX_PER_TRADE = 1500        # $1.5k max per trade (UP from $1k)
+    MAX_PER_TRADE = 500  # V7 FINAL V2: Match SNIPER_CAPITAL
     MAX_CONCURRENT_POSITIONS = 5  # Max 5 positions (UP from 3 - more compounding)
     MARKET_CLOSE_HOUR = 16  # 4 PM ET - all 0DTE must close
     CLOSE_BEFORE_MINUTES = 5  # Close 5 min before market close
@@ -196,14 +196,14 @@ class AlpacaExecutor:
     # VENOM EXTREME TRAILING - GEX FLIPS DO 200-500%+ ON 0DTE
     # DON'T trail until BIG profits - let the move develop!
     # ═══════════════════════════════════════════════════════════════
-    TRAIL_BREAKEVEN_TRIGGER = 0.40   # AGGRESSIVE: +40% before breakeven (was +20% - too early!)
+    TRAIL_BREAKEVEN_TRIGGER = 999.0  # V7 FINAL V2: DISABLED   # AGGRESSIVE: +40% before breakeven (was +20% - too early!)
     TRAIL_LOCK_PROFIT_TRIGGER = 0.70  # AGGRESSIVE: +70% before trailing (was +35%)
-    TRAIL_LOCK_PROFIT_LEVEL = 0.15   # 15% trail below peak when running
+    TRAIL_LOCK_PROFIT_LEVEL = 0.20  # V7 FINAL V2   # 15% trail below peak when running
     TRAIL_AGGRESSIVE_TRIGGER = 1.00   # AGGRESSIVE: +100% before tightening (was +60%)
-    TRAIL_AGGRESSIVE_LEVEL = 0.10    # 10% trail when up 100%+
+    TRAIL_AGGRESSIVE_LEVEL = 0.15  # V7 FINAL V2    # 10% trail when up 100%+
     TRAIL_MOONSHOT_TRIGGER = 2.00    # MOONSHOT: +200% trail at 8% below peak (was +150%)
-    TRAIL_MOONSHOT_LEVEL = 0.08      # 8% trail - ride it to the moon
-    TRAIL_TIME_TIGHTEN_MINUTES = 35  # After 35 min, start tightening (was 40)
+    TRAIL_MOONSHOT_LEVEL = 0.10  # V7 FINAL V2      # 8% trail - ride it to the moon
+    TRAIL_TIME_TIGHTEN_MINUTES = 999  # V7 FINAL V2: DISABLED  # After 35 min, start tightening (was 40)
     TRAIL_TIME_TIGHTEN_PCT = 0.05    # -5% trailing stop after timeout
 
     # ═══════════════════════════════════════════════════════════════

@@ -157,7 +157,7 @@ class GovernorConfig:
     power_hour_target: float = 500.0
     max_drawdown_from_peak: float = 500.0
     max_daily_exposure_global: float = 4000.0
-    max_single_position: float = 1250.0
+    max_single_position: float = 500.0  # V7 FINAL V2
     max_exposure_per_ticker: float = 1250.0
     max_exposure_per_sector: float = 2000.0
     max_premium_scalper: float = 1000.0

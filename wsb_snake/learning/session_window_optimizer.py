@@ -701,10 +701,10 @@ def get_window_params(et_hour: float = None) -> Dict:
         threshold = params['conviction_threshold']
     """
     if et_hour is None:
-        from datetime import datetime, timezone, timedelta
-        now_utc = datetime.now(timezone.utc)
-        et_offset = timedelta(hours=-5)
-        now_et = now_utc + et_offset
+        from datetime import datetime
+        import pytz
+        et_tz = pytz.timezone("America/New_York")  # DST-aware
+        now_et = datetime.now(et_tz)
         et_hour = now_et.hour + now_et.minute / 60.0
 
     return session_window_optimizer.get_current_window_params(et_hour)
@@ -718,10 +718,10 @@ def can_trade_now(conviction: float, is_blowup: bool = False) -> Tuple[bool, str
         from wsb_snake.learning.session_window_optimizer import can_trade_now
         allowed, reason = can_trade_now(conviction=75)
     """
-    from datetime import datetime, timezone, timedelta
-    now_utc = datetime.now(timezone.utc)
-    et_offset = timedelta(hours=-5)
-    now_et = now_utc + et_offset
+    from datetime import datetime
+    import pytz
+    et_tz = pytz.timezone("America/New_York")  # DST-aware
+    now_et = datetime.now(et_tz)
     et_hour = now_et.hour + now_et.minute / 60.0
 
     return session_window_optimizer.can_trade_now(conviction, et_hour, 0, is_blowup)

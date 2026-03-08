@@ -121,8 +121,7 @@ class PowerHourProtocol:
             et = pytz.timezone("America/New_York")
             return datetime.now(et)
         except Exception:
-            # Fallback: assume UTC-5
-            return datetime.utcnow() - timedelta(hours=5)
+            return datetime.now(pytz.timezone("America/New_York"))  # DST-aware
 
     def _is_trading_day(self) -> bool:
         """Check if today is a trading day."""

@@ -55,7 +55,7 @@ SMALL_CAP_EQUITY_ONLY = [
 
 # ETFs with daily 0DTE options (not just Friday weeklies)
 # 2026-02-11: Only SPY/QQQ/IWM - commodities removed due to wide spreads
-DAILY_0DTE_TICKERS = ["SPY", "QQQ", "IWM"]
+DAILY_0DTE_TICKERS = ["SPY", "QQQ"]  # V7 LOCKED - NO IWM
 
 # WSB Wilder Plan: Momentum (small-cap / thematic) – EQUITY ONLY
 # Small caps have terrible options liquidity and theta decay
