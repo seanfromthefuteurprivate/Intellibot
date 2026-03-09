@@ -199,7 +199,11 @@ print("\n[SUITE 6] Alpaca Connection")
 
 try:
     import alpaca_trade_api as tradeapi
-    api = tradeapi.REST()
+    api = tradeapi.REST(
+        key_id=os.environ.get("ALPACA_API_KEY"),
+        secret_key=os.environ.get("ALPACA_SECRET_KEY"),
+        base_url="https://paper-api.alpaca.markets"
+    )
     acct = api.get_account()
 
     test("Alpaca account active",
