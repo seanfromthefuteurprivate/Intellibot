@@ -29,6 +29,37 @@ from wsb_snake.trading.alpaca_executor import alpaca_executor
 from wsb_snake.trading.risk_governor import TradingEngine
 from wsb_snake.collectors.hydra_bridge import get_hydra_intel
 
+# Alpaca API for session open price (CRITICAL: must use 9:30 AM open, not Polygon pre-market)
+import alpaca_trade_api as tradeapi
+import pytz
+
+def _get_session_open(ticker: str) -> Optional[float]:
+    """
+    Get the actual 9:30 AM regular session open price from Alpaca 1-min bars.
+
+    CRITICAL FIX (2026-03-09): Polygon's daily snapshot includes pre-market,
+    which causes direction lock to use wrong reference price. The backtest
+    uses 9:30 AM 1-min bar open, so live must match.
+
+    Returns None if data unavailable.
+    """
+    try:
+        ET = pytz.timezone("America/New_York")
+        api = tradeapi.REST(
+            key_id=os.environ.get("ALPACA_API_KEY"),
+            secret_key=os.environ.get("ALPACA_SECRET_KEY"),
+            base_url="https://paper-api.alpaca.markets"
+        )
+        today_str = datetime.now(ET).strftime("%Y-%m-%d")
+        bars = api.get_bars(ticker, "1Min", start=today_str, limit=1).df
+        if not bars.empty:
+            session_open = float(bars.iloc[0]["open"])
+            return session_open
+        return None
+    except Exception as e:
+        logger.warning(f"SESSION_OPEN_ERROR: {ticker} - {e}")
+        return None
+
 # Apex Governance Layer (toggleable)
 try:
     from wsb_snake.execution.apex_governance import ApexRunnerGovernance, GOVERNANCE_ENABLED, GovernanceState
@@ -334,27 +365,40 @@ def _determine_v6_direction() -> Optional[str]:
     if _v6_state["direction_set"]:
         return _v6_state["daily_direction"]
 
-    # Get SPY snapshot with today's open and current price
+    # Get SPY session open (9:30 AM) and current price
+    # CRITICAL FIX: Use Alpaca 1-min bar for open, NOT Polygon daily (includes pre-market)
     try:
-        # Use snapshot which includes today_open and change_pct
+        # Get 9:30 AM session open from Alpaca 1-min bars (matches backtest)
+        session_open = _get_session_open("SPY")
+
+        # Get current price from Polygon snapshot (this is fine for current price)
         spy_snapshot = polygon_enhanced.get_snapshot("SPY")
         if not spy_snapshot:
             logger.warning("V6_DIRECTION: No snapshot for SPY")
             return None
 
-        open_price = spy_snapshot.get("today_open")
+        polygon_open = spy_snapshot.get("today_open")  # For logging comparison only
         current_price = spy_snapshot.get("price")
+
+        # Use session open, fallback to polygon if unavailable
+        if session_open:
+            open_price = session_open
+            logger.info(f"OPEN_PRICE_SOURCE: session_9:30AM=${session_open:.2f} polygon_daily=${polygon_open:.2f} USING=session_9:30AM")
+        else:
+            open_price = polygon_open
+            logger.warning(f"OPEN_PRICE_SOURCE: session_9:30AM=UNAVAILABLE polygon_daily=${polygon_open:.2f} USING=polygon_daily (FALLBACK)")
+
         if not open_price or not current_price:
             logger.warning(f"V6_DIRECTION: Missing price data (open={open_price}, current={current_price})")
             return None
 
         # Calculate change percentage
         change_pct = ((current_price - open_price) / open_price) * 100
+        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0035")) * 100  # Convert to percentage
 
-        logger.info(f"V6_DIRECTION_CHECK: SPY open={open_price:.2f} current={current_price:.2f} change={change_pct:+.2f}%")
+        logger.info(f"DIRECTION_LOCK_CHECK: SPY session_open=${open_price:.2f} current=${current_price:.2f} change={change_pct:+.2f}% threshold=±{threshold:.2f}%")
 
         # Determine direction - V7: use env threshold (default 0.35%)
-        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0035")) * 100  # Convert to percentage
         if change_pct >= threshold:
             direction = "CALL"
             logger.info(f"V6_DIRECTION_SET: CALLS ONLY (SPY +{change_pct:.2f}% >= +{threshold:.2f}%)")
