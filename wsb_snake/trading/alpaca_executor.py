@@ -921,7 +921,7 @@ No overnight risk. Fresh start tomorrow!
                 f"Trade rejected. Source pattern: {pattern}"
             )
             try:
-                from wsb_snake.notifications.telegram_channels import send_alpaca_status
+                # send_alpaca_status already imported at module level
                 send_alpaca_status(
                     f"🚫 WHITELIST BLOCKED: {underlying} {direction}\n"
                     f"Only SPY/QQQ allowed. Source: {pattern}"
