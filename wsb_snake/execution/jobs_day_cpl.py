@@ -353,16 +353,17 @@ def _determine_v6_direction() -> Optional[str]:
 
         logger.info(f"V6_DIRECTION_CHECK: SPY open={open_price:.2f} current={current_price:.2f} change={change_pct:+.2f}%")
 
-        # Determine direction
-        if change_pct >= 0.2:
+        # Determine direction - V7: use env threshold (default 0.35%)
+        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0035")) * 100  # Convert to percentage
+        if change_pct >= threshold:
             direction = "CALL"
-            logger.info(f"V6_DIRECTION_SET: CALLS ONLY (SPY +{change_pct:.2f}%)")
-        elif change_pct <= -0.2:
+            logger.info(f"V6_DIRECTION_SET: CALLS ONLY (SPY +{change_pct:.2f}% >= +{threshold:.2f}%)")
+        elif change_pct <= -threshold:
             direction = "PUT"
-            logger.info(f"V6_DIRECTION_SET: PUTS ONLY (SPY {change_pct:.2f}%)")
+            logger.info(f"V6_DIRECTION_SET: PUTS ONLY (SPY {change_pct:.2f}% <= -{threshold:.2f}%)")
         else:
             # Not enough move yet - keep waiting
-            logger.info(f"V6_DIRECTION_WAIT: SPY {change_pct:+.2f}% (need ±0.2% for direction lock)")
+            logger.info(f"V6_DIRECTION_WAIT: SPY {change_pct:+.2f}% (need ±{threshold:.2f}% for direction lock)")
             return None
 
         # Lock direction for the day
