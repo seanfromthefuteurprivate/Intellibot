@@ -1224,6 +1224,15 @@ No overnight risk. Fresh start tomorrow!
 
         if qty <= 0:
             qty = self.calculate_position_size(option_price)
+
+        # CRITICAL FIX (2026-03-09): Cap qty to MAX_PER_TRADE regardless of VENOM/Kelly sizing
+        # Bug: VENOM sizing returned $17,203 which exceeded MAX_DAILY_EXPOSURE ($6,000)
+        # This caused trades to be rejected even though MAX_PER_TRADE is $500
+        max_qty_per_trade = max(1, int(self.MAX_PER_TRADE / (option_price * 100)))
+        if qty > max_qty_per_trade:
+            logger.info(f"Capping qty from {qty} to {max_qty_per_trade} (MAX_PER_TRADE=${self.MAX_PER_TRADE})")
+            qty = max_qty_per_trade
+
         estimated_cost = qty * option_price * 100  # Total cost in dollars
         
         # Skip if position size is 0 (option too expensive for $1000 per trade limit)
