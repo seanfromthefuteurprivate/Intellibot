@@ -10,8 +10,10 @@ Originally built for NFP Jobs Day events, now extended for daily 0DTE trading.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
+from pathlib import Path
 
 from wsb_snake.collectors.polygon_enhanced import polygon_enhanced
 from wsb_snake.collectors.polygon_options import polygon_options
@@ -72,6 +74,43 @@ except ImportError:
     _telemetry_bus = None
 
 logger = get_logger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# V6 SNIPER STATE PERSISTENCE — JSON file in state/ directory
+# BUG FIX (March 10, 2026): File-based state survives systemd restarts
+# Previous bug: in-memory last_reset_date=None caused reset on every restart
+# ═══════════════════════════════════════════════════════════════════════════════
+SNIPER_STATE_FILE = Path(__file__).parent.parent.parent / "state" / "sniper_state.json"
+
+
+def _save_sniper_state(date_str: str, trades_today: int, direction_locked: Optional[str] = None):
+    """Persist sniper state so restarts don't reset it."""
+    from zoneinfo import ZoneInfo
+    state = {
+        "date": date_str,
+        "trades_today": trades_today,
+        "direction_locked": direction_locked,
+        "saved_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
+    }
+    try:
+        SNIPER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SNIPER_STATE_FILE.write_text(json.dumps(state, indent=2))
+        logger.info(f"SNIPER_STATE_SAVED: {date_str} trades={trades_today} direction={direction_locked}")
+    except Exception as e:
+        logger.error(f"SNIPER_STATE_SAVE_ERROR: {e}")
+
+
+def _load_sniper_state() -> Optional[Dict[str, Any]]:
+    """Load persisted sniper state. Returns None if no state or different day."""
+    try:
+        if SNIPER_STATE_FILE.exists():
+            state = json.loads(SNIPER_STATE_FILE.read_text())
+            logger.debug(f"SNIPER_STATE_LOADED: {state}")
+            return state
+    except Exception as e:
+        logger.warning(f"SNIPER_STATE_LOAD_ERROR: {e}")
+    return None
+
 
 # Direction lock: one direction per ticker per day (prevents CALL+PUT whipsaw)
 _direction_lock = {}  # {ticker: "CALL" or "PUT", "_last_reset": "YYYY-MM-DD"}
@@ -206,7 +245,7 @@ TARGET_BUY_CALLS = 3
 SNIPER_CAPITAL = 500               # Position sizing base (pretend cap)
 MAX_OPEN_POSITIONS = 1              # One shot at a time
 DAILY_PROFIT_TARGET = 10000         # +$10,000 = halt (Beast Mode)
-DAILY_MAX_LOSS = -750               # -$750 = halt. Week 1 lesson: cut losses early.
+DAILY_MAX_LOSS = float(os.environ.get('DAILY_MAX_LOSS', '-300'))  # Read from .env, default -$300
 SNIPER_COOLDOWN_SECONDS = 300       # 5-min cooldown after ANY trade (prevents API lag race)
 
 # Local tracking to prevent API lag race condition (mutable dict for nested scope)
@@ -394,7 +433,7 @@ def _determine_v6_direction() -> Optional[str]:
 
         # Calculate change percentage
         change_pct = ((current_price - open_price) / open_price) * 100
-        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0035")) * 100  # Convert to percentage
+        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0040")) * 100  # Convert to percentage (raised from 0.35% to 0.40%)
 
         logger.info(f"DIRECTION_LOCK_CHECK: SPY session_open=${open_price:.2f} current=${current_price:.2f} change={change_pct:+.2f}% threshold=±{threshold:.2f}%")
 
@@ -1004,17 +1043,33 @@ class JobsDayCPL:
 
         # ╔══════════════════════════════════════════════════════════════════════════════╗
         # ║                      V6 SNIPER: DAILY RESET + TRADE CHECK                    ║
+        # ║  FIX (March 10, 2026): Check persisted state BEFORE resetting               ║
+        # ║  Bug: _v6_state["last_reset_date"] = None on restart caused spurious reset  ║
         # ╚══════════════════════════════════════════════════════════════════════════════╝
-        if _v6_state["last_reset_date"] != today:
+        from zoneinfo import ZoneInfo
+        today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+
+        # STEP 1: Check persisted state FIRST (before any reset)
+        saved_state = _load_sniper_state()
+        if saved_state and saved_state.get("date") == today_et and saved_state.get("trades_today", 0) > 0:
+            # SAME DAY, already traded — DO NOT RESET, restore state
+            if not _v6_state["trade_complete"]:
+                _v6_state["trade_complete"] = True
+                _v6_state["direction_set"] = True
+                _v6_state["daily_direction"] = saved_state.get("direction_locked")
+                _v6_state["last_reset_date"] = today_et
+                logger.info(f"V6_SNIPER_PERSIST_RESTORED: Loaded state for {today_et} — {saved_state['trades_today']} trades done. NOT resetting.")
+        elif _v6_state["last_reset_date"] != today_et:
+            # Actually a new day — perform reset
             _v6_state = {
                 "daily_direction": None,
                 "direction_set": False,
                 "direction_set_time": None,
                 "trade_complete": False,
                 "trade_completed_time": None,
-                "last_reset_date": today,
+                "last_reset_date": today_et,
             }
-            logger.info(f"V6_SNIPER_RESET: New day {today} - direction unlocked, ready for ONE trade")
+            logger.info(f"V6_SNIPER_RESET: New day {today_et} - direction unlocked, ready for ONE trade")
             # Clean up old persistence flags (keep only today's)
             import glob as _glob
             today_flag = _get_trade_complete_flag_path()
@@ -1025,12 +1080,21 @@ class JobsDayCPL:
                         logger.debug(f"Cleaned old flag: {old_flag}")
                     except Exception:
                         pass
+            # Also clean up old state files
+            try:
+                if SNIPER_STATE_FILE.exists():
+                    old_state = json.loads(SNIPER_STATE_FILE.read_text())
+                    if old_state.get("date") != today_et:
+                        SNIPER_STATE_FILE.unlink()
+                        logger.debug(f"Cleaned old state file: {SNIPER_STATE_FILE}")
+            except Exception:
+                pass
 
-        # V6 PERSISTENCE RECOVERY: Check if trade was completed before a restart
+        # STEP 2: Legacy flag check (belt + suspenders)
         if not _v6_state["trade_complete"] and _check_persisted_trade_complete():
             _v6_state["trade_complete"] = True
             _v6_state["direction_set"] = True
-            logger.info("V6_PERSISTENCE_RESTORED: trade_complete recovered from flag file. Done for today.")
+            logger.info("V6_PERSISTENCE_RESTORED: trade_complete recovered from legacy flag file. Done for today.")
 
         # V6 RULE 2: ONE TRADE THEN DONE - If trade already executed today, STOP
         if _v6_state["trade_complete"]:
@@ -1287,6 +1351,12 @@ class JobsDayCPL:
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
                                 _persist_trade_complete()
+                                # Save to JSON state file (survives restarts)
+                                _save_sniper_state(
+                                    date_str=datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+                                    trades_today=1,
+                                    direction_locked=_v6_state.get("daily_direction")
+                                )
 
                                 # SECOND BRAIN: Report HIGH HITTER trade
                                 _report_trade_to_second_brain(
@@ -1506,6 +1576,12 @@ class JobsDayCPL:
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
                                 logger.info(f"V6_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
                                 _persist_trade_complete()
+                                # Save to JSON state file (survives restarts)
+                                _save_sniper_state(
+                                    date_str=datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+                                    trades_today=1,
+                                    direction_locked=_v6_state.get("daily_direction")
+                                )
                                 send_alert(f"🎯 V6 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
 
                                 # ═══════════════════════════════════════════════════════════════

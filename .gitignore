@@ -64,3 +64,4 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+state/sniper_state.json

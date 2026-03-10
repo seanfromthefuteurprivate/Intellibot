@@ -709,7 +709,7 @@ No overnight risk. Fresh start tomorrow!
             # SNIPER MODE: DAILY P&L KILL SWITCH (Beast Mode V3)
             from zoneinfo import ZoneInfo
             DAILY_PROFIT_TARGET = 10000  # +$10K target (Beast Mode)
-            DAILY_MAX_LOSS = -750        # -$750 floor (wider)
+            DAILY_MAX_LOSS = float(os.environ.get('DAILY_MAX_LOSS', '-300'))  # Read from .env
             try:
                 acct_resp = requests.get(f"{self.BASE_URL}/v2/account", headers=self.headers, timeout=5)
                 if acct_resp.status_code == 200:
