@@ -1994,12 +1994,12 @@ Reason: Order was {order_status}
                         position.stop_loss = new_stop
                         logger.info(f"TRAIL: {position.option_symbol} to BREAKEVEN (${new_stop:.2f})")
 
-                elif profit_pct >= 0.05:  # +5% profit
+                elif profit_pct >= 0.10 and hold_minutes >= 3:  # +10% after 3 min hold — no noise tightening
                     # Reduce initial risk to -8%
                     new_stop = position.entry_price * 0.92
                     if position.stop_loss < new_stop:
                         position.stop_loss = new_stop
-                        logger.info(f"TRAIL: {position.option_symbol} stop to -8% (${new_stop:.2f})")
+                        logger.info(f"TRAIL: {position.option_symbol} stop to -8% (${new_stop:.2f}) [+{profit_pct*100:.1f}% after {hold_minutes:.1f}min]")
 
                 # Time-based tightening after 30 min (only if not already trailing higher)
                 if hold_minutes >= self.TRAIL_TIME_TIGHTEN_MINUTES and profit_pct > 0:
