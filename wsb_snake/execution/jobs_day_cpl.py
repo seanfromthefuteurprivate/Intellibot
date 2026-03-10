@@ -82,20 +82,64 @@ logger = get_logger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 SNIPER_STATE_FILE = Path(__file__).parent.parent.parent / "state" / "sniper_state.json"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# V7 TWO-STAGE CONFIRMATION CONFIG — Read from .env
+# Morning: Signal at 9:45, Confirm at 10:00
+# Afternoon: Signal at 1:00 PM, Confirm at 1:15 PM (only if morning done)
+# ═══════════════════════════════════════════════════════════════════════════════
+MORNING_SIGNAL_TIME = os.environ.get("MORNING_SIGNAL_TIME", "09:45")
+MORNING_CONFIRM_TIME = os.environ.get("MORNING_CONFIRM_TIME", "10:00")
+AFTERNOON_ENABLED = os.environ.get("AFTERNOON_WINDOW_ENABLED", "true").lower() == "true"
+AFTERNOON_THRESHOLD = float(os.environ.get("AFTERNOON_THRESHOLD", "0.0050"))
+AFTERNOON_SIGNAL_TIME = os.environ.get("AFTERNOON_SIGNAL_TIME", "13:00")
+AFTERNOON_CONFIRM_TIME = os.environ.get("AFTERNOON_CONFIRM_TIME", "13:15")
 
-def _save_sniper_state(date_str: str, trades_today: int, direction_locked: Optional[str] = None):
+# V7 Two-Stage Confirmation State (Morning)
+_confirmation_state = {
+    "signal_ticker": None,       # "SPY" or "QQQ"
+    "signal_direction": None,    # "CALL" or "PUT"
+    "signal_pct": None,          # % change at signal time
+    "signal_time": None,         # when signal was detected
+    "confirmed": False,          # True after 10:00 confirmation
+    "morning_closed": False,     # True if morning window is done (confirmed or rejected)
+}
+
+# V7 Afternoon Window State
+_afternoon_state = {
+    "enabled": False,            # Set to True at 1:00 PM if conditions met
+    "signal_ticker": None,
+    "signal_direction": None,
+    "signal_pct": None,
+    "confirmed": False,
+    "afternoon_closed": False,   # True after 1:15 confirm/reject
+}
+
+
+def _save_sniper_state(
+    date_str: str,
+    trades_today: int,
+    morning_closed: bool = False,
+    afternoon_closed: bool = False,
+    direction_locked: Optional[str] = None,
+    morning_signal: Optional[Dict] = None,
+    afternoon_signal: Optional[Dict] = None
+):
     """Persist sniper state so restarts don't reset it."""
     from zoneinfo import ZoneInfo
     state = {
         "date": date_str,
         "trades_today": trades_today,
+        "morning_closed": morning_closed,
+        "afternoon_closed": afternoon_closed,
         "direction_locked": direction_locked,
+        "morning_signal": morning_signal,
+        "afternoon_signal": afternoon_signal,
         "saved_at": datetime.now(ZoneInfo("America/New_York")).isoformat()
     }
     try:
         SNIPER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         SNIPER_STATE_FILE.write_text(json.dumps(state, indent=2))
-        logger.info(f"SNIPER_STATE_SAVED: {date_str} trades={trades_today} direction={direction_locked}")
+        logger.info(f"SNIPER_STATE_SAVED: {date_str} trades={trades_today} morning_closed={morning_closed} afternoon_closed={afternoon_closed}")
     except Exception as e:
         logger.error(f"SNIPER_STATE_SAVE_ERROR: {e}")
 
@@ -378,94 +422,361 @@ def _get_hydra_size_multiplier() -> float:
         return 1.0  # Default to full size on error
 
 
-def _determine_v6_direction() -> Optional[str]:
+def _get_ticker_change_pct(ticker: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
-    V6 SNIPER: Determine daily direction based on first 15 minutes of SPY.
-
-    Rules:
-    - Wait until 9:45 AM ET (15 min after open)
-    - Check SPY price change from 9:30 open
-    - If SPY +0.2% or more: CALLS only all day
-    - If SPY -0.2% or more: PUTS only all day
-    - If between -0.2% and +0.2%: Wait for breakout (check again next scan)
-
-    Returns: "CALL", "PUT", or None (still waiting)
+    Get % change from session open for a ticker.
+    Returns: (change_pct, open_price, current_price) or (None, None, None) on error.
     """
-    global _v6_state
+    try:
+        session_open = _get_session_open(ticker)
+        snapshot = polygon_enhanced.get_snapshot(ticker)
+        if not snapshot:
+            return None, None, None
+
+        polygon_open = snapshot.get("today_open")
+        current_price = snapshot.get("price")
+
+        open_price = session_open if session_open else polygon_open
+        if not open_price or not current_price:
+            return None, None, None
+
+        change_pct = ((current_price - open_price) / open_price) * 100
+        return change_pct, open_price, current_price
+    except Exception as e:
+        logger.warning(f"_get_ticker_change_pct({ticker}) error: {e}")
+        return None, None, None
+
+
+def _determine_v7_direction() -> Optional[str]:
+    """
+    V7 SNIPER: Two-stage confirmation for direction lock.
+
+    MORNING WINDOW:
+    - Stage 1 (9:45 AM): Check SPY/QQQ for threshold cross, record signal but DON'T lock
+    - Stage 2 (10:00 AM): Confirm if % held or expanded -> lock and trade
+                          If contracted -> reject, close morning window
+
+    AFTERNOON WINDOW (if morning done without trade):
+    - Stage 1 (1:00 PM): Check for 0.50% threshold
+    - Stage 2 (1:15 PM): Confirm or reject
+
+    QQQ takes priority over SPY when both cross threshold.
+
+    Returns: "CALL", "PUT", or None (still waiting/window closed)
+    """
+    global _v6_state, _confirmation_state, _afternoon_state
     from zoneinfo import ZoneInfo
     et_now = datetime.now(ZoneInfo("America/New_York"))
+    current_time = et_now.strftime("%H:%M")
 
-    # Must be after 9:45 AM to have 15 min of data
-    if et_now.hour < 9 or (et_now.hour == 9 and et_now.minute < 45):
-        logger.debug(f"V6_DIRECTION: Waiting for 9:45 AM (currently {et_now.hour}:{et_now.minute:02d})")
-        return None
+    # Parse time configs
+    morning_signal_h, morning_signal_m = map(int, MORNING_SIGNAL_TIME.split(":"))
+    morning_confirm_h, morning_confirm_m = map(int, MORNING_CONFIRM_TIME.split(":"))
+    afternoon_signal_h, afternoon_signal_m = map(int, AFTERNOON_SIGNAL_TIME.split(":"))
+    afternoon_confirm_h, afternoon_confirm_m = map(int, AFTERNOON_CONFIRM_TIME.split(":"))
 
-    # Already set today
+    threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0040")) * 100  # Morning threshold %
+    afternoon_threshold = AFTERNOON_THRESHOLD * 100  # Afternoon threshold %
+
+    # Already locked today
     if _v6_state["direction_set"]:
         return _v6_state["daily_direction"]
 
-    # Get SPY session open (9:30 AM) and current price
-    # CRITICAL FIX: Use Alpaca 1-min bar for open, NOT Polygon daily (includes pre-market)
-    try:
-        # Get 9:30 AM session open from Alpaca 1-min bars (matches backtest)
-        session_open = _get_session_open("SPY")
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MORNING WINDOW — Two-Stage Confirmation
+    # ═══════════════════════════════════════════════════════════════════════════
 
-        # Get current price from Polygon snapshot (this is fine for current price)
-        spy_snapshot = polygon_enhanced.get_snapshot("SPY")
-        if not spy_snapshot:
-            logger.warning("V6_DIRECTION: No snapshot for SPY")
-            return None
-
-        polygon_open = spy_snapshot.get("today_open")  # For logging comparison only
-        current_price = spy_snapshot.get("price")
-
-        # Use session open, fallback to polygon if unavailable
-        if session_open:
-            open_price = session_open
-            logger.info(f"OPEN_PRICE_SOURCE: session_9:30AM=${session_open:.2f} polygon_daily=${polygon_open:.2f} USING=session_9:30AM")
-        else:
-            open_price = polygon_open
-            logger.warning(f"OPEN_PRICE_SOURCE: session_9:30AM=UNAVAILABLE polygon_daily=${polygon_open:.2f} USING=polygon_daily (FALLBACK)")
-
-        if not open_price or not current_price:
-            logger.warning(f"V6_DIRECTION: Missing price data (open={open_price}, current={current_price})")
-            return None
-
-        # Calculate change percentage
-        change_pct = ((current_price - open_price) / open_price) * 100
-        threshold = float(os.getenv("DIRECTION_LOCK_THRESHOLD", "0.0040")) * 100  # Convert to percentage (raised from 0.35% to 0.40%)
-
-        logger.info(f"DIRECTION_LOCK_CHECK: SPY session_open=${open_price:.2f} current=${current_price:.2f} change={change_pct:+.2f}% threshold=±{threshold:.2f}%")
-
-        # Determine direction - V7: use env threshold (default 0.35%)
-        if change_pct >= threshold:
-            direction = "CALL"
-            logger.info(f"V6_DIRECTION_SET: CALLS ONLY (SPY +{change_pct:.2f}% >= +{threshold:.2f}%)")
-        elif change_pct <= -threshold:
-            direction = "PUT"
-            logger.info(f"V6_DIRECTION_SET: PUTS ONLY (SPY {change_pct:.2f}% <= -{threshold:.2f}%)")
-        else:
-            # Not enough move yet - keep waiting
-            logger.info(f"V6_DIRECTION_WAIT: SPY {change_pct:+.2f}% (need ±{threshold:.2f}% for direction lock)")
-            return None
-
-        # Lock direction for the day
-        _v6_state["daily_direction"] = direction
-        _v6_state["direction_set"] = True
-        _v6_state["direction_set_time"] = datetime.now(timezone.utc)
-
-        # Send Telegram alert
-        try:
-            from wsb_snake.notifications.telegram_bot import send_alert
-            send_alert(f"🎯 V6 SNIPER DIRECTION LOCKED: {direction}S ONLY\nSPY {change_pct:+.2f}% from open\nOne trade, let it ride.")
-        except Exception:
-            pass
-
-        return direction
-
-    except Exception as e:
-        logger.warning(f"V6_DIRECTION_ERROR: {e}")
+    # Before 9:45: do nothing
+    if et_now.hour < morning_signal_h or (et_now.hour == morning_signal_h and et_now.minute < morning_signal_m):
+        logger.debug(f"V7_DIRECTION: Waiting for {MORNING_SIGNAL_TIME} AM (currently {current_time})")
         return None
+
+    # Morning window already closed (confirmed or rejected)
+    if _confirmation_state["morning_closed"]:
+        # Check if afternoon window should open
+        if AFTERNOON_ENABLED and not _afternoon_state["afternoon_closed"]:
+            return _check_afternoon_window(et_now, afternoon_signal_h, afternoon_signal_m,
+                                           afternoon_confirm_h, afternoon_confirm_m, afternoon_threshold)
+        logger.debug(f"V7_DIRECTION: Morning window closed, afternoon disabled or closed")
+        return None
+
+    # ── STAGE 1: 9:45 - 9:59 — Record signal if threshold crossed ──
+    is_confirmation_time = (et_now.hour > morning_confirm_h or
+                            (et_now.hour == morning_confirm_h and et_now.minute >= morning_confirm_m))
+
+    if not is_confirmation_time:
+        # Between 9:45 and 9:59 — look for signal, don't lock yet
+        if _confirmation_state["signal_ticker"] is None:
+            # Check QQQ first (75-80% win rate vs SPY 25%)
+            qqq_pct, qqq_open, qqq_price = _get_ticker_change_pct("QQQ")
+            spy_pct, spy_open, spy_price = _get_ticker_change_pct("SPY")
+
+            logger.info(f"V7_STAGE1_CHECK: SPY={spy_pct:+.2f}% QQQ={qqq_pct:+.2f}% threshold=±{threshold:.2f}%")
+
+            # QQQ takes priority
+            signal_ticker = None
+            signal_pct = None
+
+            if qqq_pct is not None and abs(qqq_pct) >= threshold:
+                signal_ticker = "QQQ"
+                signal_pct = qqq_pct
+            elif spy_pct is not None and abs(spy_pct) >= threshold:
+                signal_ticker = "SPY"
+                signal_pct = spy_pct
+
+            if signal_ticker:
+                direction = "CALL" if signal_pct > 0 else "PUT"
+                _confirmation_state["signal_ticker"] = signal_ticker
+                _confirmation_state["signal_direction"] = direction
+                _confirmation_state["signal_pct"] = signal_pct
+                _confirmation_state["signal_time"] = et_now.strftime("%H:%M:%S")
+
+                logger.info(f"V7_STAGE1_SIGNAL: {signal_ticker} at {signal_pct:+.2f}% — {direction}S signal recorded, waiting for {MORNING_CONFIRM_TIME} confirmation")
+
+                try:
+                    from wsb_snake.notifications.telegram_bot import send_alert
+                    send_alert(f"📊 V7 STAGE 1: {signal_ticker} {signal_pct:+.2f}%\n{direction}S signal recorded\nWaiting for {MORNING_CONFIRM_TIME} confirmation...")
+                except Exception:
+                    pass
+            else:
+                logger.info(f"V7_STAGE1: No signal yet — SPY={spy_pct:+.2f}%, QQQ={qqq_pct:+.2f}% (need ±{threshold:.2f}%)")
+        else:
+            logger.debug(f"V7_STAGE1: Signal already recorded ({_confirmation_state['signal_ticker']} {_confirmation_state['signal_direction']}), waiting for {MORNING_CONFIRM_TIME}")
+
+        return None  # Don't lock yet
+
+    # ── STAGE 2: 10:00+ — Confirm or reject the signal ──
+    if _confirmation_state["signal_ticker"] is not None and not _confirmation_state["confirmed"]:
+        signal_ticker = _confirmation_state["signal_ticker"]
+        signal_pct = _confirmation_state["signal_pct"]
+        signal_direction = _confirmation_state["signal_direction"]
+
+        # Get current % change for the signal ticker
+        confirm_pct, _, _ = _get_ticker_change_pct(signal_ticker)
+
+        if confirm_pct is None:
+            logger.warning(f"V7_STAGE2: Cannot get {signal_ticker} price for confirmation")
+            return None
+
+        # For CALLS: confirm if % held or expanded (still >= signal_pct)
+        # For PUTS: confirm if % held or expanded (still <= signal_pct, i.e., more negative)
+        if signal_direction == "CALL":
+            confirmed = confirm_pct >= signal_pct
+        else:  # PUT
+            confirmed = confirm_pct <= signal_pct
+
+        logger.info(f"V7_STAGE2_CHECK: {signal_ticker} 9:45={signal_pct:+.2f}% → 10:00={confirm_pct:+.2f}% — {'CONFIRMING' if confirmed else 'REJECTING'}")
+
+        if confirmed:
+            # ✅ CONFIRMED — Lock direction and allow trade
+            _confirmation_state["confirmed"] = True
+            _confirmation_state["morning_closed"] = True
+
+            _v6_state["daily_direction"] = signal_direction
+            _v6_state["direction_set"] = True
+            _v6_state["direction_set_time"] = datetime.now(timezone.utc)
+
+            logger.info(f"V7_STAGE2_CONFIRMED: {signal_ticker} 9:45={signal_pct:+.2f}% → 10:00={confirm_pct:+.2f}% — LOCKED {signal_direction}S, entering trade")
+
+            try:
+                from wsb_snake.notifications.telegram_bot import send_alert
+                send_alert(f"🎯 V7 CONFIRMED: {signal_ticker} LOCKED {signal_direction}S\n9:45: {signal_pct:+.2f}% → 10:00: {confirm_pct:+.2f}%\nSignal HELD — entering trade!")
+            except Exception:
+                pass
+
+            return signal_direction
+        else:
+            # ❌ REJECTED — Signal faded, close morning window
+            _confirmation_state["morning_closed"] = True
+
+            logger.info(f"V7_STAGE2_REJECTED: {signal_ticker} 9:45={signal_pct:+.2f}% → 10:00={confirm_pct:+.2f}% — signal faded, NO TRADE")
+
+            try:
+                from wsb_snake.notifications.telegram_bot import send_alert
+                send_alert(f"❌ V7 REJECTED: {signal_ticker} signal FADED\n9:45: {signal_pct:+.2f}% → 10:00: {confirm_pct:+.2f}%\nMorning window CLOSED" +
+                          ("\n\n⏰ Afternoon window opens at 1:00 PM" if AFTERNOON_ENABLED else ""))
+            except Exception:
+                pass
+
+            # Save state for persistence
+            _save_sniper_state(
+                date_str=et_now.strftime("%Y-%m-%d"),
+                trades_today=0,
+                morning_closed=True,
+                afternoon_closed=False
+            )
+
+            return None
+
+    # No signal was recorded by 10:00 — close morning window
+    if _confirmation_state["signal_ticker"] is None and is_confirmation_time:
+        _confirmation_state["morning_closed"] = True
+        logger.info(f"V7_MORNING_CLOSED: No signal by {MORNING_CONFIRM_TIME} — morning window closed")
+
+        # Save state
+        _save_sniper_state(
+            date_str=et_now.strftime("%Y-%m-%d"),
+            trades_today=0,
+            morning_closed=True,
+            afternoon_closed=False
+        )
+
+        if AFTERNOON_ENABLED:
+            logger.info(f"V7_AFTERNOON_PENDING: Will check for afternoon signal at {AFTERNOON_SIGNAL_TIME}")
+
+        return None
+
+    return None
+
+
+def _check_afternoon_window(et_now, signal_h: int, signal_m: int,
+                            confirm_h: int, confirm_m: int, threshold: float) -> Optional[str]:
+    """
+    Check afternoon window for two-stage confirmation.
+    Only called if morning window is closed and afternoon is enabled.
+    """
+    global _v6_state, _afternoon_state
+
+    current_time = et_now.strftime("%H:%M")
+
+    # Already closed
+    if _afternoon_state["afternoon_closed"]:
+        return None
+
+    # Check if we should enable afternoon window
+    # Conditions: morning done, no open position, daily P&L not at limit
+    if not _afternoon_state["enabled"]:
+        if et_now.hour >= signal_h and et_now.minute >= signal_m:
+            # Check daily P&L
+            try:
+                import requests as req
+                acct_resp = req.get(
+                    f"{os.environ.get('ALPACA_BASE_URL', '')}/v2/account",
+                    headers={
+                        "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+                        "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET_KEY", "")
+                    },
+                    timeout=5
+                )
+                if acct_resp.status_code == 200:
+                    acct = acct_resp.json()
+                    daily_pnl = float(acct.get("portfolio_value", 0)) - float(acct.get("last_equity", 0))
+                    if daily_pnl <= float(os.environ.get('DAILY_MAX_LOSS', '-300')):
+                        logger.info(f"V7_AFTERNOON_BLOCKED: Daily P&L ${daily_pnl:,.2f} at loss limit")
+                        _afternoon_state["afternoon_closed"] = True
+                        return None
+                    logger.info(f"V7_AFTERNOON_ENABLED: Daily P&L ${daily_pnl:+,.2f}, opening afternoon window")
+            except Exception as e:
+                logger.warning(f"V7_AFTERNOON P&L check failed: {e}")
+
+            _afternoon_state["enabled"] = True
+
+    if not _afternoon_state["enabled"]:
+        return None
+
+    # Before signal time
+    if et_now.hour < signal_h or (et_now.hour == signal_h and et_now.minute < signal_m):
+        return None
+
+    is_confirm_time = (et_now.hour > confirm_h or
+                       (et_now.hour == confirm_h and et_now.minute >= confirm_m))
+
+    # ── STAGE 1: 1:00 - 1:14 — Look for signal ──
+    if not is_confirm_time:
+        if _afternoon_state["signal_ticker"] is None:
+            qqq_pct, _, _ = _get_ticker_change_pct("QQQ")
+            spy_pct, _, _ = _get_ticker_change_pct("SPY")
+
+            logger.info(f"V7_AFTERNOON_STAGE1: SPY={spy_pct:+.2f}% QQQ={qqq_pct:+.2f}% threshold=±{threshold:.2f}%")
+
+            signal_ticker = None
+            signal_pct = None
+
+            if qqq_pct is not None and abs(qqq_pct) >= threshold:
+                signal_ticker = "QQQ"
+                signal_pct = qqq_pct
+            elif spy_pct is not None and abs(spy_pct) >= threshold:
+                signal_ticker = "SPY"
+                signal_pct = spy_pct
+
+            if signal_ticker:
+                direction = "CALL" if signal_pct > 0 else "PUT"
+                _afternoon_state["signal_ticker"] = signal_ticker
+                _afternoon_state["signal_direction"] = direction
+                _afternoon_state["signal_pct"] = signal_pct
+
+                logger.info(f"V7_AFTERNOON_SIGNAL: {signal_ticker} at {signal_pct:+.2f}% — {direction}S, waiting for {AFTERNOON_CONFIRM_TIME} confirmation")
+
+                try:
+                    from wsb_snake.notifications.telegram_bot import send_alert
+                    send_alert(f"📊 V7 AFTERNOON: {signal_ticker} {signal_pct:+.2f}%\n{direction}S signal\nConfirming at {AFTERNOON_CONFIRM_TIME}...")
+                except Exception:
+                    pass
+        return None
+
+    # ── STAGE 2: 1:15+ — Confirm or reject ──
+    if _afternoon_state["signal_ticker"] is not None and not _afternoon_state["confirmed"]:
+        signal_ticker = _afternoon_state["signal_ticker"]
+        signal_pct = _afternoon_state["signal_pct"]
+        signal_direction = _afternoon_state["signal_direction"]
+
+        confirm_pct, _, _ = _get_ticker_change_pct(signal_ticker)
+
+        if confirm_pct is None:
+            logger.warning(f"V7_AFTERNOON_STAGE2: Cannot get {signal_ticker} price")
+            return None
+
+        if signal_direction == "CALL":
+            confirmed = confirm_pct >= signal_pct
+        else:
+            confirmed = confirm_pct <= signal_pct
+
+        logger.info(f"V7_AFTERNOON_STAGE2: {signal_ticker} {AFTERNOON_SIGNAL_TIME}={signal_pct:+.2f}% → {AFTERNOON_CONFIRM_TIME}={confirm_pct:+.2f}% — {'CONFIRMED' if confirmed else 'REJECTED'}")
+
+        if confirmed:
+            _afternoon_state["confirmed"] = True
+            _afternoon_state["afternoon_closed"] = True
+
+            _v6_state["daily_direction"] = signal_direction
+            _v6_state["direction_set"] = True
+            _v6_state["direction_set_time"] = datetime.now(timezone.utc)
+
+            logger.info(f"V7_AFTERNOON_CONFIRMED: {signal_ticker} LOCKED {signal_direction}S — entering afternoon trade")
+
+            try:
+                from wsb_snake.notifications.telegram_bot import send_alert
+                send_alert(f"🎯 V7 AFTERNOON CONFIRMED: {signal_ticker} {signal_direction}S\n{AFTERNOON_SIGNAL_TIME}: {signal_pct:+.2f}% → {AFTERNOON_CONFIRM_TIME}: {confirm_pct:+.2f}%\nEntering afternoon trade!")
+            except Exception:
+                pass
+
+            return signal_direction
+        else:
+            _afternoon_state["afternoon_closed"] = True
+            logger.info(f"V7_AFTERNOON_REJECTED: Signal faded — no afternoon trade")
+
+            try:
+                from wsb_snake.notifications.telegram_bot import send_alert
+                send_alert(f"❌ V7 AFTERNOON REJECTED: {signal_ticker} signal faded\nNo more trades today")
+            except Exception:
+                pass
+
+            return None
+
+    # No signal by confirm time
+    if _afternoon_state["signal_ticker"] is None and is_confirm_time:
+        _afternoon_state["afternoon_closed"] = True
+        logger.info(f"V7_AFTERNOON_CLOSED: No signal by {AFTERNOON_CONFIRM_TIME}")
+        return None
+
+    return None
+
+
+def _determine_v6_direction() -> Optional[str]:
+    """
+    DEPRECATED: Replaced by _determine_v7_direction() with two-stage confirmation.
+    This wrapper maintains backwards compatibility.
+    """
+    return _determine_v7_direction()
 
 
 def _is_affordable(contract: Dict[str, Any], max_cap_override: Optional[float] = None) -> bool:
@@ -1042,10 +1353,11 @@ class JobsDayCPL:
             logger.info(f"CPL_DIRECTION_COOLDOWN: Daily reset for {today} (cleared direction locks, _sent_calls, _cooldown_tracker)")
 
         # ╔══════════════════════════════════════════════════════════════════════════════╗
-        # ║                      V6 SNIPER: DAILY RESET + TRADE CHECK                    ║
+        # ║                      V7 SNIPER: DAILY RESET + TRADE CHECK                    ║
         # ║  FIX (March 10, 2026): Check persisted state BEFORE resetting               ║
-        # ║  Bug: _v6_state["last_reset_date"] = None on restart caused spurious reset  ║
+        # ║  V7: Added two-stage confirmation + afternoon window state tracking          ║
         # ╚══════════════════════════════════════════════════════════════════════════════╝
+        global _confirmation_state, _afternoon_state
         from zoneinfo import ZoneInfo
         today_et = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
@@ -1058,9 +1370,19 @@ class JobsDayCPL:
                 _v6_state["direction_set"] = True
                 _v6_state["daily_direction"] = saved_state.get("direction_locked")
                 _v6_state["last_reset_date"] = today_et
-                logger.info(f"V6_SNIPER_PERSIST_RESTORED: Loaded state for {today_et} — {saved_state['trades_today']} trades done. NOT resetting.")
+                # Also restore confirmation states
+                _confirmation_state["morning_closed"] = saved_state.get("morning_closed", True)
+                _confirmation_state["confirmed"] = True
+                _afternoon_state["afternoon_closed"] = saved_state.get("afternoon_closed", False)
+                logger.info(f"V7_SNIPER_PERSIST_RESTORED: Loaded state for {today_et} — {saved_state['trades_today']} trades done. NOT resetting.")
+        elif saved_state and saved_state.get("date") == today_et and saved_state.get("morning_closed", False):
+            # SAME DAY, morning closed but no trade yet — restore window states
+            _confirmation_state["morning_closed"] = True
+            _afternoon_state["afternoon_closed"] = saved_state.get("afternoon_closed", False)
+            _v6_state["last_reset_date"] = today_et
+            logger.info(f"V7_SNIPER_PERSIST_RESTORED: Morning closed, no trade yet. Afternoon={not _afternoon_state['afternoon_closed']}")
         elif _v6_state["last_reset_date"] != today_et:
-            # Actually a new day — perform reset
+            # Actually a new day — perform FULL reset including confirmation states
             _v6_state = {
                 "daily_direction": None,
                 "direction_set": False,
@@ -1069,7 +1391,24 @@ class JobsDayCPL:
                 "trade_completed_time": None,
                 "last_reset_date": today_et,
             }
-            logger.info(f"V6_SNIPER_RESET: New day {today_et} - direction unlocked, ready for ONE trade")
+            # Reset V7 confirmation states
+            _confirmation_state = {
+                "signal_ticker": None,
+                "signal_direction": None,
+                "signal_pct": None,
+                "signal_time": None,
+                "confirmed": False,
+                "morning_closed": False,
+            }
+            _afternoon_state = {
+                "enabled": False,
+                "signal_ticker": None,
+                "signal_direction": None,
+                "signal_pct": None,
+                "confirmed": False,
+                "afternoon_closed": False,
+            }
+            logger.info(f"V7_SNIPER_RESET: New day {today_et} - two-stage confirmation ready (9:45 signal + 10:00 confirm)")
             # Clean up old persistence flags (keep only today's)
             import glob as _glob
             today_flag = _get_trade_complete_flag_path()
@@ -1094,7 +1433,9 @@ class JobsDayCPL:
         if not _v6_state["trade_complete"] and _check_persisted_trade_complete():
             _v6_state["trade_complete"] = True
             _v6_state["direction_set"] = True
-            logger.info("V6_PERSISTENCE_RESTORED: trade_complete recovered from legacy flag file. Done for today.")
+            _confirmation_state["morning_closed"] = True
+            _confirmation_state["confirmed"] = True
+            logger.info("V7_PERSISTENCE_RESTORED: trade_complete recovered from legacy flag file. Done for today.")
 
         # V6 RULE 2: ONE TRADE THEN DONE - If trade already executed today, STOP
         if _v6_state["trade_complete"]:
@@ -1346,15 +1687,17 @@ class JobsDayCPL:
                                 logger.info(f"SNIPER_COOLDOWN_SET: {SNIPER_COOLDOWN_SECONDS}s cooldown started")
                                 send_alert(f"✅ **ALPACA EXECUTED** HIGH HITTER #{_call_number_counter}\n{call.underlying} {call.side} ${call.strike}\nOption: {alpaca_pos.option_symbol}")
 
-                                # V6 SNIPER: ONE TRADE THEN DONE
+                                # V7 SNIPER: ONE TRADE THEN DONE
                                 _v6_state["trade_complete"] = True
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
-                                logger.info(f"V6_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
+                                logger.info(f"V7_SNIPER_TRADE_COMPLETE: HIGH HITTER executed. No more scans until tomorrow.")
                                 _persist_trade_complete()
                                 # Save to JSON state file (survives restarts)
                                 _save_sniper_state(
                                     date_str=datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
                                     trades_today=1,
+                                    morning_closed=_confirmation_state.get("morning_closed", True),
+                                    afternoon_closed=_afternoon_state.get("afternoon_closed", False),
                                     direction_locked=_v6_state.get("daily_direction")
                                 )
 
@@ -1570,19 +1913,21 @@ class JobsDayCPL:
                                 logger.info(f"CPL_DIRECTION_SET: {ticker} locked to {call.side.upper()} for 30min cooldown")
 
                                 # ═══════════════════════════════════════════════════════════════
-                                # V6 SNIPER: ONE TRADE THEN DONE - Mark trade complete
+                                # V7 SNIPER: ONE TRADE THEN DONE - Mark trade complete
                                 # ═══════════════════════════════════════════════════════════════
                                 _v6_state["trade_complete"] = True
                                 _v6_state["trade_completed_time"] = datetime.now(timezone.utc).isoformat()
-                                logger.info(f"V6_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
+                                logger.info(f"V7_SNIPER_TRADE_COMPLETE: Trade executed. No more scans until tomorrow.")
                                 _persist_trade_complete()
                                 # Save to JSON state file (survives restarts)
                                 _save_sniper_state(
                                     date_str=datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
                                     trades_today=1,
+                                    morning_closed=_confirmation_state.get("morning_closed", True),
+                                    afternoon_closed=_afternoon_state.get("afternoon_closed", False),
                                     direction_locked=_v6_state.get("daily_direction")
                                 )
-                                send_alert(f"🎯 V6 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
+                                send_alert(f"🎯 V7 SNIPER COMPLETE\n{call.underlying} {call.side} ${call.strike}\nDone for today. Let execution layer manage the position.")
 
                                 # ═══════════════════════════════════════════════════════════════
                                 # SECOND BRAIN: Report trade for persistent memory
