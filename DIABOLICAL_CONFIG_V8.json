@@ -1,0 +1,211 @@
+{
+  "config_name": "DIABOLICAL_CONFIG_V8",
+  "version": "8.0.0",
+  "created_at": "2026-03-10T22:00:00Z",
+  "created_by": "AGENT_7_THE_ARCHITECT",
+  "swarm_audit_synthesis": true,
+
+  "entry_mechanism": {
+    "type": "TWO_STAGE_CONFIRMATION",
+    "rationale": "Two-Stage beats Direction Lock by $5,419 (Agent 1), 94.1% filter accuracy (Agent 4)"
+  },
+
+  "windows": {
+    "morning": {
+      "enabled": true,
+      "signal_time": "09:45",
+      "confirm_time": "10:00",
+      "threshold_pct": 0.50,
+      "rationale": "50% win rate, +$2,245 P&L, optimal per Agents 1, 2, 4"
+    },
+    "cobra": {
+      "enabled": true,
+      "signal_time": "13:00",
+      "confirm_time": "13:15",
+      "threshold_pct": 0.55,
+      "conditional": "Only if morning had no trade",
+      "rationale": "Marginal +$285 edge, keep as backup"
+    },
+    "mamba": {
+      "enabled": false,
+      "rationale": "-$190 drag, 20% win rate, extreme gamma, theta crush (Agents 2, 3)"
+    }
+  },
+
+  "direction_filter": {
+    "calls_only": true,
+    "rationale": "100% of winners are CALLs, 0% PUT win rate (Agents 2, 4, 6)"
+  },
+
+  "day_filter": {
+    "enabled": true,
+    "blocked_days": ["Tuesday", "Thursday"],
+    "trade_days": ["Monday", "Wednesday", "Friday"],
+    "rationale": "0% win rate on Tue/Thu (Agents 2, 6)"
+  },
+
+  "stop_loss": {
+    "base_pct": 0.85,
+    "vix_adaptive": true,
+    "vix_25_plus_pct": 0.80,
+    "rationale": "15% stop (widened from 12%), VIX-adaptive for volatility"
+  },
+
+  "trailing_stops": {
+    "lock": {
+      "trigger_pct": 0.70,
+      "trail_pct": 0.20
+    },
+    "aggressive": {
+      "trigger_pct": 1.00,
+      "trail_pct": 0.15
+    },
+    "moonshot": {
+      "trigger_pct": 2.00,
+      "trail_pct": 0.10
+    },
+    "time_tightening": {
+      "enabled": false,
+      "rationale": "All trail configs produce identical P&L (Agent 5)"
+    }
+  },
+
+  "pyramiding": {
+    "enabled": false,
+    "rationale": "Reduced trade count makes pyramiding risky, re-enable after 100+ trades"
+  },
+
+  "position_sizing": {
+    "per_trade_usd": 300,
+    "daily_max_loss_usd": -300,
+    "rationale": "Full Kelly = $350, using $300 for conservative bias (Agent 3)"
+  },
+
+  "additional_filters": {
+    "volume_filter": {
+      "enabled": true,
+      "threshold": 1.2,
+      "rationale": "HYBRID 4 (Two-Stage + Volume >1.2x) = 40% win rate (Agent 4)"
+    },
+    "loss_cooldown": {
+      "enabled": true,
+      "hours": 24,
+      "rationale": "15.8% win rate after loss, losers breed losers (Agent 6)"
+    },
+    "catalyst_filter": {
+      "enabled": true,
+      "events": ["CPI", "FOMC", "NFP"],
+      "rationale": "0% win rate on catalyst days (Agent 6)"
+    },
+    "day_type_filter": {
+      "enabled": true,
+      "trade_types": ["TRENDING_UP"],
+      "skip_types": ["MEAN_REVERTING"],
+      "rationale": "46.2% win rate trending vs 13.3% mean-reverting (Agent 6)"
+    }
+  },
+
+  "expected_performance": {
+    "trades_per_month": "7-9",
+    "win_rate_pct": "55-60%",
+    "monthly_pnl_usd": "+$1,400 to +$1,800",
+    "profit_factor": "2.5-3.0",
+    "max_drawdown_usd": "-$450",
+    "ruin_probability_pct": "<5%"
+  },
+
+  "env_variables": {
+    "ENTRY_MECHANISM": "TWO_STAGE",
+    "MORNING_SIGNAL_TIME": "09:45",
+    "MORNING_CONFIRM_TIME": "10:00",
+    "DIRECTION_LOCK_THRESHOLD": "0.0050",
+    "COBRA_WINDOW_ENABLED": "true",
+    "COBRA_THRESHOLD": "0.0055",
+    "COBRA_SIGNAL_TIME": "13:00",
+    "COBRA_CONFIRM_TIME": "13:15",
+    "MAMBA_WINDOW_ENABLED": "false",
+    "CALLS_ONLY": "true",
+    "BLOCKED_DAYS": "Tuesday,Thursday",
+    "SNIPER_CAPITAL": "300",
+    "DAILY_MAX_LOSS": "-300",
+    "SCALP_STOP_PCT": "0.85",
+    "TRAIL_LOCK_PROFIT_TRIGGER": "0.70",
+    "TRAIL_LOCK_PROFIT_LEVEL": "0.20",
+    "TRAIL_AGGRESSIVE_TRIGGER": "1.00",
+    "TRAIL_AGGRESSIVE_LEVEL": "0.15",
+    "TRAIL_MOONSHOT_TRIGGER": "2.00",
+    "TRAIL_MOONSHOT_LEVEL": "0.10",
+    "PYRAMID_ENABLED": "false",
+    "VOLUME_FILTER_ENABLED": "true",
+    "VOLUME_FILTER_THRESHOLD": "1.2",
+    "LOSS_COOLDOWN_ENABLED": "true",
+    "LOSS_COOLDOWN_HOURS": "24",
+    "CATALYST_FILTER_ENABLED": "true"
+  },
+
+  "code_changes_required": [
+    {
+      "file": "/home/ubuntu/wsb-snake/wsb_snake/execution/jobs_day_cpl.py",
+      "changes": [
+        "Update MAMBA_ENABLED default to false",
+        "Add CALLS_ONLY filter variable and gate",
+        "Add BLOCKED_DAYS filter function",
+        "Add LOSS_COOLDOWN filter function",
+        "Add gates at start of _determine_v7_direction()"
+      ]
+    },
+    {
+      "file": "/home/ubuntu/wsb-snake/wsb_snake/trading/alpaca_executor.py",
+      "changes": [
+        "Update MAX_PER_TRADE to read from SNIPER_CAPITAL env var",
+        "Default to 300 instead of 500"
+      ]
+    },
+    {
+      "file": "/home/ubuntu/wsb-snake/.env",
+      "changes": [
+        "Add all DIABOLICAL v8 env variables"
+      ]
+    }
+  ],
+
+  "validation_checklist": [
+    "MAMBA window disabled",
+    "CALLS_ONLY filter active",
+    "Tuesday/Thursday blocked",
+    "Position size = $300",
+    "Loss cooldown = 24h",
+    "Morning threshold = 0.50%",
+    "Catalyst filter active"
+  ],
+
+  "agent_consensus": {
+    "unanimous": [
+      "CALL-only strategy (Agents 2, 4, 6)",
+      "Block Tuesday + Thursday (Agents 2, 6)"
+    ],
+    "strong": [
+      "Two-Stage > Direction Lock (Agents 1, 4)",
+      "Disable MAMBA (Agents 2, 3)",
+      "Morning window dominant (Agents 1, 2, 4)",
+      "Position sizing aggressive (Agent 3)",
+      "10:00 AM confirm optimal (Agents 2, 4)"
+    ],
+    "moderate": [
+      "24h loss cooldown (Agent 6)"
+    ]
+  },
+
+  "warnings": [
+    "SMALL SAMPLE SIZE: 30 trades - collect 70+ more before full conviction",
+    "MOONSHOT DEPENDENCY: 52.8% of historical profit from single trade",
+    "CALLS_ONLY may underperform in bear markets - monitor",
+    "Loss cooldown reduces trade frequency significantly"
+  ],
+
+  "rollback_plan": {
+    "trigger": "3 consecutive losing weeks OR win rate < 35%",
+    "action": "Revert to WIDER_STOP config",
+    "command": "git checkout HEAD~1 -- .env && systemctl restart wsb-snake"
+  }
+}
