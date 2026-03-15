@@ -53,7 +53,7 @@ test("DIRECTION_LOCK_THRESHOLD loads from .env",
      f"Got: {os.getenv('DIRECTION_LOCK_THRESHOLD')}")
 
 test("DAILY_MAX_LOSS loads from .env",
-     os.getenv("DAILY_MAX_LOSS") in ["-500", "-5000"],
+     os.getenv("DAILY_MAX_LOSS") == "-300",
      f"Got: {os.getenv('DAILY_MAX_LOSS')}")
 
 test("STOP_LOSS_PCT loads from .env",
