@@ -38,9 +38,15 @@ TICKERS = [
 # V2 Rules applied to history: 2/2 wins, +215% total
 # V1 Rules (any 5%+ gap): 2/8 wins, -25% total
 
+# Default thresholds (Week 1)
 GAP_DOWN_MIN = -0.05      # -5% gap down = buy CALLS
 GAP_UP_MIN = 0.10         # +10% gap up = buy PUTS
 # Gap UPs between 5-10% = SKIP (danger zone)
+
+# Relaxed thresholds (Use if no gaps fire by Wednesday)
+# Uncomment these to lower thresholds:
+# GAP_DOWN_MIN = -0.04    # -4% gap down
+# GAP_UP_MIN = 0.08       # +8% gap up
 
 # Position sizing
 POSITION_SIZE_USD = 2500  # $2,500 per trade

@@ -6,10 +6,14 @@ Simple gap fade strategy with verified rules.
 Run this at 9:40 AM ET on trading days.
 
 Usage:
-    python run.py scan      # Just scan for gaps (no trades)
-    python run.py trade     # Scan and execute trades
-    python run.py monitor   # Monitor open positions
-    python run.py full      # Full cycle: scan → trade → monitor
+    python run.py scan       # Just scan for gaps (no trades)
+    python run.py trade      # Scan and execute trades
+    python run.py monitor    # Monitor open positions
+    python run.py full       # Full cycle: scan → trade → monitor
+    python run.py premarket  # Scan pre-market movers
+    python run.py history    # Check historical gaps (last 10 days)
+    python run.py report     # Generate daily report
+    python run.py gonogo     # Evaluate GO/NO-GO criteria
 """
 
 import sys
@@ -169,6 +173,46 @@ def cmd_full():
         log.info("\nNo trades executed. Nothing to monitor.")
 
 
+def cmd_premarket():
+    """Scan pre-market movers."""
+    log.info("\n" + "=" * 60)
+    log.info("FRESH BLOOD — PREMARKET SCAN")
+    log.info("=" * 60)
+
+    from premarket_movers import scan_premarket_gaps
+    movers = scan_premarket_gaps()
+
+    if movers:
+        log.info(f"\n🔥 {len(movers)} pre-market mover(s) with 5%+ gap")
+    else:
+        log.info("\nNo significant pre-market movers")
+
+
+def cmd_history():
+    """Check historical gaps."""
+    log.info("\n" + "=" * 60)
+    log.info("FRESH BLOOD — HISTORICAL CHECK")
+    log.info("=" * 60)
+
+    from historical_check import check_historical_gaps
+    check_historical_gaps(10)
+
+
+def cmd_report():
+    """Generate daily report."""
+    from daily_report import generate_report, save_report
+
+    report = generate_report()
+    print(report)
+    save_report(report)
+
+
+def cmd_gonogo():
+    """Evaluate GO/NO-GO criteria."""
+    from go_nogo import evaluate_go_nogo
+    evaluate_go_nogo()
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -184,6 +228,14 @@ def main():
         cmd_monitor()
     elif cmd == "full":
         cmd_full()
+    elif cmd == "premarket":
+        cmd_premarket()
+    elif cmd == "history":
+        cmd_history()
+    elif cmd == "report":
+        cmd_report()
+    elif cmd == "gonogo":
+        cmd_gonogo()
     else:
         print(f"Unknown command: {cmd}")
         print(__doc__)
