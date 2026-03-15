@@ -187,24 +187,25 @@ class AlpacaExecutor:
     # 4. Predator mode - strike fast, book profit, hunt again
     #
     # ========== VENOM EXTREME: LET WINNERS RUN ==========
-    # GEX flips can do 200-500% on 0DTE. No fixed targets. Trailing stop rides the wave.
+    # MOONSHOT CONFIG 2026-03-15: Wider stops, let winners run
     _SCALP_TARGET_PCT_DEFAULT = 6.00   # +500% - effectively NO CAP (trail will exit)
-    _SCALP_STOP_PCT_DEFAULT = 0.85     # -15% initial stop (WIDER from -12% - more room)
-    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 50  # 50 MIN - let winners run LONGER
+    _SCALP_STOP_PCT_DEFAULT = 0.75     # -25% initial stop (MOONSHOT: wider from -15%)
+    _SCALP_MAX_HOLD_MINUTES_DEFAULT = 60  # 60 MIN - let winners run even LONGER
 
     # ═══════════════════════════════════════════════════════════════
-    # VENOM EXTREME TRAILING - GEX FLIPS DO 200-500%+ ON 0DTE
-    # DON'T trail until BIG profits - let the move develop!
+    # MOONSHOT TRAILING SYSTEM — 2026-03-15 FIX
+    # Problem: Old settings waited too long to trail, got stopped out
+    # Fix: Start trailing earlier to lock gains, wider initial stop
     # ═══════════════════════════════════════════════════════════════
-    TRAIL_BREAKEVEN_TRIGGER = 999.0  # V7 FINAL V2: DISABLED   # AGGRESSIVE: +40% before breakeven (was +20% - too early!)
-    TRAIL_LOCK_PROFIT_TRIGGER = 0.70  # AGGRESSIVE: +70% before trailing (was +35%)
-    TRAIL_LOCK_PROFIT_LEVEL = 0.20  # V7 FINAL V2   # 15% trail below peak when running
-    TRAIL_AGGRESSIVE_TRIGGER = 1.00   # AGGRESSIVE: +100% before tightening (was +60%)
-    TRAIL_AGGRESSIVE_LEVEL = 0.15  # V7 FINAL V2    # 10% trail when up 100%+
-    TRAIL_MOONSHOT_TRIGGER = 2.00    # MOONSHOT: +200% trail at 8% below peak (was +150%)
-    TRAIL_MOONSHOT_LEVEL = 0.10  # V7 FINAL V2      # 8% trail - ride it to the moon
-    TRAIL_TIME_TIGHTEN_MINUTES = 999  # V7 FINAL V2: DISABLED  # After 35 min, start tightening (was 40)
-    TRAIL_TIME_TIGHTEN_PCT = 0.05    # -5% trailing stop after timeout
+    TRAIL_BREAKEVEN_TRIGGER = 0.25   # MOONSHOT: Move to breakeven at +25% (was DISABLED)
+    TRAIL_LOCK_PROFIT_TRIGGER = 0.40  # MOONSHOT: Start trailing at +40% (was +70%)
+    TRAIL_LOCK_PROFIT_LEVEL = 0.20   # 20% trail below peak when running
+    TRAIL_AGGRESSIVE_TRIGGER = 0.70   # MOONSHOT: Tighten at +70% (was +100%)
+    TRAIL_AGGRESSIVE_LEVEL = 0.15    # 15% trail when up 70%+
+    TRAIL_MOONSHOT_TRIGGER = 1.50    # MOONSHOT: +150% = ride the wave (was +200%)
+    TRAIL_MOONSHOT_LEVEL = 0.10      # 10% trail - tight but lets it run
+    TRAIL_TIME_TIGHTEN_MINUTES = 45  # MOONSHOT: After 45 min, tighten (was DISABLED)
+    TRAIL_TIME_TIGHTEN_PCT = 0.08    # 8% trailing stop after timeout
 
     # ═══════════════════════════════════════════════════════════════
     # VENOM: MOMENTUM PYRAMID - Add to winning positions

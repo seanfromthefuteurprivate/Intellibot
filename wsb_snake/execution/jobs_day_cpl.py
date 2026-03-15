@@ -2125,15 +2125,57 @@ class JobsDayCPL:
                         logger.info(f"ALPACA: Attempting execution for {call.underlying} {call.side} ${call.strike}")
                         logger.info(f"ALPACA: option_symbol={call.option_symbol}, entry_trigger={call.entry_trigger}")
                         try:
-                            # Log HYDRA context for this trade
-                            try:
-                                hydra = get_hydra_intel()
-                                logger.info(
-                                    f"ALPACA_HYDRA_CONTEXT: dir={hydra.direction} regime={hydra.regime} "
-                                    f"blowup={hydra.blowup_probability}% flow={hydra.flow_bias}"
+                            # ═══════════════════════════════════════════════════════════════
+                            # MOONSHOT FIX: AI CONVICTION GATE — Only trade when AI agrees
+                            # ═══════════════════════════════════════════════════════════════
+                            hydra = get_hydra_intel()
+                            logger.info(
+                                f"ALPACA_HYDRA_CONTEXT: dir={hydra.direction} regime={hydra.regime} "
+                                f"blowup={hydra.blowup_probability}% flow={hydra.flow_bias} "
+                                f"recommendation={hydra.recommendation}"
+                            )
+
+                            # AI CONVICTION CHECK: Direction must align or be neutral
+                            trade_direction = "BULLISH" if call.side.upper() == "CALL" else "BEARISH"
+                            hydra_agrees = (
+                                hydra.direction == trade_direction or
+                                hydra.direction == "NEUTRAL" or
+                                not hydra.connected  # Allow if HYDRA is down
+                            )
+
+                            # Flow bias alignment check (AGGRESSIVELY = 2x size)
+                            flow_aligns = False
+                            size_multiplier = 1.0
+                            if trade_direction == "BULLISH":
+                                flow_aligns = hydra.flow_bias in ("BULLISH", "AGGRESSIVELY_BULLISH")
+                                if hydra.flow_bias == "AGGRESSIVELY_BULLISH":
+                                    size_multiplier = 2.0  # MOONSHOT: Double down on strong flow
+                            else:
+                                flow_aligns = hydra.flow_bias in ("BEARISH", "AGGRESSIVELY_BEARISH")
+                                if hydra.flow_bias == "AGGRESSIVELY_BEARISH":
+                                    size_multiplier = 2.0
+
+                            # Block if HYDRA says HOLD_OFF or direction conflicts
+                            if hydra.connected and hydra.recommendation == "HOLD_OFF":
+                                logger.warning(f"🚫 MOONSHOT_GATE: HYDRA says HOLD_OFF — skipping trade")
+                                send_alert(f"🚫 **TRADE BLOCKED**\nHYDRA: HOLD_OFF\n{call.underlying} {call.side} ${call.strike}")
+                                continue
+
+                            if hydra.connected and not hydra_agrees and hydra.direction != "NEUTRAL":
+                                logger.warning(
+                                    f"🚫 MOONSHOT_GATE: Direction conflict — "
+                                    f"Trade={trade_direction} but HYDRA={hydra.direction}"
                                 )
-                            except Exception:
-                                pass
+                                send_alert(
+                                    f"🚫 **TRADE BLOCKED**\n"
+                                    f"Direction conflict: {trade_direction} vs HYDRA {hydra.direction}\n"
+                                    f"{call.underlying} {call.side} ${call.strike}"
+                                )
+                                continue
+
+                            # Log conviction status
+                            conviction_status = "HIGH" if (hydra_agrees and flow_aligns) else "MEDIUM" if hydra_agrees else "LOW"
+                            logger.info(f"MOONSHOT_CONVICTION: {conviction_status} (dir={hydra_agrees}, flow={flow_aligns}, mult={size_multiplier}x)")
 
                             option_premium = call.entry_trigger.get("price", 0)
                             logger.info(f"ALPACA: option_premium=${option_premium:.2f}")
@@ -2141,9 +2183,14 @@ class JobsDayCPL:
                             # "short" would mean shorting, but we're buying to open
                             # The option_type (call/put) determines bullish vs bearish bet
                             direction = "long"
-                            # Target/stop based on option premium (not underlying price!)
-                            target_price = option_premium * 1.25  # +25% target (wider for 0DTE)
-                            stop_loss = option_premium * 0.88     # -12% stop (slightly wider)
+
+                            # ═══════════════════════════════════════════════════════════════
+                            # MOONSHOT FIX: Widen stops, let winners run
+                            # Old: -12% stop, +25% target
+                            # New: -25% stop (let it breathe), +50% target (moonshot potential)
+                            # ═══════════════════════════════════════════════════════════════
+                            target_price = option_premium * 1.50  # +50% target (moonshot)
+                            stop_loss = option_premium * 0.75     # -25% stop (let it breathe)
 
                             # Real confidence from momentum check (not fake 85%)
                             real_confidence = getattr(call, 'momentum_confidence', 50)
