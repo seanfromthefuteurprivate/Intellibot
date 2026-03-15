@@ -1,0 +1,14 @@
+[Unit]
+Description=Fresh Blood Gap Fade Trading
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/wsb-snake/fresh_blood
+ExecStart=/usr/bin/python3 /home/ubuntu/wsb-snake/fresh_blood/run.py full
+StandardOutput=append:/var/log/fresh_blood.log
+StandardError=append:/var/log/fresh_blood.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Fresh Blood Gap Fade Timer
+Requires=fresh_blood.service
+
+[Timer]
+# Run at 9:40 AM ET (14:40 UTC during EST, 13:40 UTC during EDT)
+# Adjust based on daylight saving time
+OnCalendar=Mon..Fri 13:40:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
