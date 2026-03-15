@@ -55,7 +55,15 @@ MAX_DAILY_LOSS = -500     # Stop trading if down $500 in a day
 
 # Risk management
 STOP_LOSS_PCT = 0.40      # -40% hard stop
-PROFIT_TARGET_PCT = 1.00  # +100% take profit (optional)
+PROFIT_TARGET_PCT = 1.50  # +150% take profit
+
+# Pyramiding (add to winners)
+PYRAMID_ENABLED = True
+PYRAMID_TRIGGER_1 = 0.30  # Add at +30%
+PYRAMID_TRIGGER_2 = 0.60  # Add at +60%
+PYRAMID_SIZE_PCT = 0.50   # Each add is 50% of initial size
+MAX_PYRAMIDS = 2          # Max 2 adds (3x total position)
+MOVE_STOP_AFTER_PYRAMID = True  # Move stop to breakeven after first add
 
 # Timing
 ENTRY_WINDOW_START = "09:40"  # Don't enter before 9:40 AM ET
