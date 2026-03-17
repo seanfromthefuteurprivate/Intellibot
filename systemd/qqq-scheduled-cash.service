@@ -1,0 +1,24 @@
+[Unit]
+Description=WSB Snake QQQ Scheduled Cash Engine
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/wsb-snake
+Environment="PATH=/home/ubuntu/wsb-snake/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="WSB_SNAKE_PATH=/home/ubuntu/wsb-snake"
+Environment="SCALP_TARGET_PCT=1.30"
+Environment="SCALP_STOP_PCT=0.85"
+Environment="SCALP_MAX_HOLD_MINUTES=29"
+EnvironmentFile=/home/ubuntu/wsb-snake/.env
+ExecStart=/home/ubuntu/wsb-snake/venv/bin/python -m wsb_snake.execution.qqq_scheduled_cash_runtime --position-size-usd 1000 --max-daily-exposure-usd 2000 --poll-seconds 15
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qqq-scheduled-cash
+
+[Install]
+WantedBy=multi-user.target

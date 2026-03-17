@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -35,8 +36,8 @@ class PolygonClient:
             raise RuntimeError("POLYGON_API_KEY is required")
         self.api_key = api_key
         self.session = requests.Session()
-        self.stock_cache: Dict[str, List[dict]] = {}
-        self.option_cache: Dict[str, List[dict]] = {}
+        self.stock_cache: Dict[str, "_CacheEntry"] = {}
+        self.option_cache: Dict[str, "_CacheEntry"] = {}
 
     def _get_json(self, url: str) -> dict:
         last_error = None
@@ -57,8 +58,9 @@ class PolygonClient:
 
     def get_underlying_bars(self, underlying: str, trade_date: str) -> List[dict]:
         cache_key = f"{underlying}|{trade_date}"
-        if cache_key in self.stock_cache:
-            return self.stock_cache[cache_key]
+        cached = self.stock_cache.get(cache_key)
+        if cached and _cache_is_fresh(cached, trade_date):
+            return cached.rows
         url = (
             f"https://api.polygon.io/v2/aggs/ticker/{underlying}/range/1/minute/{trade_date}/{trade_date}"
             f"?adjusted=true&sort=asc&limit=50000&apiKey={self.api_key}"
@@ -78,13 +80,14 @@ class PolygonClient:
                     "v": float(row["v"]),
                 }
             )
-        self.stock_cache[cache_key] = rows
+        self.stock_cache[cache_key] = _CacheEntry(rows=rows, cached_at=datetime.now(timezone.utc))
         return rows
 
     def get_option_bars(self, option_symbol: str, trade_date: str) -> List[dict]:
         cache_key = f"{option_symbol}|{trade_date}"
-        if cache_key in self.option_cache:
-            return self.option_cache[cache_key]
+        cached = self.option_cache.get(cache_key)
+        if cached and _cache_is_fresh(cached, trade_date):
+            return cached.rows
         url = (
             f"https://api.polygon.io/v2/aggs/ticker/{option_symbol}/range/1/minute/{trade_date}/{trade_date}"
             f"?adjusted=true&sort=asc&limit=50000&apiKey={self.api_key}"
@@ -104,8 +107,24 @@ class PolygonClient:
                     "v": float(row["v"]),
                 }
             )
-        self.option_cache[cache_key] = rows
+        self.option_cache[cache_key] = _CacheEntry(rows=rows, cached_at=datetime.now(timezone.utc))
         return rows
+
+
+@dataclass
+class _CacheEntry:
+    rows: List[dict]
+    cached_at: datetime
+
+
+def _is_live_trade_date(trade_date: str) -> bool:
+    return trade_date == datetime.now(ET).date().isoformat()
+
+
+def _cache_is_fresh(entry: _CacheEntry, trade_date: str, ttl_seconds: int = 15) -> bool:
+    if not _is_live_trade_date(trade_date):
+        return True
+    return (datetime.now(timezone.utc) - entry.cached_at).total_seconds() < ttl_seconds
 
 
 def build_option_symbol(underlying: str, trade_date: str, strike: int, direction: str) -> str:
