@@ -81,6 +81,7 @@ class AlpacaIntradayClient:
             "limit": 1000,
             "adjustment": "raw",
             "sort": "asc",
+            "feed": "iex",
         }
         resp = requests.get(url, headers=self.headers, params=params, timeout=10)
         resp.raise_for_status()
@@ -109,7 +110,7 @@ class AlpacaIntradayClient:
     def get_latest_trade_price(self, underlying: str) -> Optional[float]:
         url = f"{self.data_url}/v2/stocks/{underlying}/snapshot"
         try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(url, headers=self.headers, params={"feed": "iex"}, timeout=10)
             resp.raise_for_status()
             payload = resp.json()
         except Exception as exc:  # noqa: BLE001
