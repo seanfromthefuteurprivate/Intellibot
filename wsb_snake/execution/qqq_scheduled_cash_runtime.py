@@ -33,7 +33,7 @@ from wsb_snake.backtest.backtest_two_stage_cash_engine import (
     parse_clock,
     stage_signal,
 )
-from wsb_snake.backtest.polygon_option_replay import ET, PolygonClient
+from wsb_snake.collectors.alpaca_intraday import ET, AlpacaIntradayClient
 from wsb_snake.config import DATA_DIR
 from wsb_snake.notifications.telegram_channels import send_alpaca_status
 from wsb_snake.trading.alpaca_executor import AlpacaPosition, PositionStatus, alpaca_executor
@@ -112,7 +112,6 @@ WINDOWS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--polygon-key", default=os.getenv("POLYGON_API_KEY", ""))
     parser.add_argument("--ticker", default="QQQ")
     parser.add_argument("--benchmark-ticker", default="SPY")
     parser.add_argument("--position-size-usd", type=float, default=1000.0)
@@ -195,8 +194,17 @@ def build_signal_args(
     )
 
 
-def latest_spot_price(client: PolygonClient, ticker: str, trade_date: str, current: datetime) -> Optional[float]:
-    bars = client.get_underlying_bars(ticker, trade_date)
+def latest_spot_price(
+    client: AlpacaIntradayClient,
+    ticker: str,
+    trade_date: str,
+    current: datetime,
+) -> Optional[float]:
+    latest_trade = client.get_latest_trade_price(ticker)
+    if latest_trade is not None:
+        return latest_trade
+
+    bars = client.get_underlying_bars(ticker, trade_date, current=current)
     bar = bar_close_at_or_before(bars, current)
     if not bar:
         return None
@@ -297,7 +305,7 @@ def should_skip_for_prior_winner(state: RuntimeState, window: WindowConfig) -> b
 
 
 def process_window(
-    client: PolygonClient,
+    client: AlpacaIntradayClient,
     args: argparse.Namespace,
     state: RuntimeState,
     current: datetime,
@@ -395,7 +403,7 @@ def process_window(
     )
 
 
-def process_iteration(client: PolygonClient, args: argparse.Namespace, current: datetime) -> RuntimeState:
+def process_iteration(client: AlpacaIntradayClient, args: argparse.Namespace, current: datetime) -> RuntimeState:
     trade_date = current.date().isoformat()
     state = load_state(trade_date)
     settle_positions(state, current)
@@ -408,7 +416,7 @@ def process_iteration(client: PolygonClient, args: argparse.Namespace, current: 
 def run(args: argparse.Namespace) -> None:
     apply_runtime_risk_profile(args)
     current = now_et(args.now_iso)
-    client = PolygonClient(args.polygon_key)
+    client = AlpacaIntradayClient()
     restore_managed_positions(load_state(current.date().isoformat()))
 
     if args.run_once:
