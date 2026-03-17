@@ -58,6 +58,7 @@ class WindowConfig:
     call_benchmark_ratio_min: float = 0.5
     put_benchmark_ratio_min: float = 0.0
     allowed_weekdays: Optional[set[str]] = None
+    execute: bool = True
 
 
 @dataclass
@@ -106,6 +107,17 @@ WINDOWS = (
         call_max_confirm_abs_pct=0.012,
         put_max_confirm_abs_pct=0.012,
         allowed_weekdays=parse_allowed_weekdays("Mon,Tue,Thu"),
+    ),
+    WindowConfig(
+        name="late_probe",
+        signal_time="14:30",
+        confirm_time="14:45",
+        threshold=0.0025,
+        max_hold_minutes=29,
+        call_max_confirm_abs_pct=0.012,
+        put_max_confirm_abs_pct=0.012,
+        allowed_weekdays=parse_allowed_weekdays("Mon,Tue,Thu"),
+        execute=False,
     ),
 )
 
@@ -299,6 +311,8 @@ def has_live_position(state: RuntimeState) -> bool:
 
 
 def should_skip_for_prior_winner(state: RuntimeState, window: WindowConfig) -> bool:
+    if not window.execute:
+        return False
     if window.name == "morning":
         return False
     return bool(state.winning_windows)
@@ -348,6 +362,12 @@ def process_window(
     )
     if not setup:
         state.window_status[window.name] = "no_signal"
+        return
+
+    if not window.execute:
+        state.window_status[window.name] = (
+            f"probe:{setup['direction']}:{setup['signal_pct']:.4f}:{setup['confirm_pct']:.4f}"
+        )
         return
 
     spot_price = latest_spot_price(client, args.ticker, trade_date, current)
