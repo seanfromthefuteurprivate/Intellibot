@@ -32,6 +32,9 @@ class MacroConditions:
     risk_regime: str = "NEUTRAL"  # RISK_ON, NEUTRAL, RISK_OFF
     fed_blackout: bool = False  # True = near Fed meeting, avoid
     major_event_today: bool = False  # CPI, Jobs, FOMC
+    event_block_active: bool = False
+    event_block_reason: str = ""
+    next_major_event: str = ""
     spy_trend: str = "NEUTRAL"  # UP, NEUTRAL, DOWN (based on 20 SMA)
     confidence_multiplier: float = 1.0  # Apply to all trades
 
@@ -51,6 +54,11 @@ class MacroFilter:
     # Breadth thresholds
     BREADTH_STRONG = 0.65  # >65% stocks up = bullish
     BREADTH_WEAK = 0.35    # <35% stocks up = bearish
+
+    # Economic event blackout window
+    ECON_EVENT_BLOCK_BEFORE_MINUTES = int(os.environ.get("ECON_EVENT_BLOCK_BEFORE_MINUTES", "30"))
+    ECON_EVENT_BLOCK_AFTER_MINUTES = int(os.environ.get("ECON_EVENT_BLOCK_AFTER_MINUTES", "15"))
+    ECON_EVENT_IMPORTANCE_MIN = int(os.environ.get("ECON_EVENT_IMPORTANCE_MIN", "3"))
 
     def __init__(self):
         self._last_check: Optional[datetime] = None
@@ -98,7 +106,29 @@ class MacroFilter:
         except Exception as e:
             logger.debug(f"Breadth fetch failed: {e}")
 
-        # 3. Determine risk regime
+        # 3. Benzinga economic-event blackout
+        try:
+            from wsb_snake.collectors.benzinga_economic_calendar import get_benzinga_economic_calendar
+
+            econ_calendar = get_benzinga_economic_calendar()
+            gate = econ_calendar.get_event_gate(
+                block_before_minutes=self.ECON_EVENT_BLOCK_BEFORE_MINUTES,
+                block_after_minutes=self.ECON_EVENT_BLOCK_AFTER_MINUTES,
+                importance_min=self.ECON_EVENT_IMPORTANCE_MIN,
+            )
+            conditions.major_event_today = gate.get("has_event_today", False)
+            conditions.event_block_active = gate.get("blocked", False)
+            conditions.event_block_reason = gate.get("reason", "") or ""
+
+            next_event = gate.get("next_event")
+            if next_event:
+                conditions.next_major_event = (
+                    f"{next_event.get('name', 'Major event')} @ {next_event.get('time_label', '')}"
+                ).strip()
+        except Exception as e:
+            logger.debug(f"Economic event check failed: {e}")
+
+        # 4. Determine risk regime
         if conditions.vix_level < 18 and conditions.market_breadth > 0.55:
             conditions.risk_regime = "RISK_ON"
         elif conditions.vix_level > 28 or conditions.market_breadth < 0.40:
@@ -106,7 +136,7 @@ class MacroFilter:
         else:
             conditions.risk_regime = "NEUTRAL"
 
-        # 4. Calculate confidence multiplier
+        # 5. Calculate confidence multiplier
         # Higher confidence when conditions are clear
         if conditions.vix_regime == "LOW" and conditions.risk_regime == "RISK_ON":
             conditions.confidence_multiplier = 1.2  # Boost in calm bull markets
@@ -140,6 +170,10 @@ class MacroFilter:
             (allowed, reason, confidence_multiplier)
         """
         conditions = self.get_conditions()
+
+        if conditions.event_block_active:
+            logger.warning(f"MACRO_FILTER: {conditions.event_block_reason}")
+            return False, conditions.event_block_reason, 0.0
 
         # CRISIS mode - reduce drastically or skip
         if conditions.vix_regime == "CRISIS":

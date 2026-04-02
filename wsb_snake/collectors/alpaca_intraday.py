@@ -107,6 +107,82 @@ class AlpacaIntradayClient:
         self.stock_cache[cache_key] = _CacheEntry(rows=rows, cached_at=datetime.now(timezone.utc))
         return rows
 
+    def get_option_bars(
+        self,
+        option_symbol: str,
+        trade_date: str,
+    ) -> List[dict]:
+        """
+        Fetch 1-minute option bars from Alpaca Data API v1beta1.
+
+        Accepts symbols in either Polygon format (O:QQQ260317C00615000)
+        or bare OCC format (QQQ260317C00615000).
+        """
+        cache_key = f"opt|{option_symbol}|{trade_date}"
+        cached = self.stock_cache.get(cache_key)
+        if cached and _cache_is_fresh(cached, trade_date):
+            return cached.rows
+
+        # Strip "O:" prefix (Polygon format) for Alpaca compatibility
+        alpaca_sym = option_symbol[2:] if option_symbol.startswith("O:") else option_symbol
+
+        session_open = datetime.strptime(f"{trade_date} 09:30", "%Y-%m-%d %H:%M").replace(tzinfo=ET)
+        session_close = datetime.strptime(f"{trade_date} 16:01", "%Y-%m-%d %H:%M").replace(tzinfo=ET)
+
+        url = f"{self.data_url}/v1beta1/options/bars"
+        params = {
+            "symbols": alpaca_sym,
+            "timeframe": "1Min",
+            "start": session_open.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "end": session_close.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "limit": 10000,
+            "sort": "asc",
+        }
+
+        all_raw: List[dict] = []
+        page_token = None
+        while True:
+            if page_token:
+                params["page_token"] = page_token
+            try:
+                resp = requests.get(url, headers=self.headers, params=params, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                log.warning("Alpaca option bars failed for %s: %s", alpaca_sym, exc)
+                break
+
+            bars_by_symbol = data.get("bars", {})
+            if isinstance(bars_by_symbol, dict):
+                all_raw.extend(bars_by_symbol.get(alpaca_sym, []))
+            elif isinstance(bars_by_symbol, list):
+                all_raw.extend(bars_by_symbol)
+
+            page_token = data.get("next_page_token")
+            if not page_token:
+                break
+
+        rows: List[dict] = []
+        for bar in all_raw:
+            raw_ts = bar.get("t")
+            if not raw_ts:
+                continue
+            bar_time = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(ET)
+            rows.append(
+                {
+                    "o": float(bar.get("o", 0) or 0),
+                    "h": float(bar.get("h", 0) or 0),
+                    "l": float(bar.get("l", 0) or 0),
+                    "c": float(bar.get("c", 0) or 0),
+                    "v": float(bar.get("v", 0) or 0),
+                    "t": raw_ts,
+                    "et": bar_time,
+                }
+            )
+
+        self.stock_cache[cache_key] = _CacheEntry(rows=rows, cached_at=datetime.now(timezone.utc))
+        return rows
+
     def get_latest_trade_price(self, underlying: str) -> Optional[float]:
         url = f"{self.data_url}/v2/stocks/{underlying}/snapshot"
         try:

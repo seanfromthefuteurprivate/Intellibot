@@ -16,6 +16,7 @@ Output: Telegram alerts for high-conviction setups
 
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+from zoneinfo import ZoneInfo
 
 from wsb_snake.utils.logger import log
 from wsb_snake.utils.session_regime import (
@@ -56,6 +57,7 @@ from wsb_snake.collectors.vix_structure import vix_structure
 from wsb_snake.collectors.earnings_calendar import earnings_calendar
 from wsb_snake.collectors.alpha_vantage_collector import alpha_vantage
 from wsb_snake.collectors.benzinga_news import benzinga_news
+from wsb_snake.collectors.benzinga_economic_calendar import benzinga_economic_calendar
 from wsb_snake.engines.strategy_classifier import strategy_classifier, StrategyType
 from wsb_snake.engines.multi_day_scanner import multi_day_scanner
 from wsb_snake.engines.zero_dte_volatility import zero_dte_volatility
@@ -506,15 +508,20 @@ _Urgency: {alert.urgency}/5_
                 # 0DTE Volatility Engine - check for vol expansion plays
                 vix_data = results.get("expanded_data", {}).get("vix_structure", {})
 
-                # Check economic calendar for today's macro events (NFP, FOMC, CPI)
+                # Check Benzinga economic calendar for today's major macro events
                 macro_event = None
                 try:
-                    econ_events = fred_collector.get_economic_calendar(weeks=1)
-                    today = datetime.now().strftime("%Y-%m-%d")
+                    econ_events = benzinga_economic_calendar.get_upcoming_events(hours_ahead=24, importance_min=3)
+                    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
                     for event in econ_events:
-                        if event.get("date") == today and event.get("impact") == "high":
-                            macro_event = event.get("name", event.get("event_type", "MACRO_EVENT"))
-                            log.info(f"🔥 HIGH-IMPACT MACRO EVENT TODAY: {macro_event}")
+                        if event.get("date") == today:
+                            macro_event = event.get("event_code", "OTHER")
+                            if macro_event not in zero_dte_volatility.MAJOR_MACRO_EVENTS:
+                                macro_event = event.get("name", "MACRO_EVENT")
+                            log.info(
+                                f"🔥 HIGH-IMPACT MACRO EVENT TODAY: "
+                                f"{event.get('name', macro_event)} ({event.get('time_label', '')})"
+                            )
                             break
                 except Exception as e:
                     log.debug(f"Economic calendar check failed: {e}")

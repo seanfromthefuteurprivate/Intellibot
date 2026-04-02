@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "alpaca": {
+      "command": "uvx",
+      "args": ["alpaca-mcp-server"],
+      "env": {
+        "APCA_API_KEY_ID": "PKWT6T5BFKHBTFDW3CPAFW2XBZ",
+        "APCA_API_SECRET_KEY": "pVdzbVte2pQvL1RmCTFw3oaQ6TBWYimAzC42DUyTEy8",
+        "APCA_API_BASE_URL": "https://paper-api.alpaca.markets"
+      }
+    }
+  }
+}

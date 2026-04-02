@@ -902,6 +902,10 @@ No overnight risk. Fresh start tomorrow!
             from wsb_snake.learning.macro_filter import get_macro_filter
             macro = get_macro_filter()
             macro_ok, macro_reason, macro_mult = macro.should_trade()
+            if not macro_ok:
+                logger.warning(f"MACRO_FILTER blocked trade: {macro_reason}")
+                send_alpaca_status(f"⏸️ Macro filter: {macro_reason}")
+                return None
             if macro_mult < 1.0:
                 confidence = confidence * macro_mult
                 logger.info(f"MACRO_FILTER: {macro_reason} - confidence adjusted to {confidence:.0f}")
